@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:09:48.406698+00:00",
+  "updated_at": "2026-09-24T19:23:20.489090+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -75,7 +75,7 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "e35ae3840d6a1033f87c4ed5ad6e3ff48a85603b6259655949fd2149102b9097"
+      "sha256": "0a4638ae34063d8c3b9ce1551e5c63998deac370da12dff01472f14b2f40fbb7"
     },
     {
       "path": "workflow_designs/cellbench.json",
@@ -303,7 +303,7 @@
         "biox-design-single-cell-label-projection"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Run CellTypist with reference-only training and majority-vote outputs for the Liu endpoint, and separately grade full held-out label predictions. BioXArena prompt details remain unresolved; closed-set and unknown-cell semantics must not be conflated.",
+      "condition_for_one_task": "Run native CellTypist for the Liu endpoint and separately grade complete held-out label predictions. The BioXArena mirror descriptions specify closed-set labels; unknown-cell detection is an optional separate endpoint. Preserve actual donor/batch separation and annotation provenance.",
       "benchmark_record_scope": {
         "BioML-bench": 1,
         "BioXArena": 2,
@@ -319,7 +319,7 @@
         "complete_artifacts": "Feature correspondence, fit/query donor assignment, label hierarchy, classifier predictions/scores, majority votes and all private-label metric counts.",
         "deterministic_acceptance": "Run native CellTypist; verify training/query separation and label vocabulary; compute full accuracy/confusion and uncertainty endpoints from private labels. Reference-derived truth must be labeled as such.",
         "required_incorrect_output_checks": "Leak query labels into fitting; omit unknown populations; majority-vote across unrelated sample groups; drop difficult cells.",
-        "unresolved_before_assignment": "Independent reference and query annotations; source-specific unknown-label policy; BioXArena full prompts are still unavailable.",
+        "unresolved_before_assignment": "Independent reference/query labels, native layer semantics and biological-group manifest remain unresolved. Two BioXArena full descriptions and headers are reviewed from a pinned mirror, with official byte parity pending; one prose/header conflict omits the claimed donor metadata.",
         "status": "planning-contract-not-executed"
       },
       "source_input_review": {
@@ -339,7 +339,7 @@
         "biox-design-single-cell-rna-to-protein-prediction"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Use actual paired measurements and antibody-background controls; keep withheld values private and separate donors in fitting/tuning/evaluation. Run the specific native model required by Liu; BioXArena full schemas remain pending.",
+      "condition_for_one_task": "Keep actual paired measurements, private query proteins and verified donor grouping. Preserve totalVI count layers separately from normalized regression targets; optional protein-sequence features require antibody/protein mapping. The two BioXArena mirror descriptions share BMMC provenance but do not establish identical sample sets or preprocessing.",
       "benchmark_record_scope": {
         "BioML-bench": 1,
         "BioXArena": 2,
@@ -354,7 +354,7 @@
         "complete_artifacts": "Cell and antibody maps, raw/normalized layers, donor fit/query assignment, totalVI settings, complete predicted protein matrix and per-protein metrics.",
         "deterministic_acceptance": "Native totalVI oracle; identity/layer checks and metrics against private paired measurements. Reject missing or constant target columns explicitly; undefined correlation must not earn the source scorer midpoint.",
         "required_incorrect_output_checks": "Expose query ADT to fitting; permute antibody IDs; output constants; omit proteins with poor predictions.",
-        "unresolved_before_assignment": "Paired donor data and background controls, scale-specific evaluation, frozen baseline threshold and bounded training time; BioXArena schemas pending.",
+        "unresolved_before_assignment": "Independent paired observations, actual raw/normalized layers, totalVI settings, fixed evaluation panel and bounded baseline remain unresolved. Both BioXArena descriptions and headers are reviewed provisionally from a pinned mirror; official byte parity is pending.",
         "status": "planning-contract-not-executed"
       },
       "source_input_review": {
@@ -9300,7 +9300,7 @@
     },
     {
       "proposed_task_id": "biox-design-single-cell-cross-modality-cell-matching",
-      "scientific_question": "Can independently paired cells be recovered from observed modalities without exposing pair identities during representation fitting?",
+      "scientific_question": "Which candidate ATAC profile corresponds to each observed RNA profile under a fixed candidate list?",
       "question_card_ids": [
         "biox-design-single-cell-cross-modality-cell-matching"
       ],
@@ -9356,7 +9356,8 @@
       },
       "workstreams": [
         "single-cell-integration"
-      ]
+      ],
+      "authoring_disposition": "Defer source-style synthetic dropout from real-data authoring; no independently measured clean target selected. This is a target-provenance gap, not an LLM-judge requirement."
     },
     {
       "proposed_task_id": "biox-design-structure-complex-structure-evaluation",
@@ -10815,6 +10816,15 @@
       "full_descriptions_and_csv_schemas_reviewed": 16,
       "remaining_full_prompts_uninspected": 60,
       "finding": "Freeze potency orientation, masked-label denominators and category semantics; record prose/header conflicts and missing measured synthetic-lethality provenance. No row values or answers reused. Independent inputs and runnable contracts remain unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "source": "BioXArena single-cell",
+      "design_file": "workflow_designs/bioxarena.json",
+      "mirror_descriptions_and_header_sets_reviewed": 10,
+      "official_description_comparisons_passed": 16,
+      "official_single_cell_scorer_hashes_reverified": 10,
+      "finding": "Keep candidate-local matching, closed-set labeling, modality-specific layers and target provenance explicit. Defer source-style synthetic dropout from real-data authoring. Mirror prompt parity remains unverified for these ten records.",
       "validated_new_mappings": 0
     }
   ]

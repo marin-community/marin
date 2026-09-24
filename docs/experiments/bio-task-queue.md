@@ -251,7 +251,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
 | [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
 | [Bio-Task Bench](../../experiments/post_training/bio_tasks/workflow_designs/bio-task-bench.json) | 34 | 10 | Related component outputs grouped into connected analyses |
-| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers and 16 chemical/network descriptions and CSV schemas inspected; 60 full prompts remain uninspected |
+| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers, 16 official chemical/network descriptions and 10 provisional mirror single-cell descriptions inspected; 50 prompts remain uninspected |
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
@@ -268,6 +268,21 @@ between descriptions and actual headers, without inspecting biological row value
 or private answers. Synthetic-lethality label provenance is unresolved: the prompt
 names network and single-gene features but no measured double-perturbation assay.
 Independent observed inputs, rights and runnable acceptance contracts remain required.
+
+The ten single-cell cards use a pinned expanded mirror for provisional description
+and header review. All 16 chemical/network descriptions match the official archive
+bytes, but this does not prove parity for the single-cell descriptions. No biological
+rows or matrices were inspected. Primary-source scorer hashes were rechecked.
+
+The designs distinguish six-candidate cell matching from global permutation recovery,
+closed-set labels from unknown-cell detection, and classification accuracy from batch
+correction. They preserve raw versus normalized modality targets and label provenance.
+Two mirror descriptions conflict with CSV headers: cell-type prediction lacks the
+claimed donor/sample covariates, while query matching includes an ATAC index described
+as training-only. Neither finding establishes leakage without inspecting the values.
+The denoising description specifies simulated dropout; that construction is deferred
+from real-data authoring. It needs no LLM judge, but a measured-target alternative
+has not been selected. These reviews add no validated mappings.
 
 BioKGBench's 225 instruction identities now route to six contracts: protein names
 (55), entry presence (45), protein-pair evidence (94), cellular localization (11),

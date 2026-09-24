@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:52:02.997737+00:00",
+  "updated_at": "2026-09-24T19:23:20.489090+00:00",
   "scope": "Benchmark-wide question planning only; no implementation, source biological fixture reuse, or validated coverage added.",
   "source": {
     "benchmark": "BioXArena",
@@ -11,7 +11,91 @@
       "manifest_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/Data-Public-by-Domain/MANIFEST.txt",
       "local_manifest_sha256": "30f867d6314c20cace4ebde4c3546137e3ab747e9290150ffd37b3442fb62194",
       "manifest_reported_archive_size": "56G across 17 gzip tar archives",
-      "action": "Two official chemical/network archives (33,577,188 bytes compressed) verified against provider SHA256 values; 16 full descriptions and input/submission headers reviewed. Remaining 60 descriptions stay uninspected. Evidence is in the inventory data_release.archive_inspection and per-task prompt_review."
+      "action": "Two official chemical/network archives (33,577,188 bytes compressed) verified against provider SHA256 values; 16 descriptions and input/submission headers reviewed. Sixty official descriptions remain uninspected; ten single-cell descriptions now have separately labeled expanded-mirror reviews. Evidence is in the inventory data_release.archive_inspection and this file expanded_mirror_review."
+    },
+    "expanded_mirror_review": {
+      "repository": "NotMyName1/BioXArena-Data-Public",
+      "revision": "7ec6073cfe3345de3f6beea60ad37bbe17609856",
+      "purpose": "Bounded question and schema planning only; no mirror biological inputs reused.",
+      "metadata_files_downloaded": 27,
+      "metadata_bytes_downloaded": 80387,
+      "official_comparison_descriptions": 16,
+      "byte_identical_comparisons": 16,
+      "comparison_domains": [
+        "chemical-biology",
+        "network-biology"
+      ],
+      "new_single_cell_descriptions": 10,
+      "csv_header_lines": 32,
+      "official_single_cell_graders_reverified": 10,
+      "remaining_official_prompt_parity_checks": 10,
+      "limit": "Agreement on 16 descriptions does not prove parity for the other ten or establish mirror data completeness. Mirror README explicitly distinguishes expanded inspection from canonical experiments.",
+      "comparisons": [
+        {
+          "path": "chemical-biology/bace1-binding-affinity/public/description.md",
+          "sha256": "58b55518fc41f8d23037316091501212a230dfba112357d38f4c742c394da1de"
+        },
+        {
+          "path": "chemical-biology/cell-painting-perturbation/public/description.md",
+          "sha256": "a259d5de30d01d2d50b67a85463664750cecf14a73114824453d0f8bf15b5d58"
+        },
+        {
+          "path": "chemical-biology/cyp-inhibition-multi-label/public/description.md",
+          "sha256": "f6ef45b4eb7c1bfb9054d8b52643e29f00021de1e1b3ede599c66db0c401f7cf"
+        },
+        {
+          "path": "chemical-biology/egfr-binding-affinity/public/description.md",
+          "sha256": "21e573a6889c36cd7341e5513c0d957ceed8fd530d8999ff7c9f617abd253dcc"
+        },
+        {
+          "path": "chemical-biology/gpcr-binding-multi-class/public/description.md",
+          "sha256": "ccb9cc84e8cd1ee849243a6563625b0b51873ab04e3e0daec9ae86ca8662b748"
+        },
+        {
+          "path": "chemical-biology/herg-binding-affinity/public/description.md",
+          "sha256": "9db8922668116fe06690be9198b4e56a7fa234706e20cce7f6ba297ca3cedc6d"
+        },
+        {
+          "path": "chemical-biology/kinase-selectivity-multi-label/public/description.md",
+          "sha256": "3fb85296f58e7674c5ba2a1b731c4e53293d805d9f2e7bb38077c962a185aee0"
+        },
+        {
+          "path": "chemical-biology/tox21-sr-are/public/description.md",
+          "sha256": "7777b8b55b27e575055371d12955edd3e19c86b16ed4676121e63a65f6fde6de"
+        },
+        {
+          "path": "network-biology/gene-disease-association/public/description.md",
+          "sha256": "df6d9ca4807b9deae621283126072b18dee338a134d752dafa798ca5e8387c39"
+        },
+        {
+          "path": "network-biology/go-function-multi-label/public/description.md",
+          "sha256": "9bde7aea681e962e22d5c608030c3616030341d51200cd27081abe3a80b2889a"
+        },
+        {
+          "path": "network-biology/metabolic-network-kegg/public/description.md",
+          "sha256": "b755b3e6d969d59b0cb9100be20693c558324309f0ca25cdb27b637053a1c1d0"
+        },
+        {
+          "path": "network-biology/pathway-membership-reactome/public/description.md",
+          "sha256": "a93decfb37de75650329d27c7f2ad8e260eb57d47d3871262b940c817d7f60c2"
+        },
+        {
+          "path": "network-biology/ppi-prediction-string/public/description.md",
+          "sha256": "5952f14e1ac58082374bf0fd981b2f22ca3793c7cefe37f0f5875fc3806ba43b"
+        },
+        {
+          "path": "network-biology/protein-complex-corum/public/description.md",
+          "sha256": "503d262112ff7c4259942d8f10c94532b68178d719ded9057334f5a76489f3f3"
+        },
+        {
+          "path": "network-biology/synthetic-lethality-prediction/public/description.md",
+          "sha256": "0842d21f89bf002b4ba7ac32b46fb41f55e773fec651ddecb948571e8f2a0f50"
+        },
+        {
+          "path": "network-biology/tf-regulatory-prediction/public/description.md",
+          "sha256": "2fb1ab2c0d542a03dc25b190cbab75dd6172e61d0f2b79464de81879c8342f68"
+        }
+      ]
     }
   },
   "defaults": {
@@ -2639,7 +2723,7 @@
     },
     {
       "proposed_id": "biox-design-single-cell-batch-integration",
-      "scientific_question": "Does a bounded integration workflow preserve measured cell labels across held-out batches while retaining biological differences?",
+      "scientific_question": "How accurately do reference-trained cell labels transfer to genuinely held-out experimental batches?",
       "target_ids": [
         "single-cell/batch-integration"
       ],
@@ -2647,7 +2731,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -2664,35 +2748,81 @@
         "scientific_limit": "The actual endpoint is cell-type prediction in held-out batches; label accuracy does not independently validate batch correction."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "H5AD expression plus CSV row_idx and batch metadata; reference labels only"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "H5AD",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, cell_type in complete query order",
+        "cell_manifest.tsv: id, donor, study, batch, matrix_row, reference_or_query",
+        "confusion.tsv and per-batch accuracy sufficient statistics against private labels"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks.",
-        "Source accuracy measures cell-type predictions, not batch removal; independently verify biological preservation and integration behavior before claiming the broader workflow."
+        "Preserve actual held-out batches and their biological context; batch ID is not automatically a donor. Select features and tune using reference data only.",
+        "Accuracy evaluates cross-batch label transfer. Do not require an integrated embedding or claim removal of batch effects solely from accuracy."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Actual matrix dimensions, batch memberships and label provenance are uninspected; numbers above are prompt claims.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/batch-integration/public/description.md",
+        "description_sha256": "f3c37bd1a9f5f0d294fbeaa4b01eafa58391a93af4c831fb145934316720eec7",
+        "description_bytes": 1912,
+        "source_design_claim": "Mirror describes mouse pancreas, 301796 cells by 2000 genes, 45 reference batches and 11 query batches, 13 labels.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/batch-integration/public/sample_submission.csv",
+            "sha256": "443c40eb662e7e704a728e423156e356c550b78d3ebb0fb20cc9eac96f8b51c5",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "cell_type"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/batch-integration/public/test.csv",
+            "sha256": "5034cae7f1c965a4bac7b2b5f39abebe4b8f23f1ea8d6019f651faae234a251b",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "batch",
+              "row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/batch-integration/public/train.csv",
+            "sha256": "3c853226daf688f3f062ae92d075482a683160ed5be38ee73a692ad47e85900f",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "batch",
+              "cell_type",
+              "row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Return batch names instead of cell labels; omit cells from a poorly predicted batch; train on private query labels."
+        ],
+        "scientific_limits": [
+          "Actual matrix dimensions, batch memberships and label provenance are uninspected; numbers above are prompt claims."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-cell-type-from-expression",
-      "scientific_question": "Can reference-derived cell labels be recovered on independently held-out donor expression profiles with explicit ambiguity handling?",
+      "scientific_question": "Which annotated cell types can be recovered from independent observed expression while preserving donor separation?",
       "target_ids": [
         "single-cell/cell-type-from-expression"
       ],
@@ -2700,7 +2830,7 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -2717,34 +2847,81 @@
         "scientific_limit": "The README and output cell_type identify classification, despite a grader docstring mentioning cell communication."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+        "Sparse expression_counts.npz and CSV expr_row_idx, cluster; independent authoring additionally needs verified donor/sample identities"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "SciPy sparse NPZ",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, cell_type",
+        "feature_and_cell_manifest.tsv with expression identities and label provenance",
+        "complete confusion and accuracy counts"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Use expression as the scientific input. Audit cluster provenance before including it as a feature; an annotation-derived cluster can reveal the target.",
+        "Donor-separated evaluation is an authored generalization adaptation, not an observed property of this source split. Cell-type classification is not cell-cell communication inference."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Mirror prose names biosample_id, donor_id and sex, but both inspected CSV headers omit them. Do not infer source donor separation or available covariates from that prose.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cell-type-from-expression/public/description.md",
+        "description_sha256": "367289574ca4265c82279ba6cd5a3f78ebcc74eedd1f2d51be90763386b55b2c",
+        "description_bytes": 2143,
+        "source_design_claim": "Mirror describes SCP2167, 4065 cells by 36601 genes, seven labels and a 3252/813 cell split. It does not establish donor-disjoint splitting.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cell-type-from-expression/public/sample_submission.csv",
+            "sha256": "443c40eb662e7e704a728e423156e356c550b78d3ebb0fb20cc9eac96f8b51c5",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "cell_type"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cell-type-from-expression/public/test.csv",
+            "sha256": "0e2cecef4eecce00a85ef4e9f5c3868dce5e4573cc12927c009ec9ddc7e2303f",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "cluster",
+              "expr_row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cell-type-from-expression/public/train.csv",
+            "sha256": "0830dd17c8b4b774ea9018de5543ef80a4361a27c2c2f404cc387e8b03271901",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "cluster",
+              "cell_type",
+              "expr_row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Predict only from an annotation-derived cluster; invent donor identities; substitute a ligand-receptor network for labels."
+        ],
+        "scientific_limits": [
+          "Mirror prose names biosample_id, donor_id and sex, but both inspected CSV headers omit them. Do not infer source donor separation or available covariates from that prose."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-chromatin-to-expression",
-      "scientific_question": "How well does paired observed accessibility predict held-out gene expression across donors and biological contexts?",
+      "scientific_question": "How well does measured chromatin accessibility predict paired gene expression in held-out biological samples?",
       "target_ids": [
         "single-cell/chromatin-to-expression"
       ],
@@ -2752,7 +2929,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "mean gene-wise Pearson",
         "helper_arguments": {},
@@ -2763,34 +2940,87 @@
         "scientific_limit": "Keep paired cell identities and held-out donors/batches explicit; constant predicted features must not shrink the evaluation universe."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute mean gene-wise Pearson against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "Separate sparse ATAC reference/query matrices, paired reference RNA targets and CSV atac_row_idx",
+        "Frozen evaluation gene identity list; optional hg38 peak sequences with genomic-coordinate and strand mapping"
       ],
       "required_formats": [
-        "CSV gene_* columns",
-        "task-specific native inputs: schema uninspected"
+        "SciPy sparse NPZ",
+        "NumPy NPY",
+        "gene identity TXT",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id and every declared gene target",
+        "gene_map.tsv: output_column, stable_gene_id, matrix_column",
+        "paired_cell_manifest.tsv and per-gene Pearson sufficient statistics"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Preserve paired reference row identities; verify the 50-gene map explicitly instead of assuming the first 50 columns.",
+        "Freeze the complete evaluation panel and a nonconstant-target policy independently of solver predictions; do not omit a hard gene because predicted variance is zero.",
+        "Peak sequences are optional feature input in the mirror instructions; prediction accuracy alone does not prove sequence use or regulatory causation."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Raw versus normalized RNA target layers and feature-selection provenance remain unverified. Donor memberships require an independent manifest.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/chromatin-to-expression/public/description.md",
+        "description_sha256": "8654e427e29aaa619d7f510ac22048b919e300ca3c8405459df1a9bb01b4a9dc",
+        "description_bytes": 3073,
+        "source_design_claim": "Mirror describes GSE194122 BMMC, 57614 reference and 11635 query cells, 116490 peaks, 2000 RNA training targets and 50 scored genes; donor-out split is claimed.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/chromatin-to-expression/public/sample_submission.csv",
+            "sha256": "675bb7320e24973b640c4cad769f20381260f8d743c27d5508ed1a4b32a72f1b",
+            "column_count": 51,
+            "columns": {
+              "first": "id",
+              "remaining_prefix": "gene_",
+              "integer_suffix_start": 0,
+              "integer_suffix_end": 49,
+              "contiguous_order_verified": true
+            }
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/chromatin-to-expression/public/test.csv",
+            "sha256": "1a6ed78cd9edcfc969b1e955dfde413240982a55b7c4d538977a9f92a971d63e",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "cell_id",
+              "atac_row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/chromatin-to-expression/public/train.csv",
+            "sha256": "1a6ed78cd9edcfc969b1e955dfde413240982a55b7c4d538977a9f92a971d63e",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "cell_id",
+              "atac_row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Swap RNA target order; use query RNA in fitting; omit constant predictions from the score denominator."
+        ],
+        "scientific_limits": [
+          "Raw versus normalized RNA target layers and feature-selection provenance remain unverified. Donor memberships require an independent manifest."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-cite-seq-protein-prediction",
-      "scientific_question": "Can paired observed RNA measurements predict held-out surface-protein measurements after antibody-background and donor checks?",
+      "scientific_question": "How well does RNA predict paired surface-protein measurements across independently held-out biological samples?",
       "target_ids": [
         "single-cell/cite-seq-protein-prediction"
       ],
@@ -2798,7 +3028,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "mean protein-wise Pearson",
         "helper_arguments": {},
@@ -2809,34 +3039,85 @@
         "scientific_limit": "Protein/cell identities and modality-specific scaling matter; constant outputs are skipped by the source scorer."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute mean protein-wise Pearson against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "Sparse reference/query RNA and paired reference ADT matrices with rna_row_idx",
+        "Protein FASTA and an antibody-to-protein/sequence mapping when using the optional sequence features"
       ],
       "required_formats": [
-        "CSV protein_* columns",
-        "task-specific native inputs: schema uninspected"
+        "SciPy sparse NPZ",
+        "protein FASTA",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id and every declared protein target",
+        "antibody_map.tsv: output_column, antibody_id, protein_id, sequence_id, mapping_status",
+        "cell pairing, preprocessing and complete per-protein metrics"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "The prose calls targets ADT counts, but actual layers remain uninspected. Keep count likelihoods and normalized-target regression separate.",
+        "Protein sequences are optional in the usage instructions. Antibody epitopes, isoforms and multiple antibodies to one protein require explicit mapping; a FASTA sequence is not the measured ADT feature."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "No source matrix or FASTA payload inspected. Do not claim sequence feature coverage from prediction outputs alone.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cite-seq-protein-prediction/public/description.md",
+        "description_sha256": "70bdf0c248db597d78bb5af49e42327e4b9e15ff44308cf2b12ce32618203e00",
+        "description_bytes": 2935,
+        "source_design_claim": "Mirror describes GSE194122 BMMC, 76161 reference and 14100 query cells, 2000 RNA genes and 134 ADT targets with a donor-out split.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cite-seq-protein-prediction/public/sample_submission.csv",
+            "sha256": "8ea313f704f04cec582d3f1e37d9b398fb31fafad7b3cf6e03186b55b689dda7",
+            "column_count": 135,
+            "columns": {
+              "first": "id",
+              "remaining_prefix": "protein_",
+              "integer_suffix_start": 0,
+              "integer_suffix_end": 133,
+              "contiguous_order_verified": true
+            }
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cite-seq-protein-prediction/public/test.csv",
+            "sha256": "84afb0f9ff2dd222da18cd5bfcb5dd382ae3ec09cf7a847bf8ada8fab2ff5bda",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "cell_id",
+              "rna_row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cite-seq-protein-prediction/public/train.csv",
+            "sha256": "84afb0f9ff2dd222da18cd5bfcb5dd382ae3ec09cf7a847bf8ada8fab2ff5bda",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "cell_id",
+              "rna_row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Treat normalized ADT as raw counts; swap antibody IDs; expose held-out ADT; omit poorly predicted proteins."
+        ],
+        "scientific_limits": [
+          "No source matrix or FASTA payload inspected. Do not claim sequence feature coverage from prediction outputs alone."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-cross-modality-cell-matching",
-      "scientific_question": "Can independently paired cells be recovered from observed modalities without exposing pair identities during representation fitting?",
+      "scientific_question": "Which candidate ATAC profile corresponds to each observed RNA profile under a fixed candidate list?",
       "target_ids": [
         "single-cell/cross-modality-cell-matching"
       ],
@@ -2844,7 +3125,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -2858,37 +3139,90 @@
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Primary scorer checks per-row match_idx accuracy, with no global bijection constraint. Mirror instructions specify a six-candidate local index; global permutation recovery remains a distinct endpoint."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "Paired reference RNA/ATAC matrices; separately ordered query modalities",
+        "candidate_atac_index.npy and test_candidate_indices.npy with explicit local-to-global index mapping"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "SciPy sparse NPZ",
+        "NumPy NPY",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, match_idx as candidate-local integer",
+        "candidate_map.tsv: query_id, local_index, global_atac_id",
+        "complete match accuracy and candidate eligibility diagnostics"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Grade local index in 0..5 using the fixed candidate list. The primary scorer compares per-row labels and does not enforce a global bijection.",
+        "Do not silently replace six-candidate classification with full-matrix permutation recovery. A global one-to-one assignment is a separate authored workflow.",
+        "Remove original shared barcodes and direct pairing keys from solver-visible query inputs; preserve private correspondence."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Mirror overview calls this a permutation task, while detailed instructions and submission use candidate-local indices. The mirror test header contains atac_row_idx although prose calls it train-only. Values and relationship to ground truth were not read; potential leakage remains unverified, not an established flaw.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-matching/public/description.md",
+        "description_sha256": "73b2b4267ec394b29dc1f16649f0425105cb498fe1599a8a1704a30bbab793ac",
+        "description_bytes": 2960,
+        "source_design_claim": "Mirror describes paired 10x Multiome PBMCs, 9323 reference and 1647 query cells, with six candidate ATAC indices per query.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-matching/public/sample_submission.csv",
+            "sha256": "f21201ceff469f1dba3ec9763162b4239eef1e0810697c9a88ae3b9a7a21f81b",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "match_idx"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-matching/public/test.csv",
+            "sha256": "ba5f0b66aac33645a14cb46f7b643fd9bb768aa14e7956a0e3488af6b576de3a",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "cell_id",
+              "rna_row_idx",
+              "atac_row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-matching/public/train.csv",
+            "sha256": "6e3eb453319925c41e018ab9426965fb68156e331c08a49f2f874de4d5374369",
+            "column_count": 5,
+            "columns": [
+              "id",
+              "cell_id",
+              "rna_row_idx",
+              "atac_row_idx",
+              "gt_match_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Return global IDs instead of local positions; change candidate order; use direct paired barcode identifiers; output an out-of-range local index."
+        ],
+        "scientific_limits": [
+          "Mirror overview calls this a permutation task, while detailed instructions and submission use candidate-local indices.",
+          "The mirror test header contains atac_row_idx although prose calls it train-only. Values and relationship to ground truth were not read; potential leakage remains unverified, not an established flaw."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-cross-modality-cell-type",
-      "scientific_question": "How well do reference labels transfer between observed modalities on held-out biological samples?",
+      "scientific_question": "How accurately do jointly measured RNA and ADT identify reference-annotated immune cell subtypes?",
       "target_ids": [
         "single-cell/cross-modality-cell-type"
       ],
@@ -2896,7 +3230,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "macro F1",
         "helper_arguments": {
@@ -2913,34 +3247,86 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute macro F1 against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "Paired measured RNA and ADT; CSV headers confirm 5000 rna_ columns and 228 adt_ columns",
+        "Independent donor/sample identifiers and annotation provenance for the authored task"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "RNA/ADT feature CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, celltype_l2",
+        "label_dictionary.tsv and per-class TP, FP, FN, support",
+        "cell/assay identity join and preprocessing manifest"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Preserve macro F1 separately from accuracy. Freeze the class universe and zero-support/zero-denominator convention before evaluation.",
+        "Random cell splitting is the source claim; donor-held-out evaluation is an explicit authored change.",
+        "Both modalities are available to prediction. Reference labels may be inferred using these modalities; report agreement with annotations, not independently measured biological identity."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Headers confirm feature counts, not raw-count semantics or the stated row counts. Source donor identities are absent from the inspected CSV headers.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-type/public/description.md",
+        "description_sha256": "f8d3df487f2b7080b9efe8ba5e76a2d4453ec650cdb5a15352a28173de46af03",
+        "description_bytes": 2239,
+        "source_design_claim": "Mirror describes GSE164378 PBMC CITE-seq, 160909 cells, random stratified 80/20 split, 27 L2 labels, 5000 RNA and 228 ADT features.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-type/public/sample_submission.csv",
+            "sha256": "e8e838613ec4d34bf10af9ceba4c50331b0a1b942f3417fdd0b9813b045fd087",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "celltype_l2"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-type/public/test.csv",
+            "sha256": "d791e6ff369eccd4d65544ff75060c746a2ab49ba9f73248ac3bd4190430cd2f",
+            "column_count": 5229,
+            "columns": {
+              "rna_prefix_count": 5000,
+              "adt_prefix_count": 228,
+              "other": [
+                "id"
+              ]
+            }
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/cross-modality-cell-type/public/train.csv",
+            "sha256": "35a8b1af04749329f2401229431d9a4e54b842bb360ebf70939a3a5508b42790",
+            "column_count": 5230,
+            "columns": {
+              "rna_prefix_count": 5000,
+              "adt_prefix_count": 228,
+              "other": [
+                "id",
+                "celltype_l2"
+              ]
+            }
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Score only common classes; use micro F1 instead of macro F1; swap antibody and RNA feature maps."
+        ],
+        "scientific_limits": [
+          "Headers confirm feature counts, not raw-count semantics or the stated row counts. Source donor identities are absent from the inspected CSV headers."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-developmental-stage-prediction",
-      "scientific_question": "Do observed cell profiles predict recorded developmental stages across held-out biological samples without confounding age with batch?",
+      "scientific_question": "Which developmental-stage labels can be predicted from independent retinal expression under an explicit sample-level evaluation?",
       "target_ids": [
         "single-cell/developmental-stage-prediction"
       ],
@@ -2948,7 +3334,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -2965,34 +3351,111 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "H5AD expression and train_metadata.csv/test_metadata.csv with h5ad_row_idx",
+        "Verified donor/run/stage/region relationships in the independent source"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "H5AD",
+        "metadata CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, stage",
+        "cell_manifest.tsv with donor/run/region and expression-row joins",
+        "stage confusion and per-sample accuracy counts"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Use metadata files with h5ad_row_idx; the alternate train.csv/test.csv headers omit that join field.",
+        "Audit whether source_file or barcode encodes stage before using it as a feature. Withhold such direct proxies from the authored prediction input.",
+        "A label-accuracy endpoint does not establish batch-invariant representation. Do not require a batch-removal metric unless it is a separate defined question.",
+        "Preserve actual donor-stage coverage; never relabel different runs as repeated developmental measurements of one donor."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Cross-run/stage confounding and label-proxy leakage cannot be determined from headers alone. No matrix annotations or row values inspected.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/description.md",
+        "description_sha256": "cc1f7585850d9c2139f3af3e5b71005b674dcc8a5bfc66d16162e6af9958495c",
+        "description_bytes": 2923,
+        "source_design_claim": "Mirror describes GSE268630 retinal nuclei, six stages, 12 sequencing runs, foveal/non-foveal regions and an IID cell split.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "test_metadata.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/data/test_metadata.csv",
+            "sha256": "7329631517b43ef8b9c7642b0fcc56c890805599cb2875b82700b53d7a7b3e7f",
+            "column_count": 5,
+            "columns": [
+              "id",
+              "cell",
+              "region",
+              "source_file",
+              "h5ad_row_idx"
+            ]
+          },
+          "train_metadata.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/data/train_metadata.csv",
+            "sha256": "c5c582890ca28628f544219c6bb6136b3b294327094fae96a1fb8d9511f84835",
+            "column_count": 6,
+            "columns": [
+              "id",
+              "cell",
+              "stage",
+              "region",
+              "source_file",
+              "h5ad_row_idx"
+            ]
+          },
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/sample_submission.csv",
+            "sha256": "759b9966bb2b60e547119911cf90b4b22ff9232f3cb60599f03c1fb4652bc179",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "stage"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/test.csv",
+            "sha256": "cf31ba39248e68eb97eb56128caf32e792536f20faf2948a4468135fad24692c",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "cell",
+              "region",
+              "source_file"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/developmental-stage-prediction/public/train.csv",
+            "sha256": "2a4af38e92f6366cda8423a0e32c28b0e5a6df65a3acdef9f6ed711765eb91b2",
+            "column_count": 5,
+            "columns": [
+              "id",
+              "cell",
+              "stage",
+              "region",
+              "source_file"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Predict stage from a stage-encoded filename; mix a donor across fit/evaluation; join the wrong H5AD rows."
+        ],
+        "scientific_limits": [
+          "Cross-run/stage confounding and label-proxy leakage cannot be determined from headers alone. No matrix annotations or row values inspected."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-gene-expression-denoising",
-      "scientific_question": "Can a bounded count model predict independently held-out observed expression measurements while preserving zeros, scale and donor identity?",
+      "scientific_question": "Can measured expression reconstruction be assessed against independent observations with a clear target provenance?",
       "target_ids": [
         "single-cell/gene-expression-denoising"
       ],
@@ -3000,7 +3463,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "mean gene-wise Pearson",
         "helper_arguments": {},
@@ -3008,37 +3471,83 @@
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Undefined correlations are omitted; the provenance of clean targets is uninspected and real-versus-simulated status must be established."
+        "scientific_limit": "Undefined correlations are omitted. Mirror description states simulated dropout; no measured clean-expression truth has been verified."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute mean gene-wise Pearson against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "Observed expression with genuinely repeated or independently measured targets for any real-data reconstruction adaptation"
       ],
       "required_formats": [
-        "CSV gene_* columns",
-        "task-specific native inputs: schema uninspected"
+        "Observed expression matrices; actual target format unresolved"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "Complete declared-gene predictions and target-provenance manifest if an observed-target task is selected"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Defer this source-style synthetic-dropout construction from the real-data authoring queue. Its numerical scorer needs no LLM judge; the limitation is target realism.",
+        "Artificial thinning of an observed matrix must be labeled a synthetic corruption control, not a measured clean-expression target.",
+        "Do not reinterpret disagreement with sparse observations as biological denoising accuracy without an independent target."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Mirror explicitly states simulated dropout. Official description byte parity and hidden target construction remain unverified. No independent measured-target replacement has been selected; this does not block other single-cell tasks.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/gene-expression-denoising/public/description.md",
+        "description_sha256": "bea96eeed0c48a9af733e98e1f9b2854f974b30ba82ee83b92a9bc6319d19b1c",
+        "description_bytes": 1981,
+        "source_design_claim": "Mirror describes OpenProblems pancreas data, 3605 reference and 3605 query cells, 16096 genes and 50 evaluation genes, with simulated dropout noise.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/gene-expression-denoising/public/sample_submission.csv",
+            "sha256": "675bb7320e24973b640c4cad769f20381260f8d743c27d5508ed1a4b32a72f1b",
+            "column_count": 51,
+            "columns": {
+              "first": "id",
+              "remaining_prefix": "gene_",
+              "integer_suffix_start": 0,
+              "integer_suffix_end": 49,
+              "contiguous_order_verified": true
+            }
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/gene-expression-denoising/public/test.csv",
+            "sha256": "aba3ddfbbde4cdda282feafc04d527ecec6f2cc3f9f13e9844575a8e5aeafbdc",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/gene-expression-denoising/public/train.csv",
+            "sha256": "aba3ddfbbde4cdda282feafc04d527ecec6f2cc3f9f13e9844575a8e5aeafbdc",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Claim artificially masked counts are independent clean truth; shrink the evaluated gene universe when predictions are constant."
+        ],
+        "scientific_limits": [
+          "Mirror explicitly states simulated dropout. Official description byte parity and hidden target construction remain unverified.",
+          "No independent measured-target replacement has been selected; this does not block other single-cell tasks."
+        ]
+      },
+      "authoring_disposition": "deferred-source-style-synthetic-corruption; observed-target-alternative-unselected",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-label-projection",
-      "scientific_question": "Which cell labels transfer reliably from an independent annotated reference to held-out observed samples?",
+      "scientific_question": "Which cell labels transfer from an independently annotated reference to query samples under verified sample separation?",
       "target_ids": [
         "single-cell/label-projection"
       ],
@@ -3046,7 +3555,7 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -3063,34 +3572,82 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+        "Separate reference/query H5AD with CSV row_idx, batch and reference cell_type"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "H5AD",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id, cell_type",
+        "reference/query cell and feature correspondence",
+        "confusion matrix and batch-wise label accuracy"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Verify batch overlap from actual independent sample metadata; a prose statement about different batches is not sufficient.",
+        "This is closed-set prediction into a named label vocabulary. Unknown-cell detection and abstention calibration are optional separate endpoints, not source requirements established by this description."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "The source list includes Oetjen, 10X, Sun and Villani studies; exclude their actual biological lineages when selecting independent authoring inputs. Label hierarchy, count/normalized layers and source label evidence remain uninspected.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/label-projection/public/description.md",
+        "description_sha256": "f7ef6ab4636d659efcd18624e7fe844c803c7fe7247fda81b93b598422f179fb",
+        "description_bytes": 2215,
+        "source_design_claim": "Mirror describes human immune cells, 30159 reference and 3347 query cells, 12303 genes, 16 labels and nine named reference batches.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/label-projection/public/sample_submission.csv",
+            "sha256": "443c40eb662e7e704a728e423156e356c550b78d3ebb0fb20cc9eac96f8b51c5",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "cell_type"
+            ]
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/label-projection/public/test.csv",
+            "sha256": "5034cae7f1c965a4bac7b2b5f39abebe4b8f23f1ea8d6019f651faae234a251b",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "batch",
+              "row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/label-projection/public/train.csv",
+            "sha256": "3c853226daf688f3f062ae92d075482a683160ed5be38ee73a692ad47e85900f",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "batch",
+              "cell_type",
+              "row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Hide unseen or difficult query cells; reuse query labels from H5AD obs; assume a row index has global meaning across both files."
+        ],
+        "scientific_limits": [
+          "The source list includes Oetjen, 10X, Sun and Villani studies; exclude their actual biological lineages when selecting independent authoring inputs.",
+          "Label hierarchy, count/normalized layers and source label evidence remain uninspected."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-single-cell-rna-to-protein-prediction",
-      "scientific_question": "How well do paired RNA observations predict measured proteins across held-out donors under explicit normalization and missingness rules?",
+      "scientific_question": "How accurately does paired reference RNA predict withheld measured protein values under a frozen target scale?",
       "target_ids": [
         "single-cell/rna-to-protein-prediction"
       ],
@@ -3098,7 +3655,7 @@
       "matching_workstreams": [
         "single-cell-integration"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "official-scorer-verified; expanded-mirror-description-and-headers-reviewed; official-prompt-parity-pending",
       "source_scorer": {
         "metric": "mean protein-wise Pearson",
         "helper_arguments": {},
@@ -3109,30 +3666,81 @@
         "scientific_limit": "Undefined correlations are omitted; zero valid columns score zero, which the outer correlation normalization maps to one half."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute mean protein-wise Pearson against independently held-out outcomes"
+        "Resolve real biological input provenance, cell/feature identities and the exact declared prediction endpoint.",
+        "Establish reference/query biological groups and hide query targets.",
+        "Fit or apply a native model using permitted features; retain complete predictions.",
+        "Score the declared complete panel against private targets with deterministic identity, domain and metric checks."
       ],
       "observed_input_requirements": [
-        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+        "train_mod2.h5ad/test_mod2.h5ad are RNA inputs; train_mod1.h5ad is the paired protein target",
+        "CSV rna_row_idx and batch plus independent donor metadata"
       ],
       "required_formats": [
-        "CSV protein_* columns",
-        "task-specific native inputs: schema uninspected"
+        "H5AD",
+        "CSV"
       ],
       "proposed_artifact_requirements": [
-        "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "predictions.csv: id and complete protein panel",
+        "cell/antibody alignment and layer-transformation manifest",
+        "per-protein Pearson statistics and fixed evaluation denominator"
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Do not reverse mod1/mod2 based on filenames; preserve the declared RNA-to-ADT direction.",
+        "Actual normalized/raw target layers must be checked. Correlation cannot verify absolute abundance calibration; grade scale only under an explicit additional criterion.",
+        "No donor-out guarantee follows from this description. Keep task-internal donor evaluation as a declared authored design."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
-      "validated_new_mappings": 0
+      "endpoint_limit": "Shares the named BMMC study with the other protein-prediction task; two source IDs do not establish independent datasets. Exact sample overlap is uninspected.",
+      "validated_new_mappings": 0,
+      "provisional_prompt_review": {
+        "description_url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/rna-to-protein-prediction/public/description.md",
+        "description_sha256": "3f3e127268eb86e7211dcb5ed8a1b3798612487125adc98328befe703a736ecc",
+        "description_bytes": 2217,
+        "source_design_claim": "Mirror describes BMMC OpenProblems CITE-seq, 66175 reference and 1000 query cells, 13953 genes and 134 proteins.",
+        "official_description_byte_parity": false,
+        "review_scope": "Full mirror description and CSV header lines only; no biological matrix, data row or expected answer inspected. Primary GitHub grader hash reverified.",
+        "headers": {
+          "sample_submission.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/rna-to-protein-prediction/public/sample_submission.csv",
+            "sha256": "8ea313f704f04cec582d3f1e37d9b398fb31fafad7b3cf6e03186b55b689dda7",
+            "column_count": 135,
+            "columns": {
+              "first": "id",
+              "remaining_prefix": "protein_",
+              "integer_suffix_start": 0,
+              "integer_suffix_end": 133,
+              "contiguous_order_verified": true
+            }
+          },
+          "test.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/rna-to-protein-prediction/public/test.csv",
+            "sha256": "326fcb90612433530ecbd44eaf84358ae725de720aa8b6714e562e9bc10980e9",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "batch",
+              "rna_row_idx"
+            ]
+          },
+          "train.csv": {
+            "url": "https://huggingface.co/datasets/NotMyName1/BioXArena-Data-Public/resolve/7ec6073cfe3345de3f6beea60ad37bbe17609856/single-cell/rna-to-protein-prediction/public/train.csv",
+            "sha256": "326fcb90612433530ecbd44eaf84358ae725de720aa8b6714e562e9bc10980e9",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "batch",
+              "rna_row_idx"
+            ]
+          }
+        },
+        "required_incorrect_output_checks": [
+          "Reverse the two modalities; fit with query ADT; return constant proteins that disappear from correlation averaging."
+        ],
+        "scientific_limits": [
+          "Shares the named BMMC study with the other protein-prediction task; two source IDs do not establish independent datasets. Exact sample overlap is uninspected."
+        ]
+      },
+      "authoring_disposition": "numerically-scorable-design; independent-input-and-runtime-checks-pending",
+      "deterministic_acceptance": "Harbor only. Require exact output identities and target columns, finite values and valid class/index domains. Grade complete predictions against private independently observed targets or explicitly attributed reference annotations. Freeze the metric, evaluation universe and feasibility threshold from a native baseline before solver runs; alternative models need not reproduce its predictions. No LLM judge. For correlation, determine target eligibility independently of predictions and reject undefined prediction correlations instead of shrinking the denominator."
     },
     {
       "proposed_id": "biox-design-structure-complex-structure-evaluation",
@@ -3942,6 +4550,9 @@
     "question_cards": 76,
     "full_prompts_inspected": 16,
     "validated_new_mappings": 0,
-    "full_prompts_remaining": 60
+    "full_prompts_remaining": 60,
+    "mirror_only_full_prompts_inspected": 10,
+    "full_prompts_uninspected_in_any_source": 50,
+    "prompt_count_interpretation": "full_prompts_inspected and full_prompts_remaining refer to official descriptions. Ten additional descriptions are reviewed from a mirror only, leaving 50 uninspected in any source."
   }
 }
