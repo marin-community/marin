@@ -3657,7 +3657,8 @@
         "adjusted_significant_up": "adjusted_significant and finite shrunken_log2FC >0",
         "volcano_highlight": "finite padj <0.05 and abs(raw_log2FC)>1"
       },
-      "missingness": "Retain every input gene with statuses including prefilter_excluded, fit_failure, cooks_outlier, independently_filtered and finite. A gene can have finite p and NA padj; it must not silently enter the adjusted-significant list. Export baseMean, raw LFC/SE, Wald statistic, p, padj, shrunken LFC/SE, Cook values, eligibility and the independent-filter threshold."
+      "missingness": "Retain every input gene with statuses including prefilter_excluded, fit_failure, cooks_outlier, independently_filtered and finite. A gene can have finite p and NA padj; it must not silently enter the adjusted-significant list. Export baseMean, raw LFC/SE, Wald statistic, p, padj, shrunken LFC/SE, Cook values, eligibility and the independent-filter threshold.",
+      "contrast_interface_check": "Use the named coefficient for apeglm. DESeq2 1.50.2 character contrasts reset LFC and Wald statistic to zero and p to one when both compared groups have zero counts. Check that behavior separately, and require named/character LFC agreement within 1e-12 for other eligible genes. Export both results and the zero-count mask before asserting."
     },
     "ora": {
       "library": "Use pinned clusterProfiler enrichGO with OrgDb/keyType appropriate to the supplied species and IDs; ont=BP,pAdjustMethod=BH,minGSSize=10,maxGSSize=500,readable=FALSE,pvalueCutoff=1,qvalueCutoff=1. Preserve the raw native result slot before deriving display/significance views; do not rely on a filtered data-frame conversion.",
@@ -3764,6 +3765,59 @@
     ],
     "validated_new_mappings": 0,
     "scoring_scope": "Prioritize deterministic scientific outputs. Keep subjective interpretation and unsupported visual endpoints as deferred/component-only source dispositions; do not add an LLM judge or an artificial task protocol to clear them.",
-    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
+    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy",
+    "native_preparation": {
+      "script": "sources/prepare_enrichment.R",
+      "script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
+      "environment_lock": "sources/enrichment-preparation.lock.json",
+      "environment_lock_sha256": "fef98f5d856d6fd3b0aeae2b7ac910cd0c8eb9818004bb81b0a35b9a3576ee12",
+      "status": "Corrected diagnostic prepared; rerun pending. No native enrichment result or Harbor validation yet.",
+      "failed_attempt": {
+        "job_id": "/exedev/bio-enrichment-native-20260924-204426",
+        "terminal_state": "FAILED",
+        "submitted_bundle_sha256": "e32d4351de603c8acdebe475e24c0f7ef963840715f2ad6eee9786d0c1ed3029",
+        "executed_script_sha256": "0d9e8ee052dda77c16bca7189a10cea9704ced2345299c5ed09acf7577c8668b",
+        "diagnostic_archive_sha256": "9d70bbf642f400ac998dfa119ad3ae978d293bd2c2d96604d5fd72a0ca81b5b0",
+        "installed_packages": 277,
+        "installation_seconds": 93.67724567398545,
+        "analysis_seconds": 16.937383840995608,
+        "cumulative_child_peak_rss_kib": 1882276,
+        "failure": "An unconditional equality assertion between named and character-contrast LFCs failed before shrinkage, GO exports or ORA. This premise is invalid for genes zero in both compared stages.",
+        "input_audit": {
+          "eligible_genes": 16659,
+          "genes_zero_in_both_compared_groups": [
+            {
+              "gene": "18413",
+              "virgin": 0,
+              "18.5 dP": 23,
+              "2 dL": 0
+            },
+            {
+              "gene": "16675",
+              "virgin": 0,
+              "18.5 dP": 15,
+              "2 dL": 0
+            },
+            {
+              "gene": "78076",
+              "virgin": 0,
+              "18.5 dP": 24,
+              "2 dL": 0
+            }
+          ]
+        },
+        "limits": "The input audit explains an expected interface difference; only the corrected run can establish agreement on all remaining genes and native enrichment results."
+      },
+      "source_evidence": {
+        "url": "https://bioconductor.org/packages/3.22/bioc/src/contrib/DESeq2_1.50.2.tar.gz",
+        "archive_bytes": 2689237,
+        "archive_sha256": "514f23ae8d274623d80978c30bfa1c6566acd98188bf1aa563970959ea59522f",
+        "provider_md5_verified": "25808f3c95fae4e5a1e0baa8e8035e6e",
+        "member": "DESeq2/R/results.R",
+        "member_sha256": "2ee01b8bc1d7ea5fd360730d7a1f2ef05c5eee44d3d5c2d5c72fcf2afd734833",
+        "finding": "cleanContrast computes contrastAllZero for the compared groups and resets LFC/stat to zero and pvalue to one. Named coefficient results preserve the fitted coefficient."
+      },
+      "validated_new_mappings": 0
+    }
   }
 }
