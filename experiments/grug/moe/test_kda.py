@@ -34,19 +34,31 @@ def _inputs(batch, heads, length, dk, dv, *, seed=0):
     [(64, 64), (128, 64), (57, 16), (61, 32), (29, 7), (48, 16)],
 )
 def test_chunk_kda_matches_recurrent(length, chunk_size):
-    """Chunkwise-parallel KDA equals the sequential recurrence (fp32)."""
+    """Chunkwise-parallel KDA (exact fp32 GEMMs) equals the sequential recurrence."""
     q, k, v, g, beta = _inputs(2, 3, length, 16, 16)
-    out_chunk, state_chunk = chunk_kda(q, k, v, g, beta, chunk_size=chunk_size)
+    out_chunk, state_chunk = chunk_kda(q, k, v, g, beta, chunk_size=chunk_size, matmul_dtype=jnp.float32)
     out_recur, state_recur = recurrent_kda(q, k, v, g, beta)
     np.testing.assert_allclose(np.asarray(out_chunk), np.asarray(out_recur), rtol=1e-4, atol=1e-4)
     np.testing.assert_allclose(np.asarray(state_chunk), np.asarray(state_recur), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize(("length", "chunk_size"), [(128, 64), (256, 64), (192, 32)])
+def test_chunk_kda_bf16_matmuls_match_recurrent(length, chunk_size):
+    """The default bf16 intra-chunk GEMMs stay close to the fp32 recurrence.
+
+    bf16 has ~3 decimal digits of mantissa, so the chunk kernel tracks the fp32
+    oracle to ~1e-2 relative -- the accuracy of the activations it feeds anyway."""
+    q, k, v, g, beta = _inputs(2, 3, length, 32, 32)
+    out_chunk, _ = chunk_kda(q, k, v, g, beta, chunk_size=chunk_size, matmul_dtype=jnp.bfloat16)
+    out_recur, _ = recurrent_kda(q, k, v, g, beta)
+    np.testing.assert_allclose(np.asarray(out_chunk), np.asarray(out_recur), rtol=2e-2, atol=2e-2)
 
 
 def test_chunk_kda_initial_state_continuation():
     """A non-zero initial state carries through both kernels identically."""
     q, k, v, g, beta = _inputs(1, 2, 48, 16, 16, seed=3)
     s0 = jnp.asarray(np.random.RandomState(9).randn(1, 2, 16, 16) * 0.1, jnp.float32)
-    out_chunk, _ = chunk_kda(q, k, v, g, beta, chunk_size=16, initial_state=s0)
+    out_chunk, _ = chunk_kda(q, k, v, g, beta, chunk_size=16, initial_state=s0, matmul_dtype=jnp.float32)
     out_recur, _ = recurrent_kda(q, k, v, g, beta, initial_state=s0)
     np.testing.assert_allclose(np.asarray(out_chunk), np.asarray(out_recur), rtol=1e-4, atol=1e-4)
 

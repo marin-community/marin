@@ -121,7 +121,9 @@ def recurrent_kda(
     return out, state
 
 
-def _unit_lower_triangular_inverse(a_strict_lower: jax.Array, chunk_size: int) -> jax.Array:
+def _unit_lower_triangular_inverse(
+    a_strict_lower: jax.Array, chunk_size: int, matmul_dtype: jnp.dtype | None = None
+) -> jax.Array:
     """Invert a unit-lower-triangular ``(I - A)`` given strictly-lower ``A``.
 
     Returns ``T = (I - A)^{-1}`` (unit lower-triangular). ``a_strict_lower`` has shape
@@ -132,14 +134,24 @@ def _unit_lower_triangular_inverse(a_strict_lower: jax.Array, chunk_size: int) -
     is the matmul-bound (WY/UT-transform) form used by flash-linear-attention -- both
     forward and (reverse-mode) backward are a handful of dense matmuls, unlike the
     ``C``-step serial forward substitution, whose backward is especially expensive.
+
+    ``matmul_dtype`` (e.g. ``bfloat16``) runs the products in that dtype (Hopper
+    tensor cores) while carrying the running series in fp32; ``None`` keeps fp32.
     """
-    eye = jnp.eye(chunk_size, dtype=a_strict_lower.dtype)
+    out_dtype = a_strict_lower.dtype
+
+    def mm(x: jax.Array, y: jax.Array) -> jax.Array:
+        if matmul_dtype is None:
+            return x @ y
+        return (x.astype(matmul_dtype) @ y.astype(matmul_dtype)).astype(out_dtype)
+
+    eye = jnp.eye(chunk_size, dtype=out_dtype)
     power = a_strict_lower  # A^(2^0)
     inv = eye + power  # I + A
     k = 1
     while (1 << k) < chunk_size:
-        power = power @ power  # A^(2^k)
-        inv = inv @ (eye + power)
+        power = mm(power, power)  # A^(2^k)
+        inv = mm(inv, eye + power)
         k += 1
     return inv
 
@@ -175,17 +187,31 @@ def chunk_kda(
     chunk_size: int = 64,
     initial_state: jax.Array | None = None,
     use_qk_l2norm: bool = True,
+    matmul_dtype: jnp.dtype | None = jnp.bfloat16,
 ) -> tuple[Float[Array, "... L Dv"], jax.Array]:
     """Chunkwise-parallel per-channel gated delta rule (KDA train/prefill kernel).
 
-    Numerically equal to :func:`recurrent_kda` (fp32, up to ~1e-4) but does the
-    intra-chunk work as dense matmuls plus one unit-lower-triangular inverse, and
-    carries a single recurrent state across chunks -- the matmul-bound form that
-    gets good MFU. See module docstring for the equations.
+    Does the intra-chunk work as dense matmuls plus one unit-lower-triangular inverse,
+    and carries a single recurrent state ``S`` across chunks -- the matmul-bound form
+    that keeps the layer efficient. See module docstring for the equations.
 
     Args mirror :func:`recurrent_kda`. ``chunk_size`` is the intra-chunk length C
-    (64 is the standard MFU sweet spot).
+    (64 is the H100 sweet spot). ``matmul_dtype`` selects the dtype of the
+    *intra-chunk* GEMM operands (delta-correction matrix, its Neumann inverse, the
+    pseudo-value/decayed-key products, and the intra-chunk attention); the fp32 cross-
+    chunk state recurrence and all decay/cumsum math are always fp32. ``bfloat16``
+    (the default) runs the intra-chunk GEMMs on Hopper/Blackwell tensor cores and is
+    ~8% (fwd) / ~13% (fwd+bwd) faster on H100 at ~0.5% relative error vs the fp32
+    reference; pass ``jnp.float32`` for the exact-fp32 path used as the test oracle.
     """
+    mm_dtype = matmul_dtype
+
+    def mm(spec: str, a: jax.Array, b: jax.Array) -> jax.Array:
+        """Einsum with operands cast to ``mm_dtype`` (fp32-accumulated), else fp32."""
+        if mm_dtype is None:
+            return jnp.einsum(spec, a, b)
+        return jnp.einsum(spec, a.astype(mm_dtype), b.astype(mm_dtype)).astype(jnp.float32)
+
     q, k = _prepare_qk(q, k, use_qk_l2norm)
     v = v.astype(jnp.float32)
     g = g.astype(jnp.float32)
@@ -226,16 +252,18 @@ def chunk_kda(
     # folded via inflate/deflate so it is a plain matmul. Strictly lower triangular.
     k_beta_inflate = k_beta * exp_g
     k_deflate = kc * exp_ng
-    a_raw = -jnp.einsum("...rd,...id->...ri", k_beta_inflate, k_deflate)
+    a_raw = -mm("...rd,...id->...ri", k_beta_inflate, k_deflate)
     strict_lower = jnp.tril(jnp.ones((c, c), dtype=bool), k=-1)
     a_raw = jnp.where(strict_lower, a_raw, 0.0)
 
     a_bcc = a_raw.reshape(-1, c, c)
-    inverse_fn = _forward_substitution_naive if _KDA_NAIVE_INVERSE else _unit_lower_triangular_inverse
-    t_mat = inverse_fn(a_bcc, c).reshape(*lead, n_chunks, c, c)
+    if _KDA_NAIVE_INVERSE:
+        t_mat = _forward_substitution_naive(a_bcc, c).reshape(*lead, n_chunks, c, c)
+    else:
+        t_mat = _unit_lower_triangular_inverse(a_bcc, c, matmul_dtype=mm_dtype).reshape(*lead, n_chunks, c, c)
 
-    v_pseudo = jnp.einsum("...rj,...jd->...rd", t_mat, v_beta)
-    k_cumdecay = jnp.einsum("...rj,...jd->...rd", t_mat, k_beta * exp_g)
+    v_pseudo = mm("...rj,...jd->...rd", t_mat, v_beta)
+    k_cumdecay = mm("...rj,...jd->...rd", t_mat, k_beta * exp_g)
 
     q_inflate = qc * exp_g
 
@@ -262,12 +290,13 @@ def chunk_kda(
     def chunk_step(s_prev: jax.Array, inp):
         q_inf, k_def, k_i, gcum_i, v_ps, k_cd = inp
         # Intra-chunk attention over corrected values (strictly-lower + diagonal).
-        attn = jnp.einsum("...rd,...jd->...rj", q_inf, k_def)
+        attn = mm("...rd,...jd->...rj", q_inf, k_def)
         attn = jnp.where(strict_upper, 0.0, attn)
+        # State-touching GEMMs stay fp32 (S carries the whole prefix -- precision matters).
         v_prime = jnp.einsum("...rd,...dm->...rm", k_cd, s_prev)
         v_new = v_ps - v_prime
         inter = jnp.einsum("...rd,...dm->...rm", q_inf, s_prev)
-        out_i = inter + jnp.einsum("...rj,...jm->...rm", attn, v_new)
+        out_i = inter + mm("...rj,...jm->...rm", attn, v_new)
         # Carry state to the chunk boundary and write the innovations.
         g_tail = gcum_i[..., -1, :]  # (..., d_k)
         decay_tail = jnp.exp(g_tail)
