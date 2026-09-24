@@ -22,13 +22,13 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
+from marin.rl.drafting_sft import MegatronDraftPolicy, OnlineEagleTraining, sft_draft
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
@@ -37,6 +37,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.curriculum_rl.pool import (
     TRAIN_FILENAME,
@@ -44,16 +45,12 @@ from experiments.post_training.curriculum_rl.pool import (
     pool_step,
 )
 
-TARGET_MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/" "june-67b-a2b-sft-s3-agentic/step-1903/hf-bf16-vllm/"
-TARGET_MODEL = ArtifactStep.adopt(
-    "models/snowball-67b-a2b-sft-s3-agentic-step1903",
-    "2026.09.21",
-    TARGET_MODEL_URI,
-    kind=LevanterCheckpoint,
+TARGET_MODEL_URI = StoragePath(
+    "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s3-agentic/step-1903/hf-bf16-vllm/"
 )
 TARGET_TOKENIZER = "marin-community/marin-tokenizer"
 TARGET_TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
+INITIAL_DRAFT_URI = StoragePath("hf://laion/snowball-64k-eagle3-draft-r2egym")
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 
 ARTIFACT_NAME = "checkpoints/snowball-online-eagle"
@@ -61,113 +58,59 @@ POOL_ARTIFACT_NAME = "documents/curriculum-rl-pool"
 CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
-NUM_NODES = 6
 SEED = 17
 
-ROLE_PLAN = SkyRLRolePlan(
-    colocate_all=False,
-    policy_num_nodes=4,
-    policy_num_gpus_per_node=GPUS_PER_NODE,
-    num_inference_engines=1,
-    inference_engine_tensor_parallel_size=1,
-    inference_engine_pipeline_parallel_size=1,
-    inference_engine_data_parallel_size=GPUS_PER_NODE,
-    inference_engine_expert_parallel_size=GPUS_PER_NODE,
-    train_batch_size=32,
-    policy_mini_batch_size=32,
-    micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=4,
+DRAFT_SFT_PLAN = sft_draft(
+    target_model=TARGET_MODEL_URI,
+    initial_draft=INITIAL_DRAFT_URI,
+    initial_draft_identity=INITIAL_DRAFT_REVISION,
+    policy=MegatronDraftPolicy(
+        policy_num_nodes=4,
+        gpus_per_node=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+        train_batch_size=32,
+        policy_mini_batch_size=32,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=4,
+        eval_batch_size=64,
+        micro_forward_batch_size_per_gpu=1,
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=2,
+        context_parallel_size=1,
+        expert_model_parallel_size=8,
+        expert_tensor_parallel_size=1,
+        learning_rate=1.0e-6,
+    ),
+    training=OnlineEagleTraining(
+        num_speculative_tokens=3,
+        interval_steps=4,
+        max_tokens_per_update=131072,
+        max_window_tokens=16384,
+        max_tokens_per_micro_batch=8192,
+        max_sequences_per_prompt_group=2,
+        min_train_sequences=6,
+        holdout_fraction=0.25,
+        min_holdout_sequences=3,
+        epochs_per_update=1,
+        learning_rate=5.0e-5,
+        max_validation_loss_increase=0.05,
+        max_validation_agreement_decrease=0.01,
+        reserved_gpu_memory_gib=12,
+    ),
+    environment="aime",
+    project_name="marin-snowball-online-eagle",
+    request_window_tokens=9856,
+    max_new_tokens_per_turn=8192,
+    max_steps=25,
+    checkpoint_interval=5,
 )
 
-
-def online_eagle_config_yaml() -> str:
-    """Return the qualified Megatron and online-EAGLE recipe."""
-    return f"""\
-entrypoint: standard
-
-context_budget:
-  request_window_tokens: 9856
-  max_new_tokens_per_turn: 8192
-  max_turns: 1
-
-environment:
-  env_class: aime
-
-trainer:
-  strategy: megatron
-  flash_attn: false
-  use_sample_packing: false
-  offload_optimizer_during_rollouts: true
-  gradient_checkpointing: true
-  algorithm:
-    advantage_estimator: grpo
-    use_kl_loss: false
-  epochs: 1
-  max_steps: 25
-  update_epochs_per_batch: 1
-  eval_batch_size: 64
-  micro_forward_batch_size_per_gpu: 1
-  eval_before_train: false
-  eval_interval: -1
-  ckpt_interval: 5
-  resume_mode: latest
-  logger: wandb
-  project_name: marin-snowball-online-eagle
-  policy:
-    optimizer_config:
-      lr: 1.0e-6
-      max_grad_norm: 1.0
-    megatron_config:
-      tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 2
-      context_parallel_size: 1
-      expert_model_parallel_size: 8
-      expert_tensor_parallel_size: 1
-
-generator:
-  backend: vllm
-  model_dtype: bfloat16
-  vllm_attention_backend: FLASH_ATTN
-  gpu_memory_utilization: 0.75
-  enforce_eager: false
-  run_engines_locally: true
-  weight_sync_backend: nccl
-  async_engine: true
-  batched: false
-  engine_init_kwargs:
-    async_scheduling: false
-  speculative_decoding:
-    method: eagle3
-    model:
-      source_uri: {INITIAL_DRAFT_URI}
-      source_identity: {INITIAL_DRAFT_REVISION}
-    num_speculative_tokens: 3
-    training:
-      interval_steps: 4
-      max_tokens_per_update: 131072
-      max_window_tokens: 16384
-      max_tokens_per_micro_batch: 8192
-      max_sequences_per_prompt_group: 2
-      min_train_sequences: 6
-      holdout_fraction: 0.25
-      min_holdout_sequences: 3
-      epochs_per_update: 1
-      learning_rate: 5.0e-5
-      max_validation_loss_increase: 0.05
-      max_validation_agreement_decrease: 0.01
-      reserved_gpu_memory_gib: 12
-  sampling_params:
-    temperature: 1.0
-    top_p: 1.0
-
-data:
-  kind: parquet
-  train_data: []
-  val_data: []
-
-extra_env:
-  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-"""
+TARGET_MODEL = ArtifactStep.adopt(
+    "models/snowball-67b-a2b-sft-s3-agentic-step1903",
+    "2026.09.21",
+    str(DRAFT_SFT_PLAN.target_model),
+    kind=LevanterCheckpoint,
+)
 
 
 def online_eagle_step() -> ArtifactStep[SkyRLRun]:
@@ -178,7 +121,7 @@ def online_eagle_step() -> ArtifactStep[SkyRLRun]:
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=online_eagle_config_yaml(),
+            config_yaml=DRAFT_SFT_PLAN.config_yaml,
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
@@ -188,13 +131,11 @@ def online_eagle_step() -> ArtifactStep[SkyRLRun]:
             ),
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
-            # Four policy nodes, one rollout node, and one independently derived
-            # DraftTrainer node.
             topology=SkyRLTopology(
-                num_nodes=NUM_NODES,
+                num_nodes=DRAFT_SFT_PLAN.num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
-                role_plan=ROLE_PLAN,
+                role_plan=DRAFT_SFT_PLAN.role_plan,
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
