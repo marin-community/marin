@@ -106,7 +106,6 @@ EXTERNAL_PROJECTS = (
         runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
     ),
     ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
-    ExternalProject("speculators", "speculators", "SPECULATORS"),
 )
 
 

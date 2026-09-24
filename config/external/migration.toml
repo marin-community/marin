@@ -111,14 +111,3 @@ nuances = [
     "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
     "Marin consumes only the root marinskyrl package; the forked skyrl-train is unused. The GitHub compare API 404s because the repo was pushed as a standalone (its fork network is unlinked), which does not affect git-level rebasing.",
 ]
-
-[speculators]
-upstream = "https://github.com/vllm-project/speculators.git"
-pin = "isolated_project"
-branch = "agent/grug-verifier-head"
-base_select = "upstream_main"
-e2e = "experiments/post_training/snowball_eagle_speculators.py"
-blocker_assignee = "rjpower"
-nuances = [
-    "The maintained fork adds Snowball's gated final norm to reconstructed verifier logits.",
-]
