@@ -1129,9 +1129,11 @@
         "general-biology",
         "pathway-enrichment"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-rnaseq-population-interaction"
+      ],
       "scientific_decision": "Assess whether a compound's transcriptional response is shared or differs across four primary human cell types, with implications and limits for tissue-specific safety and efficacy.",
       "prompt_review": {
         "scope": "Public instruction and file descriptions only; no benchmark counts, answers or analysis trace used.",
@@ -1153,20 +1155,30 @@
         "report quantitative evidence and limits on tissue-specific safety or efficacy conclusions"
       ],
       "remaining_gaps": [
-        "Use a treatment-by-cell-type interaction to establish differences; significance in only one group is insufficient.",
-        "A two-population developmental-stage interaction would cover a statistical component, not the four-cell-type drug-response endpoint or its dose, timepoint, vehicle-control and HDF5 handling.",
-        "A non-significant interaction does not establish equivalent responses; distinguish lack of evidence from demonstrated similarity.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "GSE60450 covers two mouse populations and developmental stages; the endpoint requires four primary human cell types under compound treatment with dose, timepoint and vehicle controls.",
+        "HDF5 UMI count handling and the drug-response cohort selection are unimplemented by this TSV count-matrix task.",
+        "Pathway interpretation, cross-type response synthesis and evidence for safety or efficacy remain uncovered; lack of significant interaction does not establish equivalence.",
+        "Validate the complete benchmark-pattern workflow on independent real inputs; complete biological lineage screening before training export."
       ],
       "required_formats": [
         "HDF5 raw UMI count matrix",
         "CSV factorial sample metadata"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
-      "workflow_family": "factorial-differential-expression"
+      "independent_data_sources": [
+        "GSE60450"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/5436d9bd3811.json"
+      ],
+      "runtime_seconds": 53.20698583399644,
+      "workflow_family": "factorial-differential-expression",
+      "mapped_stages": [
+        "join observed counts and sample metadata",
+        "fit a full-rank population-by-stage model",
+        "estimate within-population contrasts and directly test a difference in response",
+        "report all fitted genes, uncertainty, BH decisions, design and contrasts"
+      ]
     },
     {
       "task_id": "da-24-3",

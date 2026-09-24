@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 143
+The generators in `experiments/post_training/bio_tasks/` implement 144
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,13 +11,13 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 143 recipes span 13 domains:
+format profile, and repository mapping. The 144 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 24 |
 | genomic intervals | 10 |
-| expression | 18 |
+| expression | 19 |
 | sequencing reads | 18 |
 | variants | 9 |
 | phylogeny | 12 |
@@ -29,12 +29,18 @@ format profile, and repository mapping. The 143 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 143 authoring examples, comprising
-28 real-data candidates and 115 simulated controls. Add another task from a recipe
+The default build contains one task per recipe: 144 authoring examples, comprising
+29 real-data candidates and 115 simulated controls. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
+
+The population-interaction addition fits all twelve GSE60450 libraries and checks
+every result for 18,418 genes. The native reference and fresh oracle passed two
+positive and 33 negative controls; the seven output tables include sample QC,
+design, contrasts, all gene effects and decisions. Packaged-task and Harbor
+validation remain pending for this addition.
 
 The full 142-task snapshot at `5c5b253bde` passed 284 positive checks and 796 negative
 controls in 28.5 minutes on one reserved TRC CPU, with 1.13 GiB peak RSS. Every
@@ -83,7 +89,7 @@ still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
 image-build contexts with the exact resolved package artifacts and checksums.
-The two connected DESeq2 recipes have locked R image contexts; the COX1, full-study
+The three connected DESeq2 recipes have locked R image contexts; the COX1, full-study
 single-cell, HMMER and MMseqs2 workflows also have pinned native environments.
 Remaining recipes use Python-only environments. Package checks alone do not
 establish successful execution in these Harbor images. Repository source revisions and

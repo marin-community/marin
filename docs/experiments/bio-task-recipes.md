@@ -67,6 +67,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-rnaseq-normalized-contrast` | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | DESeq2 |
 | `real-rnaseq-differential-expression` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing | DESeq2 |
 | `real-rnaseq-go-enrichment` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing, tested-gene-universe, enrichment | DESeq2 |
+| `real-rnaseq-population-interaction` | TSV count matrix, TSV sample metadata, design matrix, contrast vectors | factorial count models, interaction contrasts, multiple testing, response interpretation | DESeq2 |
 | `real-singlecell-read-qc` | Matrix Market, gzip, TSV cell metadata, TSV feature metadata, JSON query | single-cell read-count QC, ERCC spike-ins, ordered cell and gene filtering, sparse matrix export | Scanpy |
 | `donor-counts` | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | csv-header | sample-joins, cohort-selection, denominators | Scanpy |

@@ -22,7 +22,10 @@ def vendor_references(source: Path, output: Path) -> dict:
                 raise ValueError(f"Changed preparation output: {name}")
         filename = "gse60450-" + path.name + ".gz"
         role = "private-reference"
-        transformation = "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts."
+        transformation = (
+            "Unchanged native R preparation output on observed GSE60450 counts; "
+            "the source script is recorded with the preparation evidence."
+        )
         if path.name == "mouse-go-membership.tsv":
             filename = "mouse-go-bp-3.22.0.tsv.gz"
             role = "public-annotation"

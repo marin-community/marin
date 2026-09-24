@@ -191,6 +191,56 @@
           "vendored_bytes": 1073,
           "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
           "preparation_output_sha256": "d2094955ae75799189721f6805be3773b0d86e5fff733a7fe950ed33fe2cf8ff"
+        },
+        "gse60450-population-interaction-basal-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "49ce983775448530b8975728db441e8b63aeec59889cd5c1309787e42202c34a",
+          "vendored_sha256": "92c958020f7ab14699fcd403d3a277146d1f59909afbc4427d0bb9ddbeff6aed",
+          "content_bytes": 2109837,
+          "vendored_bytes": 1008676,
+          "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
+          "preparation_output_sha256": "49ce983775448530b8975728db441e8b63aeec59889cd5c1309787e42202c34a",
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
+        },
+        "gse60450-population-interaction-contrasts.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "d2b5f4cd9afac448c6f775202e91be98de75a70240a38ce900dbf7365b9f4243",
+          "vendored_sha256": "23fadf0d5506dc87f795a56573d68414e680a277b3b1c021d8bb9d8b7d642656",
+          "content_bytes": 189,
+          "vendored_bytes": 116,
+          "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
+          "preparation_output_sha256": "d2b5f4cd9afac448c6f775202e91be98de75a70240a38ce900dbf7365b9f4243",
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
+        },
+        "gse60450-population-interaction-interaction-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "123f565f8b40c7772b7b944d4d027423ab74af5c9e25b5570b712e6dded7adf8",
+          "vendored_sha256": "c1b657cc9ee2d84c697dcc7a08890d58577de8c0be8f355d80c5b0d24a69b80e",
+          "content_bytes": 2107974,
+          "vendored_bytes": 1010738,
+          "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
+          "preparation_output_sha256": "123f565f8b40c7772b7b944d4d027423ab74af5c9e25b5570b712e6dded7adf8",
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
+        },
+        "gse60450-population-interaction-luminal-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "b332af41bf7af6c0b4e52172c00b3cace5f489a7b9da7332805f0fc07b47f003",
+          "vendored_sha256": "87aba838db69355346c46e1ad7b566a9295c36026831c25c0ce4d9fd6cfbb97c",
+          "content_bytes": 2118809,
+          "vendored_bytes": 1017577,
+          "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
+          "preparation_output_sha256": "b332af41bf7af6c0b4e52172c00b3cace5f489a7b9da7332805f0fc07b47f003",
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
+        },
+        "gse60450-population-interaction-size-factors.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "e7b8d363adb0e0daee4f1ad91e19697a2b6d1fc0f02bccb48722ee291fe072fe",
+          "vendored_sha256": "b2cdfad255c05b78549601ff5c6281aef293f6a6f7e3aca4ebeefe416f7c27ed",
+          "content_bytes": 630,
+          "vendored_bytes": 290,
+          "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
+          "preparation_output_sha256": "e7b8d363adb0e0daee4f1ad91e19697a2b6d1fc0f02bccb48722ee291fe072fe",
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
         }
       },
       "reference_preparation": {
@@ -213,6 +263,25 @@
         "prepared_at": "2026-09-24T01:24:30.202687+00:00",
         "vendoring_script": "sources/vendor_deseq.py",
         "oracle_independence": "Preparation uses the DESeq wrapper; the oracle independently executes explicit estimation stages with the same statistical engine. Enrichment references use SciPy; the R oracle uses phyper and p.adjust."
+      },
+      "interaction_reference_preparation": {
+        "source_revision": "084290142c847b12c7cf8372d2d0632713996a08",
+        "source_state": "Committed base plus enumerated candidate interaction scripts; per-file SHA-256 captured before submission.",
+        "preparation_script": "sources/prepare_interaction.R",
+        "preparation_script_sha256": "125f0bb37ce585000af242d4fdc16407f9a406d449340c022bda03e00545f30b",
+        "vendoring_script": "sources/vendor_deseq.py",
+        "job_id": "/exedev/bio-interaction-native-20260924-095754",
+        "output_archive_sha256": "b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf",
+        "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst",
+        "runtime_lock_sha256": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+        "native_evidence": "native_validation_runs/5436d9bd3811.json",
+        "oracle_independence": "Reference uses the DESeq wrapper and differences between observed design rows. Fresh oracle executes explicit fitting stages and coefficient-name contrasts with the same pinned DESeq2 engine. QC and gene decisions are independently derived in Python.",
+        "remaining_checks": [
+          "packaged-task verification",
+          "Harbor oracle and corruption controls",
+          "complete benchmark-lineage screening",
+          "scientific review before training selection"
+        ]
       }
     },
     "PDB:1UBQ": {

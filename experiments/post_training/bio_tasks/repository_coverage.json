@@ -87,7 +87,8 @@
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast",
         "real-rnaseq-differential-expression",
-        "real-rnaseq-go-enrichment"
+        "real-rnaseq-go-enrichment",
+        "real-rnaseq-population-interaction"
       ],
       "source_url": "https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R",
       "tool_execution": {
@@ -98,8 +99,12 @@
         "passing_instances": 3,
         "scope": "bulk-size-factors"
       },
-      "scope": "Diagnose confounded designs, preserve biological replicates, fit a three-stage negative-binomial model and carry its directional gene selections into a frozen GO universe.",
-      "limitations": "Connected GSE60450 fits and input-reading oracles share the pinned DESeq2 statistical engine. Six native cases check every fitted gene and eligible GO term; enrichment probabilities are cross-checked with SciPy and R. Shrinkage, multifactor designs, ontology simplification, broader benchmark-lineage screening and scientific review remain outside this validation."
+      "scope": "Diagnose confounded designs, preserve biological replicates, fit stage and population-by-stage negative-binomial models, distinguish within-population responses from interactions, and carry directional gene selections into a frozen GO universe.",
+      "limitations": "Connected GSE60450 references and input-reading oracles share pinned DESeq2. Six earlier native cases check every fitted gene and eligible GO term; one factorial case checks all twelve libraries and 18,418 genes. Shrinkage, complex donor designs, ontology simplification, complete benchmark-lineage screening and scientific review remain outside this validation.",
+      "additional_native_evidence": [
+        "native_validation_runs/e39ec1c86f62.json",
+        "native_validation_runs/5436d9bd3811.json"
+      ]
     },
     {
       "index": 6,

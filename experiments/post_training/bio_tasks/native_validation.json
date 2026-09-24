@@ -1092,6 +1092,46 @@
         "distinct_biological_inputs": 1
       },
       "limitations": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged-task and Harbor checks and biological lineage review remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "084290142c847b12c7cf8372d2d0632713996a08",
+      "source_state": "Committed base plus enumerated candidate interaction scripts; per-file SHA-256 captured before submission.",
+      "environment_kind": "Pinned DESeq2 on reserved TRC CPU; design-row reference contrasts and coefficient-name oracle contrasts",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-interaction-native-20260924-095754",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "job_timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "a14b452634964389449fb14dbd42a2d9dcb61a96ab004690b356c4e0f3fd7b69",
+      "output_archive_sha256": "b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf",
+      "output_archive_bytes": 10750462,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst",
+      "archive_storage_status": "uploaded; provider size and MD5 verified",
+      "archive_storage_generation": "1790244790540517",
+      "archive_storage_md5": "iTaSMtUIzMTd37Fc2mVXjA==",
+      "checks_file": "native_validation_runs/5436d9bd3811.json",
+      "checks_sha256": "5436d9bd3811fdd30cb2b1419b42f8e4e660ee124799cef650ee481d1796c22c",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1,
+        "positive_checks": 2,
+        "negative_checks": 33
+      },
+      "limitations": "One two-population developmental-stage study with two replicates per group; no established donor pairing. No drug intervention, dose/time response or four-cell-type endpoint. Reference and oracle share DESeq2. Packaged-task and Harbor checks, broader lineage screening and scientific review remain pending."
     }
   ],
   "numerical_portability": [
