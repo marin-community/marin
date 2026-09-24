@@ -35,7 +35,7 @@
     },
     {
       "path": "workflow_designs/compbiobench.json",
-      "sha256": "933a69a17a5c4b17582c35a81bbb4a285fa07f1d1286973eeba32629d7ecfbf5"
+      "sha256": "853d16e687c8ecf6b56ff3089674d862d5b1a4a17f4b7a278b164ec3c3f4557d"
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
@@ -1729,7 +1729,14 @@
       },
       "workstreams": [
         "bacterial-read-variant"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-bam-read-structure"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-retina-composition",
@@ -1834,7 +1841,14 @@
       },
       "workstreams": [
         "transcript-reference-audit"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-reference-interval-audit"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-study-provenance-gwas",
@@ -2164,7 +2178,14 @@
       },
       "workstreams": [
         "transcript-reference-audit"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-transcript-region-lengths"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-atac-label-audit",
@@ -2225,11 +2246,18 @@
       },
       "workstreams": [
         "genomic-interval-operations"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-consensus-regulatory-annotation"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-subjective-protein-shape",
-      "scientific_question": "Can objective geometric descriptors of observed protein coordinates be reproduced across projections?",
+      "scientific_question": "Deferred: subjective protein letter resemblance; existing coordinate geometry supplies component coverage only.",
       "question_card_ids": [
         "compbio-design-subjective-protein-shape"
       ],
@@ -2240,7 +2268,13 @@
       },
       "workstreams": [
         "ligand-structure-affinity"
-      ]
+      ],
+      "authoring_disposition": {
+        "status": "deferred-subjective-source-endpoint",
+        "reason": "Letter resemblance across arbitrary projections has no accepted deterministic criterion. Do not require a projection/shape surrogate to finish the dataset.",
+        "existing_component_scope": "Observed mmCIF geometry tasks remain separately useful; they do not cover letter-choice judgment.",
+        "resume_condition": "An objective scientifically useful endpoint independently justifies authoring, with its changed relationship to the source disclosed."
+      }
     },
     {
       "proposed_task_id": "compbio-design-isoform-expression",
@@ -2285,7 +2319,14 @@
       },
       "workstreams": [
         "transcript-reference-audit"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-exon-union-length"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-singlecell-doublet",
@@ -2525,7 +2566,14 @@
       },
       "workstreams": [
         "genomic-interval-operations"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-peak-summit-blacklist"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-orf-cds-audit",
@@ -2555,7 +2603,14 @@
       },
       "workstreams": [
         "population-genetics"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-public-genotype-site"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-public-genotype-panel",
@@ -2570,7 +2625,14 @@
       },
       "workstreams": [
         "population-genetics"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-public-genotype-panel"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-clinical-variant-consequence",
@@ -2600,7 +2662,14 @@
       },
       "workstreams": [
         "bacterial-read-variant"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-readbacked-variant-status"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-variant-build-inference",
@@ -2615,7 +2684,14 @@
       },
       "workstreams": [
         "transcript-reference-audit"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-variant-build-inference"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-reference-interval-localization",
@@ -2660,7 +2736,14 @@
       },
       "workstreams": [
         "genomic-interval-operations"
-      ]
+      ],
+      "native_format_contract_review": {
+        "file": "workflow_designs/compbiobench.json",
+        "question_cards": [
+          "compbio-design-chromhmm-base-overlap"
+        ],
+        "status": "acceptance-conventions-specified; independent-inputs-and-execution-pending"
+      }
     },
     {
       "proposed_task_id": "compbio-design-lung-cell-composition",

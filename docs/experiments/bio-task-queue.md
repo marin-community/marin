@@ -120,13 +120,24 @@ alignment checks and complete Harbor validation. No coverage is added.
 
 The [CompBioBench endpoint designs](../../experiments/post_training/bio_tasks/workflow_designs/compbiobench.json)
 assign all 100 questions to 84 proposals, including supporting components for two
-software-only endpoints and a subjective shape question. Six explicitly simulated
+software-only endpoints and a deferred subjective shape question. Six explicitly simulated
 source questions need independently observed alternatives. Spatial tasks include
 both deconvolution and neighborhood analysis; alignment tasks distinguish reads
 from templates, and sequence checks include orientation as well as GC content.
 Public transcript-model optimization starts from observed sequences and labels
 its designed variants separately. Runtime, model weights and method equivalence
 remain unresolved. Its JSON and TSV metadata hashes are recorded separately.
+
+Eleven format-focused designs specify acceptance for 13 source questions: BAM
+read counts, strand-aware reference extraction, transcript/exon lengths, peak and
+state overlap, genotype retrieval, assembly inference and RNA allele evidence.
+Their contracts preserve genome-wide peak ranking before chromosome filtering,
+stop codons in CDS lengths, and annotated-base denominators. They explicitly resolve
+source ambiguities in read filters, genotype normalization and rounding. Native
+inputs remain BAM, VCF, GTF, BED and FASTA; tables are analysis outputs. Independent
+input snapshots and execution remain unverified. RNA-only evidence does not earn
+full germline-genotype coverage. Subjective protein letter resemblance is deferred;
+existing geometry components do not make that endpoint an implementation requirement.
 
 These three reviews assign 355 question endpoints. Their 156 detailed proposals
 refine or split the 147 broad questions and overlap across benchmarks; they are

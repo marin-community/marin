@@ -1414,13 +1414,15 @@
       ],
       "observed_input_design_and_native_formats": "Observed BAM/BAI with read-group and library provenance",
       "required_artifacts_with_key_columns": [
-        "reads.tsv: alignment_record_id,read_name,mate_flag,query_length,paired,proper_pair,mapq,primary,eligible",
-        "summary.tsv: metric,value,unit,denominator"
+        "library.tsv: read_group,primary_records,paired_records,unpaired_records,missing_seq_records",
+        "lengths.tsv: read_group,stored_query_length,record_count",
+        "eligible.tsv: record_ordinal,read_group,qname,mate_flag,mapq,stored_query_length,aligned_query_length",
+        "summary.tsv: eligible_alignment_records,filter_definition"
       ],
-      "method_parameters_and_decisions_to_freeze": "Read-record (not template) denominator: count each eligible primary alignment record independently, including both mates when both pass; choose whether unmapped/secondary/supplementary/QC-fail/duplicate records are eligible, MAPQ >=30 versus >30, proper-pair flag, query-sequence versus aligned query length, and representative read-length rule.",
-      "deterministic_verifier_strategy": "Independently iterate BAM records, verify read-length and pairing summaries, and count every eligible primary read record satisfying the frozen MAPQ and proper-pair predicates.",
-      "negative_artifact_mutation": "Count one eligible mate per template, include supplementary records or inject a duplicate alignment record into the reported read count.",
-      "unresolved_inputs_runtime_and_exactness": "Need small observed BAM with known library preparation",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference script runs pinned samtools view with the declared flags and MAPQ rule. Independent verifier traverses the BAM and interprets flags/CIGAR, compares complete histogram and eligible-record membership, then recomputes totals. Byte identity of BAM compression is irrelevant.",
+      "negative_artifact_mutation": "Halve the count as if it counted templates. Include a supplementary record or MAPQ 255. Replace stored length by reference span.",
+      "unresolved_inputs_runtime_and_exactness": "These explicit authored choices resolve source ambiguities; they do not establish its unknown grader policy. Need deposited BAM/library provenance and FASTQ only if original read length is requested.",
       "source_question_types": {
         "bam-infer-read-length-q1": "observed_or_unspecified",
         "bam-ops-q1": "observed_or_unspecified"
@@ -1431,7 +1433,39 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "What read length, pairing and high-quality proper-pair counts characterize observed alignments?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Infer library pairing/read length and count properly paired reads at a quality threshold of 30. The source does not specify primary/duplicate eligibility, >= versus >, or heterogeneous length handling.",
+        "authored_task_decisions": [
+          "For the authored count, require mapped primary records with paired and proper-pair flags, exclude secondary, supplementary, QC-fail and duplicate flags, and require 30 <= MAPQ < 255. Count alignment records, including both eligible mates; do not divide by two.",
+          "Describe pairing and length on all primary non-QC-fail records, retaining a separate missing-SEQ count. Report paired/unpaired proportions and the complete stored-SEQ length histogram; a single library label is allowed only if homogeneous. Do not silently call a mixed library single-ended.",
+          "Stored query length includes soft clipping and insertions, excludes hard clipping, deletions and skipped reference regions. Aligned-query length sums CIGAR M,I,=,X operations. A hard-clipped BAM cannot establish the original sequencer read length without original FASTQ.",
+          "Keep each record identifiable by ordinal plus read group, QNAME and mate flag; QNAME alone is not unique. MAPQ 255 is unavailable quality, even though a plain numeric threshold would retain it."
+        ],
+        "complete_artifacts": [
+          "library.tsv: read_group,primary_records,paired_records,unpaired_records,missing_seq_records",
+          "lengths.tsv: read_group,stored_query_length,record_count",
+          "eligible.tsv: record_ordinal,read_group,qname,mate_flag,mapq,stored_query_length,aligned_query_length",
+          "summary.tsv: eligible_alignment_records,filter_definition"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference script runs pinned samtools view with the declared flags and MAPQ rule. Independent verifier traverses the BAM and interprets flags/CIGAR, compares complete histogram and eligible-record membership, then recomputes totals. Byte identity of BAM compression is irrelevant."
+        ],
+        "incorrect_output_checks": [
+          "Halve the count as if it counted templates.",
+          "Include a supplementary record or MAPQ 255.",
+          "Replace stored length by reference span."
+        ],
+        "source_equivalence_and_remaining_limits": "These explicit authored choices resolve source ambiguities; they do not establish its unknown grader policy. Need deposited BAM/library provenance and FASTQ only if original read length is requested.",
+        "format_references": [
+          "sam-bam"
+        ],
+        "source_question_hashes": {
+          "bam-infer-read-length-q1": "620e39a4c540ba6c9b6b1be9dab65a8b156a5992079f32248bb35f3044a61fd9",
+          "bam-ops-q1": "478704728826d55216c14053bdf7fba242d201ce73bb90d95f0e4dd5473953ac"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-retina-composition",
@@ -1602,15 +1636,14 @@
       ],
       "observed_input_design_and_native_formats": "Frozen observed reference FASTA, versioned transcript GTF, and independently chosen plus- and minus-strand interval/promoter queries with pinned assembly and annotation release.",
       "required_artifacts_with_key_columns": [
-        "intervals.tsv: query_id,chrom,start,end,strand,tss,annotation_release",
-        "forward_sequences.fa: query_id,reference_plus_strand_sequence",
-        "oriented_sequences.fa: query_id,requested_strand_sequence",
-        "metrics.tsv: query_id,length,gc_count,n_count,gc_fraction,forward_md5,oriented_md5"
+        "queries.tsv: query_id,assembly,transcript_version,chrom,start,end,strand,tss,upstream,downstream",
+        "forward.fa and oriented.fa: one complete record per query_id",
+        "metrics.tsv: query_id,length,gc_count,n_count,other_ambiguity_count,gc_fraction,gc_percent,forward_md5,oriented_md5"
       ],
-      "method_parameters_and_decisions_to_freeze": "1-based closed coordinate convention, transcript TSS and strand, upstream/downstream window orientation, uppercase/reference ambiguity policy, oriented sequence selection, GC denominator, MD5 of exactly declared sequence, assembly and GTF release.",
-      "deterministic_verifier_strategy": "Independently extract reference-forward and requested-orientation sequences, verify reverse-complement relation on minus-strand queries, recompute both hashes, length, N and GC metrics from the exact sequence bytes.",
-      "negative_artifact_mutation": "Move an interval boundary or substitute a reverse-complemented sequence with unchanged GC but wrong strand-specific FASTA/hash.",
-      "unresolved_inputs_runtime_and_exactness": "Use independent loci, not original coordinates or answers",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses indexed FASTA extraction and strand-aware sequence operations. Verifier separately slices the pinned contig using interval arithmetic, checks sequence equality and all metrics, and verifies minus-strand reverse-complement identity. GC agreement alone cannot prove correct orientation.",
+      "negative_artifact_mutation": "Shift either interval endpoint by one. Use the plus-strand promoter formula for a minus-strand transcript. Hash FASTA headers or replace an oriented sequence by its reverse complement.",
+      "unresolved_inputs_runtime_and_exactness": "Independent loci, annotation release and exact reference bytes remain to select. Source prose does not specify all rounding and ambiguity rules; these are authored choices. Reference-derived annotation/sequence tasks are labeled as such, not experimental assays.",
       "source_question_types": {
         "compute-gc-content-interval-q1": "observed_or_unspecified",
         "compute-gccontent-promoter-q1": "observed_or_unspecified"
@@ -1621,7 +1654,39 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "Do genomic sequence and strand-aware promoter summaries agree with a frozen observed reference?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Return strand-aware promoter coordinates and GC fraction; the interval query additionally requires uppercase sequence MD5, length and N count.",
+        "authored_task_decisions": [
+          "Task-facing coordinates are 1-based closed; extraction converts [s,e] to [s-1,e). Fix the full transcript version and assembly, use start as plus-strand TSS and end as minus-strand TSS.",
+          "For upstream U and downstream D, use [TSS-U,TSS+D-1] on plus and [TSS-D+1,TSS+U] on minus. This authoring convention gives U+D bases with D including the TSS. Reject out-of-contig windows during input selection rather than silently clipping.",
+          "Use uppercase FASTA sequence. GC fraction is (G+C)/all window bases, including ambiguous bases in the denominator; report N separately and retain other IUPAC ambiguity counts. Reverse-complement the minus-strand sequence with a complete IUPAC mapping.",
+          "Hash ASCII sequence letters only, with no FASTA header, spaces or newline. Return forward and oriented hashes separately. Use decimal round-half-even at the requested precision, explicitly stated in the authored prompt."
+        ],
+        "complete_artifacts": [
+          "queries.tsv: query_id,assembly,transcript_version,chrom,start,end,strand,tss,upstream,downstream",
+          "forward.fa and oriented.fa: one complete record per query_id",
+          "metrics.tsv: query_id,length,gc_count,n_count,other_ambiguity_count,gc_fraction,gc_percent,forward_md5,oriented_md5"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses indexed FASTA extraction and strand-aware sequence operations. Verifier separately slices the pinned contig using interval arithmetic, checks sequence equality and all metrics, and verifies minus-strand reverse-complement identity. GC agreement alone cannot prove correct orientation."
+        ],
+        "incorrect_output_checks": [
+          "Shift either interval endpoint by one.",
+          "Use the plus-strand promoter formula for a minus-strand transcript.",
+          "Hash FASTA headers or replace an oriented sequence by its reverse complement."
+        ],
+        "source_equivalence_and_remaining_limits": "Independent loci, annotation release and exact reference bytes remain to select. Source prose does not specify all rounding and ambiguity rules; these are authored choices. Reference-derived annotation/sequence tasks are labeled as such, not experimental assays.",
+        "format_references": [
+          "sam-bam",
+          "gencode-gtf"
+        ],
+        "source_question_hashes": {
+          "compute-gc-content-interval-q1": "5731b50be20f8c4565348a736318714196b43276b70c106cf9e720058c2671c8",
+          "compute-gccontent-promoter-q1": "5261dc3bd625c27cc462e522e4c04c914d045983c6998453e785a2bd80581c71"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-study-provenance-gwas",
@@ -2265,13 +2330,15 @@
       ],
       "observed_input_design_and_native_formats": "Reference GTF and FASTA with transcript tags",
       "required_artifacts_with_key_columns": [
-        "segments.tsv: transcript,region,start,end,strand,length",
-        "medians.tsv: region,n,median"
+        "selection.tsv: transcript_id,gene_id,contig,strand,eligible,reason",
+        "segments.bed: chrom,start,end,transcript_id,region,strand",
+        "lengths.tsv: transcript_id,utr5_bases,cds_including_stop_bases,utr3_bases,exon_union_bases",
+        "medians.tsv: transcript_count,utr5_median_floor,cds_median_floor,utr3_median_floor"
       ],
-      "method_parameters_and_decisions_to_freeze": "MANE-like selection, stop codon convention, exon union and rounding",
-      "deterministic_verifier_strategy": "Recompute per-transcript lengths and medians",
-      "negative_artifact_mutation": "Double-count overlapping exons or omit stop codon",
-      "unresolved_inputs_runtime_and_exactness": "Independent annotation release required",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Native interval operations construct region unions from GTF features; an independent transcript-wise interval sweep checks lengths and E = UTR5 union C union UTR3 with disjoint regions. Verify eligibility, every per-transcript length, and the three final medians.",
+      "negative_artifact_mutation": "Add three bases when stop_codon already overlaps CDS. Swap minus-strand UTR classes. Exclude zero UTRs or take the median over segments.",
+      "unresolved_inputs_runtime_and_exactness": "Need a licensed independent annotation snapshot with complete MANE feature/tag semantics. Any new exclusion for malformed or incomplete models must be reported as an authored eligibility choice; the source prompt alone does not authorize changing its transcript denominator.",
       "source_question_types": {
         "gtf-5-utr-median-len-q1": "observed_or_unspecified"
       },
@@ -2281,7 +2348,39 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "What are strand-aware UTR and CDS length distributions in a frozen observed transcript annotation?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "For MANE Select transcripts on standard chromosomes, compute median 5-prime UTR, CDS and 3-prime UTR lengths, including the stop codon in CDS; floor each numpy-style median.",
+        "authored_task_decisions": [
+          "Select the literal MANE Select tag from a frozen GTF release, retain versioned transcript IDs, and declare the exact standard-contig allowlist. Do not substitute generic canonical, longest, basic or MANE Plus Clinical transcripts.",
+          "Convert inclusive GTF segments to half-open intervals once. Form each transcript exon union E and coding union C = union(CDS, stop_codon); overlapping start/stop annotations must not add duplicate bases.",
+          "Classify E minus C in transcript order into 5-prime and 3-prime noncoding segments. On minus strand, the high-coordinate end is 5-prime. Do not sum UTR rows blindly: provider conventions can overlap stop_codon with UTR. Reject incomplete/internal noncoding coding models from this authored task with explicit reasons.",
+          "Each complete eligible transcript contributes one row, including a zero length if a UTR is absent. Compute each median over the same transcript set; for an even count average the middle two integers and floor once. Do not compute a median over exon segments or filter zero lengths."
+        ],
+        "complete_artifacts": [
+          "selection.tsv: transcript_id,gene_id,contig,strand,eligible,reason",
+          "segments.bed: chrom,start,end,transcript_id,region,strand",
+          "lengths.tsv: transcript_id,utr5_bases,cds_including_stop_bases,utr3_bases,exon_union_bases",
+          "medians.tsv: transcript_count,utr5_median_floor,cds_median_floor,utr3_median_floor"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Native interval operations construct region unions from GTF features; an independent transcript-wise interval sweep checks lengths and E = UTR5 union C union UTR3 with disjoint regions. Verify eligibility, every per-transcript length, and the three final medians."
+        ],
+        "incorrect_output_checks": [
+          "Add three bases when stop_codon already overlaps CDS.",
+          "Swap minus-strand UTR classes.",
+          "Exclude zero UTRs or take the median over segments."
+        ],
+        "source_equivalence_and_remaining_limits": "Need a licensed independent annotation snapshot with complete MANE feature/tag semantics. Any new exclusion for malformed or incomplete models must be reported as an authored eligibility choice; the source prompt alone does not authorize changing its transcript denominator.",
+        "format_references": [
+          "gencode-gtf",
+          "bedtools-merge"
+        ],
+        "source_question_hashes": {
+          "gtf-5-utr-median-len-q1": "3a3d44c045df5d2b12d879d52260e9fff701283b8054a607426be64c2892c2ed"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-atac-label-audit",
@@ -2381,13 +2480,14 @@
       ],
       "observed_input_design_and_native_formats": "Observed VCF and pinned cCRE BED release",
       "required_artifacts_with_key_columns": [
-        "variants.tsv: variant_id,build,start,end,ref,alt",
-        "overlaps.tsv: variant_id,element_id,class,overlap_bases"
+        "variants.tsv: variant_id,assembly,chrom,pos,ref,alt,start0,end0,eligible,reason",
+        "overlaps.tsv: variant_id,element_id,element_class,overlap_bases",
+        "summary.tsv: variant_id,element_count,any_overlap"
       ],
-      "method_parameters_and_decisions_to_freeze": "Allele span, 0/1-based conversion, exact assembly and overlapping class policy",
-      "deterministic_verifier_strategy": "Independent interval intersection and ID/class join",
-      "negative_artifact_mutation": "Shift variant one base or mix assemblies",
-      "unresolved_inputs_runtime_and_exactness": "No original variant/answer; multiple overlaps need explicit reporting policy",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses bcftools REF checks and bedtools intersect; independent interval arithmetic checks every variant/element pair and absence of omitted overlaps. Allele validation fails on mismatched reference rather than silently repairing it.",
+      "negative_artifact_mutation": "Use VCF POS as a zero-based BED start. Omit an overlapping annotation class. Interpret symbolic ALT length as an interval. Claim annotation overlap proves biological function.",
+      "unresolved_inputs_runtime_and_exactness": "Reference-span overlap is an explicit authored analysis. A source asking about deleted bases or insertion breakpoints would need a different contract. Real VCF/cCRE source identity, rights and assembly concordance remain unresolved.",
       "source_question_types": {
         "annotate-variant-regulatory-overlap-q1": "observed_or_unspecified"
       },
@@ -2399,7 +2499,39 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "Which frozen regulatory annotations overlap observed variant reference spans on a consistent assembly?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Join observed variants to frozen regulatory intervals on a declared assembly.",
+        "authored_task_decisions": [
+          "Use explicit sequence alleles with verified REF and preserve the original record identity. For this authored reference-span analysis use [POS-1,POS-1+len(REF)); this includes the VCF anchor of insertions/deletions and is not a definition of changed bases.",
+          "Exclude symbolic alleles, breakends and spanning-deletion * from this contract with reasons. Do not infer their spans from string length. Multi-allelic records retain ALT identity even when they share the same REF span.",
+          "Return every element overlap and its exact intersection length. Include explicit zero-overlap rows for variants outside all elements. Overlapping annotation classes remain separate labels; an overlap does not establish a causal target gene or regulatory effect."
+        ],
+        "complete_artifacts": [
+          "variants.tsv: variant_id,assembly,chrom,pos,ref,alt,start0,end0,eligible,reason",
+          "overlaps.tsv: variant_id,element_id,element_class,overlap_bases",
+          "summary.tsv: variant_id,element_count,any_overlap"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses bcftools REF checks and bedtools intersect; independent interval arithmetic checks every variant/element pair and absence of omitted overlaps. Allele validation fails on mismatched reference rather than silently repairing it."
+        ],
+        "incorrect_output_checks": [
+          "Use VCF POS as a zero-based BED start.",
+          "Omit an overlapping annotation class.",
+          "Interpret symbolic ALT length as an interval.",
+          "Claim annotation overlap proves biological function."
+        ],
+        "source_equivalence_and_remaining_limits": "Reference-span overlap is an explicit authored analysis. A source asking about deleted bases or insertion breakpoints would need a different contract. Real VCF/cCRE source identity, rights and assembly concordance remain unresolved.",
+        "format_references": [
+          "vcf",
+          "bcftools",
+          "bedtools-intersect"
+        ],
+        "source_question_hashes": {
+          "annotate-variant-regulatory-overlap-q1": "834355ada6875814a2d04c6098dba08f627548788aab0875bc825fd501fd3e70"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-rna-minimum-free-energy",
@@ -2451,7 +2583,13 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "A component or reframed analysis only; the exact source endpoint is not an observed-data biological workflow.",
       "scientific_question_on_independent_observations": "Can objective geometric descriptors of observed protein coordinates be reproduced across projections?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "authoring_disposition": {
+        "status": "deferred-subjective-source-endpoint",
+        "reason": "Letter resemblance across arbitrary projections has no accepted deterministic criterion. Do not require a projection/shape surrogate to finish the dataset.",
+        "existing_component_scope": "Observed mmCIF geometry tasks remain separately useful; they do not cover letter-choice judgment.",
+        "resume_condition": "An objective scientifically useful endpoint independently justifies authoring, with its changed relationship to the source disclosed."
+      }
     },
     {
       "proposed_id": "compbio-design-isoform-expression",
@@ -2514,14 +2652,14 @@
       ],
       "observed_input_design_and_native_formats": "Frozen reference GTF and gene identifier",
       "required_artifacts_with_key_columns": [
-        "exons.tsv: transcript,chrom,start,end,strand",
-        "union.tsv: gene,start,end,length",
-        "summary.tsv: gene,union_bases"
+        "members.tsv: gene_id,transcript_id,chrom,start,end,strand",
+        "union.bed: chrom,start,end,gene_id,score,strand",
+        "summary.tsv: gene_id,transcript_count,union_bases"
       ],
-      "method_parameters_and_decisions_to_freeze": "Gene model, exon interval convention and transcript union",
-      "deterministic_verifier_strategy": "Independent interval union and length sum",
-      "negative_artifact_mutation": "Double-count overlapping exons",
-      "unresolved_inputs_runtime_and_exactness": "Source-specific gene/accession excluded",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses bedtools merge per gene/contig/strand; verifier runs an independent interval sweep and checks the exact union and integer length.",
+      "negative_artifact_mutation": "Count a shared exon twice. Include intronic sequence through a gene-span shortcut. Drop an alternative exon present in only one transcript.",
+      "unresolved_inputs_runtime_and_exactness": "Input release, gene identity and observed annotation provenance remain unresolved. Book-ended merging changes segment representation but not the covered-base count.",
       "source_question_types": {
         "compute-nonoverlapping-exonic-length-q1": "observed_or_unspecified"
       },
@@ -2531,7 +2669,37 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "How many unique genomic bases are covered by annotated exons of an independently selected gene?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Return total nonoverlapping exonic bases for a specified gene across annotated transcripts.",
+        "authored_task_decisions": [
+          "Resolve the query to exactly one versioned gene ID in the selected annotation. Multiple symbol matches require an explicit query correction; do not merge different loci by symbol.",
+          "Select exon features for all transcripts of that gene, including noncoding exons. Group by contig and strand, convert [s,e] to [s-1,e), sort, merge overlapping or book-ended intervals, and sum end-start.",
+          "Retain transcript-to-exon membership before union. Do not replace the union by the gene span, sum of transcript lengths, or canonical-transcript length."
+        ],
+        "complete_artifacts": [
+          "members.tsv: gene_id,transcript_id,chrom,start,end,strand",
+          "union.bed: chrom,start,end,gene_id,score,strand",
+          "summary.tsv: gene_id,transcript_count,union_bases"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses bedtools merge per gene/contig/strand; verifier runs an independent interval sweep and checks the exact union and integer length."
+        ],
+        "incorrect_output_checks": [
+          "Count a shared exon twice.",
+          "Include intronic sequence through a gene-span shortcut.",
+          "Drop an alternative exon present in only one transcript."
+        ],
+        "source_equivalence_and_remaining_limits": "Input release, gene identity and observed annotation provenance remain unresolved. Book-ended merging changes segment representation but not the covered-base count.",
+        "format_references": [
+          "gencode-gtf",
+          "bedtools-merge"
+        ],
+        "source_question_hashes": {
+          "compute-nonoverlapping-exonic-length-q1": "dfa40160d80cfda6585a15738daaf0adc0b619e2921eb4184b354c10f57ead9a"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-singlecell-doublet",
@@ -2947,14 +3115,16 @@
       "observed_input_design_and_native_formats": "Observed narrowPeak and matched blacklist BED on same build",
       "required_artifacts_with_key_columns": [
         "summits.bed: chrom,start,end,peak_id",
-        "merged.bed: chrom,start,end",
-        "eligible.bed: chrom,start,end",
-        "summary.tsv: total_bases"
+        "windows.bed: chrom,start,end,peak_id",
+        "merged.bed",
+        "eligible.bed",
+        "exclusions.tsv: peak_id_or_merged_interval,reason",
+        "summary.tsv: eligible_union_bases"
       ],
-      "method_parameters_and_decisions_to_freeze": "Summit offset, 500bp centering, clipping, merge/exclusion and 0-based convention",
-      "deterministic_verifier_strategy": "Independent interval arithmetic and full output comparison",
-      "negative_artifact_mutation": "Double-count overlapping peaks or subtract rather than exclude blacklist overlaps",
-      "unresolved_inputs_runtime_and_exactness": "Original accessions excluded",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses native bedtools merge followed by intersect -v. Independent sweep reproduces the complete intermediate sets and final union length, with genome bounds enforced.",
+      "negative_artifact_mutation": "Exclude before merging. Subtract only the blacklisted bases. Use peak start as summit or mistake a book-ended blacklist for an overlap.",
+      "unresolved_inputs_runtime_and_exactness": "Deposited peaks, blacklist release, shared assembly and input rights remain to select. Preserve full observed interval topology when bounding the dataset.",
       "source_question_types": {
         "bedtools-ops-q1": "observed_or_unspecified"
       },
@@ -2966,7 +3136,41 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "How many bases remain after observed peak summits are centered, merged and blacklisted?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Center 500-base windows on narrowPeak summits, merge them, then exclude merged intervals with any blacklist overlap and report remaining bases.",
+        "authored_task_decisions": [
+          "Summit base s = chromStart + peak offset, represented as [s,s+1) in summits.bed. Require a nonnegative offset within the peak; a missing summit (-1) is reported as ineligible rather than replaced by the midpoint.",
+          "For the authored even-width convention use [s-250,s+250). Clip to frozen contig bounds and report clipped windows and lengths. The source leaves edge clipping and even-width centering unspecified.",
+          "Sort by the pinned genome contig order; merge overlapping and book-ended windows. Then remove each entire merged interval overlapping the blacklist by at least one base. A boundary touch is not overlap. Excluding before merging or subtracting blacklisted subsegments answers a different question."
+        ],
+        "complete_artifacts": [
+          "summits.bed: chrom,start,end,peak_id",
+          "windows.bed: chrom,start,end,peak_id",
+          "merged.bed",
+          "eligible.bed",
+          "exclusions.tsv: peak_id_or_merged_interval,reason",
+          "summary.tsv: eligible_union_bases"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses native bedtools merge followed by intersect -v. Independent sweep reproduces the complete intermediate sets and final union length, with genome bounds enforced."
+        ],
+        "incorrect_output_checks": [
+          "Exclude before merging.",
+          "Subtract only the blacklisted bases.",
+          "Use peak start as summit or mistake a book-ended blacklist for an overlap."
+        ],
+        "source_equivalence_and_remaining_limits": "Deposited peaks, blacklist release, shared assembly and input rights remain to select. Preserve full observed interval topology when bounding the dataset.",
+        "format_references": [
+          "ucsc-narrowpeak",
+          "bedtools-merge",
+          "bedtools-intersect"
+        ],
+        "source_question_hashes": {
+          "bedtools-ops-q1": "da2c4a64333a2165c563dd9d2992dbbd171bde3534c5518fb248a0f7747f048a"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-orf-cds-audit",
@@ -3000,12 +3204,12 @@
       ],
       "observed_input_design_and_native_formats": "Versioned public VCF/BCF, index and sample manifest",
       "required_artifacts_with_key_columns": [
-        "genotypes.tsv: chrom,pos,ref,alt,sample_id,GT,quality"
+        "genotypes.tsv: query_id,chrom,pos,ref,alt,sample_id,original_gt,ploidy,phased,display_gt,status"
       ],
-      "method_parameters_and_decisions_to_freeze": "Build, site identity, sample order, phased status and missingness",
-      "deterministic_verifier_strategy": "Read actual VCF row and compare all sample calls",
-      "negative_artifact_mutation": "Swap sample ID or allele order",
-      "unresolved_inputs_runtime_and_exactness": "Offline subset of public genotypes required; no benchmark locus",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses bcftools query on the pinned indexed cohort file. Independent VCF parsing verifies the selected allele, sample order, source GT and declared display transformation.",
+      "negative_artifact_mutation": "Swap two sample identities. Turn partial missingness into homozygous reference. Change ALT order while preserving genotype numbers.",
+      "unresolved_inputs_runtime_and_exactness": "Independent loci/sample selection, exact release, rights and offline subset remain unresolved. Source asks for a latest release and does not fully define GT display normalization; fixed-release authored semantics must be explicit.",
       "source_question_types": {
         "1000G-retrieve-genotype-q1": "observed_or_unspecified"
       },
@@ -3017,7 +3221,35 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "What observed genotypes are recorded at a frozen locus for a prespecified consented sample set?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Retrieve public-cohort genotypes at a locus for a prespecified ordered sample list.",
+        "authored_task_decisions": [
+          "Freeze cohort release, assembly and exact CHROM/POS/REF/ALT allele identity. A position-only match is insufficient for multiple records. Retrieve FORMAT/GT by sample name, not by assuming manifest and VCF columns have the same order.",
+          "Retain original GT, phase and ploidy in the audit. In the authored unphased display, sort called diploid allele indices so 1|0 and 0/1 both become 0/1; preserve missingness and return explicit unsupported-ploidy status instead of manufacturing diploid calls.",
+          "Allele numbers index this record's REF/ALT ordering. Do not recode ALT or normalize representation without consistently transforming genotype indices."
+        ],
+        "complete_artifacts": [
+          "genotypes.tsv: query_id,chrom,pos,ref,alt,sample_id,original_gt,ploidy,phased,display_gt,status"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses bcftools query on the pinned indexed cohort file. Independent VCF parsing verifies the selected allele, sample order, source GT and declared display transformation."
+        ],
+        "incorrect_output_checks": [
+          "Swap two sample identities.",
+          "Turn partial missingness into homozygous reference.",
+          "Change ALT order while preserving genotype numbers."
+        ],
+        "source_equivalence_and_remaining_limits": "Independent loci/sample selection, exact release, rights and offline subset remain unresolved. Source asks for a latest release and does not fully define GT display normalization; fixed-release authored semantics must be explicit.",
+        "format_references": [
+          "vcf",
+          "bcftools"
+        ],
+        "source_question_hashes": {
+          "1000G-retrieve-genotype-q1": "6532589548f75cc2e264c5f06fcbefe9d3174312919b83cc6c813b020e34fe50"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-public-genotype-panel",
@@ -3026,14 +3258,16 @@
       ],
       "observed_input_design_and_native_formats": "Versioned public cohort VCF, common-SNP track and observed peak BED",
       "required_artifacts_with_key_columns": [
-        "eligible_sites.tsv: chrom,pos,ref,alt,peak_id",
-        "genotypes.tsv: chrom,pos,ref,alt,sample_id,GT",
-        "summary.tsv: sites,samples"
+        "ranked_peaks.tsv: peak_id,qvalue,genome_wide_rank,eligible",
+        "eligible_sites.tsv: chrom,pos,ref,alt,common_track_id,peak_ids",
+        "genotypes.tsv: CHROM,POS,REF,ALT followed by ordered sample IDs",
+        "excluded_calls.tsv: variant_key,sample_id,original_gt,reason",
+        "summary.tsv: variant_rows,total_lines,sample_count,md5"
       ],
-      "method_parameters_and_decisions_to_freeze": "SNP eligibility, biallelic alleles, peak qValue rank, sample order and missing GT",
-      "deterministic_verifier_strategy": "Recompute full site filter and matrix membership",
-      "negative_artifact_mutation": "Include multi-allelic SNP or unsorted samples",
-      "unresolved_inputs_runtime_and_exactness": "Full 3202-sample source may breach 30 minutes; bounded observed subset changes exact endpoint",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Native bedtools intersections and bcftools query produce the reference matrix. Independent verifier recomputes genome-wide ranking, complete site and sample sets, each GT transformation and canonical serialization. A correct hash alone cannot compensate for wrong source selection.",
+      "negative_artifact_mutation": "Take the top 1000 chromosome-1 peaks instead of the genome-wide top 1000. Duplicate a variant overlapping two peaks. Swap REF/ALT or drop the final newline. Convert an incomplete or haploid GT into a called diploid genotype.",
+      "unresolved_inputs_runtime_and_exactness": "Real source snapshots and measured Harbor runtime remain unresolved. The historical 3202-sample release in the question is a fixed source protocol; do not substitute latest-cohort membership while claiming exact endpoint fidelity.",
       "source_question_types": {
         "1000G-retrieve-genotype-q2": "observed_or_unspecified"
       },
@@ -3045,7 +3279,44 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "Can a complete genotype matrix be constructed for variants meeting independent frequency and regulatory-peak filters?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Select biallelic common SNPs on chromosome 1 inside the 1000 strongest genome-wide peaks; produce the 3202-sample genotype matrix with sorted sample columns and return its line count and MD5.",
+        "authored_task_decisions": [
+          "Rank the entire peak file by descending narrowPeak qValue before restricting overlap to chromosome 1. Treat -1 as unavailable, exclude it from ranking, and break ties by the frozen contig order, start, end and original row ordinal. Retain exactly the first min(1000, eligible peak count). These missing-value and tie rules are authored choices.",
+          "The frozen common-SNP track must have exactly two distinct observed A/C/G/T alleles. Match a single-base interval to VCF POS-1, then require exactly one REF base and exactly one ALT base in A/C/G/T in the cohort VCF. Retain cohort allele orientation. The source joins by coordinate eligibility; do not add an allele-set equality filter. Any allele audit must first resolve the track strand convention.",
+          "Emit each CHROM/POS/REF/ALT key once, sorted by coordinate then REF/ALT. Sample columns are lexicographic. Preserve the full requested sample list if it fits; if bounding is necessary, reduce genomic regions first and label any sample reduction as a changed source endpoint.",
+          "For the authored genotype display, unphase complete diploid calls and sort the allele indices; allow 0/0,0/1,1/1, otherwise output ./. with an audit reason. The source wording could instead whitelist literal strings after separator replacement, which would discard 1/0; that source behavior is unresolved and is not silently claimed equivalent.",
+          "Serialize UTF-8 uncompressed TSV, tabs, LF endings, one terminal newline, no index column. CHROM uses the declared alias map. Count the header in total lines and compute MD5 over the exact bytes. Grading must also compare the full matrix content and membership."
+        ],
+        "complete_artifacts": [
+          "ranked_peaks.tsv: peak_id,qvalue,genome_wide_rank,eligible",
+          "eligible_sites.tsv: chrom,pos,ref,alt,common_track_id,peak_ids",
+          "genotypes.tsv: CHROM,POS,REF,ALT followed by ordered sample IDs",
+          "excluded_calls.tsv: variant_key,sample_id,original_gt,reason",
+          "summary.tsv: variant_rows,total_lines,sample_count,md5"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Native bedtools intersections and bcftools query produce the reference matrix. Independent verifier recomputes genome-wide ranking, complete site and sample sets, each GT transformation and canonical serialization. A correct hash alone cannot compensate for wrong source selection."
+        ],
+        "incorrect_output_checks": [
+          "Take the top 1000 chromosome-1 peaks instead of the genome-wide top 1000.",
+          "Duplicate a variant overlapping two peaks.",
+          "Swap REF/ALT or drop the final newline.",
+          "Convert an incomplete or haploid GT into a called diploid genotype."
+        ],
+        "source_equivalence_and_remaining_limits": "Real source snapshots and measured Harbor runtime remain unresolved. The historical 3202-sample release in the question is a fixed source protocol; do not substitute latest-cohort membership while claiming exact endpoint fidelity.",
+        "format_references": [
+          "vcf",
+          "ucsc-narrowpeak",
+          "bedtools-intersect",
+          "bcftools"
+        ],
+        "source_question_hashes": {
+          "1000G-retrieve-genotype-q2": "c02b0bc83fda9a6eb6f61c3ddb8d278a2190532706f50aa754715bf3894a9508"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-clinical-variant-consequence",
@@ -3083,13 +3354,14 @@
       ],
       "observed_input_design_and_native_formats": "Observed RNA BAM and matched DNA genotype if available",
       "required_artifacts_with_key_columns": [
-        "reads.tsv: read_id,allele,baseq,mapq,strand",
-        "calls.tsv: locus,ref,alt,depth,vaf,genotype,uncertainty"
+        "observations.tsv: record_ordinal,qname,base,baseq,mapq,strand,eligible,reason",
+        "evidence.tsv: locus,ref,alt,ref_count,alt_count,other_count,allelic_depth,all_base_depth,rna_alt_fraction,strand_counts",
+        "status.tsv: locus,ploidy_evidence,dna_evidence,germline_status"
       ],
-      "method_parameters_and_decisions_to_freeze": "RNA editing/ASE, ploidy, strand bias and minimum depth",
-      "deterministic_verifier_strategy": "Recount eligible alleles and compare DNA truth when present",
-      "negative_artifact_mutation": "Count PCR duplicates or call hemizygous X as diploid",
-      "unresolved_inputs_runtime_and_exactness": "RNA-only data may not establish germline zygosity",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Reference uses a pinned native pileup with BAQ, depth cap, quality and flag defaults made explicit in the authoring script. Independent CIGAR traversal verifies every accepted nucleotide and aggregate; neither uses the model response to choose sites or denominators.",
+      "negative_artifact_mutation": "Interpret a CIGAR N or D as a base. Add duplicate reads. Report a diploid X genotype with no ploidy or DNA evidence. Hide off-allele observations by reporting VAF alone.",
+      "unresolved_inputs_runtime_and_exactness": "Full germline-status coverage is deferred until matched DNA and ploidy evidence exist. The RNA-only component remains useful but must not be counted as the full source endpoint. Native pileup behavior and observed-data runtime are not yet validated.",
       "source_question_types": {
         "variant-status-q1": "observed_or_unspecified"
       },
@@ -3099,7 +3371,39 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "What allele evidence supports a variant call at an independently selected expressed locus?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Infer an expressed chrX allele status from single-end RNA alignments. The source requests a diploid-looking nucleotide pair but supplies no matched DNA or ploidy evidence.",
+        "authored_task_decisions": [
+          "Use a biallelic SNP at an independently selected locus. For RNA evidence require mapped primary, non-QC-fail, nonduplicate alignments, 30 <= MAPQ <255 and observed base quality >=20. Use CIGAR mapping: skipped introns, deletions and clipped bases do not contribute nucleotide observations.",
+          "Emit A/C/G/T and other-base counts separately. Allelic depth is ref_count+alt_count and RNA alternative fraction is alt_count/allelic_depth, undefined at zero. Report all passing nucleotide depth and off-allele fraction so the denominator is visible.",
+          "For this single-end task count each eligible record once, retaining strand counts. If paired-end observations are later used, specify overlapping-mate and molecule handling as a separate contract.",
+          "Only return a germline genotype when independently observed matched-DNA truth and locus-specific ploidy support it. Otherwise report RNA allele evidence with germline status unresolved. RNA imbalance, editing and mapping bias can change the fraction; a fixed RNA VAF cutoff is not DNA truth."
+        ],
+        "complete_artifacts": [
+          "observations.tsv: record_ordinal,qname,base,baseq,mapq,strand,eligible,reason",
+          "evidence.tsv: locus,ref,alt,ref_count,alt_count,other_count,allelic_depth,all_base_depth,rna_alt_fraction,strand_counts",
+          "status.tsv: locus,ploidy_evidence,dna_evidence,germline_status"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Reference uses a pinned native pileup with BAQ, depth cap, quality and flag defaults made explicit in the authoring script. Independent CIGAR traversal verifies every accepted nucleotide and aggregate; neither uses the model response to choose sites or denominators."
+        ],
+        "incorrect_output_checks": [
+          "Interpret a CIGAR N or D as a base.",
+          "Add duplicate reads.",
+          "Report a diploid X genotype with no ploidy or DNA evidence.",
+          "Hide off-allele observations by reporting VAF alone."
+        ],
+        "source_equivalence_and_remaining_limits": "Full germline-status coverage is deferred until matched DNA and ploidy evidence exist. The RNA-only component remains useful but must not be counted as the full source endpoint. Native pileup behavior and observed-data runtime are not yet validated.",
+        "format_references": [
+          "sam-bam",
+          "vcf"
+        ],
+        "source_question_hashes": {
+          "variant-status-q1": "ff34c799a9c5c9999f2cf91d1222ea88309f6c97674c1a0efecd4d2a955a3415"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-variant-build-inference",
@@ -3108,13 +3412,14 @@
       ],
       "observed_input_design_and_native_formats": "Observed VCF and multiple reference FASTAs",
       "required_artifacts_with_key_columns": [
-        "sites.tsv: variant_id,build_candidate,ref_match,quality",
-        "summary.tsv: build,n_match,n_mismatch,confidence"
+        "sites.tsv: site_id,pos,ref,alt,eligible,exclusion_reason and candidate_reference_base columns",
+        "builds.tsv: assembly_accession,eligible_sites,ref_matches,ref_mismatches,match_fraction",
+        "decision.tsv: status,best_build,margin_sites,informative_sites"
       ],
-      "method_parameters_and_decisions_to_freeze": "Contig aliases, allele normalization, site QC and ambiguous builds",
-      "deterministic_verifier_strategy": "Recompute REF-base matches genome-wide over eligible sites",
-      "negative_artifact_mutation": "Infer build from one ambiguous SNP",
-      "unresolved_inputs_runtime_and_exactness": "Independent VCF without header and enough discriminating sites needed",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Native indexed FASTA queries obtain candidate bases; verifier independently indexes the same immutable reference slices and recomputes the full comparison table. Verify the result against withheld observed-data provenance without exposing that label.",
+      "negative_artifact_mutation": "Compare different site denominators across candidates. Choose from one nondiscriminating SNP. Repair REF alleles against the preferred build before scoring.",
+      "unresolved_inputs_runtime_and_exactness": "Need an independently observed VCF and all four versioned reference sources, rights and adequate discrimination. The source fixture might allow a unique label; the authored thresholds are explicit new criteria and no confidence probability is claimed.",
       "source_question_types": {
         "vcf-infer-build-q1": "observed_or_unspecified"
       },
@@ -3124,7 +3429,38 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "Which frozen reference build best matches observed VCF REF alleles across many high-confidence sites?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Identify which of hg18, hg19, hg38 or T2T-CHM13 matches an observed chromosome-20 biallelic-SNP VCF without reference or rsID hints.",
+        "authored_task_decisions": [
+          "Retain observed SNP alleles/positions unchanged while withholding assembly hints in the task copy. Keep a private provenance copy. Supply frozen candidate reference slices and explicit contig aliases; CHM13 must have a concrete accession/version.",
+          "Before comparing REF, define the common eligible set as biallelic A/C/G/T SNPs whose coordinates exist and have unambiguous bases in every candidate. Report exclusions. For each candidate count exact REF matches over that identical set; do not left-normalize, swap REF/ALT or repair alleles against each candidate first.",
+          "Rank candidate match counts and report the best-minus-next margin. For the authored closed-choice task, admit an input only after the privately known build is the unique best with match fraction >=0.99, margin >=0.05 of eligible sites and at least 100 sites informative between candidates. These are construction thresholds, not a probability model.",
+          "If the conditions fail, retain an ambiguous or insufficient-evidence result during input review; do not force a build or manufacture discriminating SNPs. Candidate slices preserve their original coordinate offsets."
+        ],
+        "complete_artifacts": [
+          "sites.tsv: site_id,pos,ref,alt,eligible,exclusion_reason and candidate_reference_base columns",
+          "builds.tsv: assembly_accession,eligible_sites,ref_matches,ref_mismatches,match_fraction",
+          "decision.tsv: status,best_build,margin_sites,informative_sites"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Native indexed FASTA queries obtain candidate bases; verifier independently indexes the same immutable reference slices and recomputes the full comparison table. Verify the result against withheld observed-data provenance without exposing that label."
+        ],
+        "incorrect_output_checks": [
+          "Compare different site denominators across candidates.",
+          "Choose from one nondiscriminating SNP.",
+          "Repair REF alleles against the preferred build before scoring."
+        ],
+        "source_equivalence_and_remaining_limits": "Need an independently observed VCF and all four versioned reference sources, rights and adequate discrimination. The source fixture might allow a unique label; the authored thresholds are explicit new criteria and no confidence probability is claimed.",
+        "format_references": [
+          "vcf",
+          "bcftools"
+        ],
+        "source_question_hashes": {
+          "vcf-infer-build-q1": "8aca84c4d19975a7f636f05a5481af4c46dbdda3599813a1b0ea9ac07f47146d"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-population-ancestry-vcf",
@@ -3212,14 +3548,15 @@
       ],
       "observed_input_design_and_native_formats": "Observed narrowPeak BED and matched ChromHMM state BED",
       "required_artifacts_with_key_columns": [
-        "peaks.bed: chrom,start,end",
-        "covered.tsv: peak_id,annotated_bases,state_bases",
-        "summary.tsv: numerator,denominator,fraction"
+        "peak_union.bed",
+        "annotated_peak_union.bed",
+        "target_state_overlap.bed",
+        "summary.tsv: numerator_bases,denominator_bases,percent,undefined"
       ],
-      "method_parameters_and_decisions_to_freeze": "Base-level union, unannotated-base exclusion, state version and rounding",
-      "deterministic_verifier_strategy": "Independent sweep-line overlap and denominator check",
-      "negative_artifact_mutation": "Count unannotated bases or peak overlaps twice",
-      "unresolved_inputs_runtime_and_exactness": "Different cell/assembly annotations cannot be mixed",
+      "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
+      "deterministic_verifier_strategy": "Native bedtools intersections and merges form the three unions. Verifier independently sweeps intervals and recomputes the ratio from exact base counts. Per-peak overlap rows are diagnostic and must not be summed when peaks overlap.",
+      "negative_artifact_mutation": "Include unannotated peak bases in the denominator. Sum overlapping peaks twice. Use the number of overlapping peaks instead of base coverage.",
+      "unresolved_inputs_runtime_and_exactness": "Need matched assembly, cell state and annotation snapshots. State labels are model-derived annotations; this task does not prove regulatory function.",
       "source_question_types": {
         "bedtools-chromhmm-q1": "observed_or_unspecified"
       },
@@ -3231,7 +3568,38 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "What fraction of annotated observed peaks overlaps a prespecified chromatin state?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "native_format_acceptance_contract": {
+        "source_endpoint": "Calculate the percentage of peak bases in a specified ChromHMM state, excluding bases with no annotation.",
+        "authored_task_decisions": [
+          "Let P be the union of observed peak intervals, A the union of valid state annotations, and S the union for the requested state. Numerator = length(P intersect S); denominator = length(P intersect A). Report both before rounding 100*numerator/denominator.",
+          "Reject conflicting overlapping state assignments within the selected cell type/release. Duplicate rows of the same state can collapse in a union. The requested state label must belong to that pinned model; do not equate numeric state IDs across models.",
+          "If the denominator is zero, return a declared undefined result; never return zero percent. Use integer round-half-even for the final percent. Unique genomic bases and rounding are explicit authored choices where the source leaves overlap/tie behavior ambiguous."
+        ],
+        "complete_artifacts": [
+          "peak_union.bed",
+          "annotated_peak_union.bed",
+          "target_state_overlap.bed",
+          "summary.tsv: numerator_bases,denominator_bases,percent,undefined"
+        ],
+        "native_oracle_and_independent_verifier": [
+          "Native bedtools intersections and merges form the three unions. Verifier independently sweeps intervals and recomputes the ratio from exact base counts. Per-peak overlap rows are diagnostic and must not be summed when peaks overlap."
+        ],
+        "incorrect_output_checks": [
+          "Include unannotated peak bases in the denominator.",
+          "Sum overlapping peaks twice.",
+          "Use the number of overlapping peaks instead of base coverage."
+        ],
+        "source_equivalence_and_remaining_limits": "Need matched assembly, cell state and annotation snapshots. State labels are model-derived annotations; this task does not prove regulatory function.",
+        "format_references": [
+          "bedtools-intersect",
+          "bedtools-merge"
+        ],
+        "source_question_hashes": {
+          "bedtools-chromhmm-q1": "bf4fb14d17058dcb2c958186ed64a940f01b0b5f6769c48c67fd0d10864714fc"
+        },
+        "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      }
     },
     {
       "proposed_id": "compbio-design-lung-cell-composition",
@@ -3664,5 +4032,57 @@
       "scientific_question_on_independent_observations": "Do identifiers from frozen variant catalogs resolve to the same assembly-specific genomic allele?",
       "status": "proposed-design-only-no-coverage-credit"
     }
-  ]
+  ],
+  "native_format_contract_review": {
+    "reviewed_at": "2026-09-24",
+    "specified_designs": 11,
+    "source_questions": 13,
+    "subjective_source_endpoints_deferred": [
+      "protein-shape-q1"
+    ],
+    "primary_documentation": [
+      {
+        "id": "sam-bam",
+        "url": "https://samtools.github.io/hts-specs/SAMv1.pdf",
+        "version_observed": "SAM 1.6; printing b5341fb, 2025-08-12"
+      },
+      {
+        "id": "vcf",
+        "url": "https://samtools.github.io/hts-specs/VCFv4.5.pdf",
+        "version_observed": "VCF 4.5; require each deposited file to declare its own version"
+      },
+      {
+        "id": "gencode-gtf",
+        "url": "https://www.gencodegenes.org/pages/data_format.html",
+        "scope": "GTF fields, versioned IDs, repeated tags, distinct CDS/UTR/stop_codon features; provider-specific semantics still require input audit"
+      },
+      {
+        "id": "ucsc-narrowpeak",
+        "url": "https://genome.ucsc.edu/FAQ/FAQformat.html#format12",
+        "scope": "Half-open intervals, qValue encoding and summit offset"
+      },
+      {
+        "id": "bedtools-intersect",
+        "url": "https://bedtools.readthedocs.io/en/latest/content/tools/intersect.html",
+        "version_observed": "Documentation 2.31.0"
+      },
+      {
+        "id": "bedtools-merge",
+        "url": "https://bedtools.readthedocs.io/en/latest/content/tools/merge.html",
+        "version_observed": "Documentation 2.31.0"
+      },
+      {
+        "id": "bcftools",
+        "url": "https://samtools.github.io/bcftools/bcftools.html",
+        "scope": "Query and normalization behavior; REF repair is not assembly inference or strand correction"
+      }
+    ],
+    "shared_authoring_requirements": [
+      "Harbor task prompts expose the scoring conventions and required outputs. The executable oracle and expected values remain private. Independent verifiers compare complete artifacts and reject missing, duplicate, extra or nonfinite values where inappropriate.",
+      "Inputs remain deposited native BAM/VCF/GTF/BED/FASTA with accessions, release, license, checksums and a reproducible observed-data selection manifest. TSV files are analysis outputs, not replacements for the native inputs.",
+      "A native package reference run and an independent algorithmic check must agree. Pin package versions at authoring; documentation review is not a native execution result.",
+      "Choose coherent observed regions/libraries and preserve relevant isoforms, sample identity and interval topology. Measure the complete oracle and solver workflow against the 30-minute target; do not assume a small fixture establishes realistic performance."
+    ],
+    "validated_new_mappings": 0
+  }
 }
