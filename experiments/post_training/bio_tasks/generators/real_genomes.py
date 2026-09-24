@@ -14,7 +14,7 @@ import numpy as np
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
 from experiments.post_training.bio_tasks.real_data import source_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 ACCESSIONS = ("NC_001422.1", "NC_001416.1", "NC_001604.1")
 
@@ -214,22 +214,20 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        difficulty,
         skills,
         ("FASTA", "GFF3"),
         tuple(f"https://www.ncbi.nlm.nih.gov/nuccore/{accession}" for accession in ACCESSIONS),
         partial(generate_real_genome, operation=name),
     )
-    for name, difficulty, skills in (
-        ("real-genome-cds-extraction", Difficulty.MEDIUM, ("strand", "compound-cds", "circular-coordinates")),
-        ("real-genome-translation", Difficulty.MEDIUM, ("compound-cds", "genetic-code", "alternative-start-codons")),
-        ("real-genome-gc3", Difficulty.MEDIUM, ("reading-frame", "coding-composition", "denominators")),
-        ("real-genome-codon-counts", Difficulty.MEDIUM, ("reading-frame", "overlapping-genes", "stop-codon-exclusion")),
-        ("real-genome-overlap", Difficulty.MEDIUM, ("interval-union", "overlapping-genes", "coordinate-conventions")),
-        ("real-genome-promoters", Difficulty.MEDIUM, ("strand", "circular-coordinates", "boundary-clipping")),
+    for name, skills in (
+        ("real-genome-cds-extraction", ("strand", "compound-cds", "circular-coordinates")),
+        ("real-genome-translation", ("compound-cds", "genetic-code", "alternative-start-codons")),
+        ("real-genome-gc3", ("reading-frame", "coding-composition", "denominators")),
+        ("real-genome-codon-counts", ("reading-frame", "overlapping-genes", "stop-codon-exclusion")),
+        ("real-genome-overlap", ("interval-union", "overlapping-genes", "coordinate-conventions")),
+        ("real-genome-promoters", ("strand", "circular-coordinates", "boundary-clipping")),
         (
             "real-genome-restriction-digest",
-            Difficulty.MEDIUM,
             ("restriction-sites", "circular-coordinates", "fragment-lengths"),
         ),
     )

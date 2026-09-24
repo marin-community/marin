@@ -46,7 +46,7 @@ def report(bundle: Path, results: Path) -> dict:
             verdict = grade_files(bundle / case["reference"], directory / "answer.json")
             row["cases"].append({"task_id": case["task_id"], "verdict": asdict(verdict)})
             hashes.add(json.dumps(expected_hashes, sort_keys=True))
-        if len(row["cases"]) == len(hashes) == 3:
+        if row["cases"] and len(row["cases"]) == len(hashes):
             if all(case.get("verdict", {}).get("reward") == 1 for case in row["cases"]):
                 row["status"] = "passed"
             else:

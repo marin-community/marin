@@ -8,7 +8,7 @@ from fractions import Fraction
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe
 
 
 def generate_intervals(seed: int, operation: str) -> Instance:
@@ -278,7 +278,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         skills,
         formats,
         (

@@ -12,12 +12,6 @@ from enum import StrEnum
 from experiments.post_training.bio_tasks.contract import Contract
 
 
-class Difficulty(StrEnum):
-    EASY = "easy"
-    MEDIUM = "medium"
-    HARD = "hard"
-
-
 class DataOrigin(StrEnum):
     SIMULATED = "simulated"
     REAL = "real"
@@ -39,7 +33,6 @@ class Instance:
 class Recipe:
     id: str
     version: str
-    difficulty: Difficulty
     skills: tuple[str, ...]
     formats: tuple[str, ...]
     sources: tuple[str, ...]

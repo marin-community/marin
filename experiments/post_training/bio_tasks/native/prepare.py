@@ -39,8 +39,8 @@ def prepare(corpus: Path, output: Path) -> dict:
         ]
         row["package_specs"] += ["python=3.12", *operation.packages]
         candidates = [task for task in ledger if task["recipe"] == operation.recipe]
-        if len(candidates) != 3:
-            raise ValueError(f"Expected three corpus tasks for {operation.recipe}")
+        if not candidates:
+            raise ValueError(f"No corpus tasks for {operation.recipe}")
         for task in candidates:
             task_id = task["task_id"]
             source = corpus / "harbor" / "train" / task_id
@@ -70,7 +70,7 @@ def prepare(corpus: Path, output: Path) -> dict:
         "corpus_manifest_sha256": hashlib.sha256((corpus / "manifest.json").read_bytes()).hexdigest(),
         "expected_repositories": 50,
         "repositories": rows,
-        "limits": {"concurrent_repositories": 1, "instances_per_repository": 3, "tool_command_seconds": 300},
+        "limits": {"concurrent_repositories": 1, "tool_command_seconds": 300},
         "status": "prepared; no native tools executed",
     }
     (output / "plan.json").write_text(json.dumps(report, indent=2) + "\n")

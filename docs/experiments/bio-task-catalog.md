@@ -6,8 +6,8 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **137 recipes across 13 domains**, with three instances per
-recipe and one train split. The [implemented recipe matrix](bio-task-recipes.md)
+The implementation has **137 recipes across 13 domains**, with one task per
+recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
 and host oracle validation do not establish runtime validity or training benefit.
@@ -127,7 +127,7 @@ Downloads, stars, and citations remain available in the unchanged
 
 The first 2026-09-23 CoreWeave run installed all 30 environments and attempted 90 cases.
 Of those, 68 passed, 10 completed with answer mismatches, and 12 failed execution.
-All three cases must pass before a package counts as checked. The reference
+All requested cases must pass before a package counts as checked; record the number of cases. The reference
 scripts ran on one CPU worker with serial environments and no automatic retries.
 Private references stayed local; grading used the frozen contracts without
 changing tolerances. That run used small component fixtures.
@@ -281,9 +281,10 @@ This is an authoring fixture corpus, not an approved training release.
 
 For exported training instances, choose sizes appropriate to each operation and
 include realistic sample structure, sparsity, noise, ambiguity, missingness and
-file joins. Three examples should vary the scientific decision, not only rename
-records, multiply counts or shift scores. Size and reasoning difficulty are
-separate axes; more bytes alone do not make a better task. Maintain the single
+file joins. One reviewed task per recipe is the default. Additional tasks need a
+meaningful difference in data, study design or scientific decision; renaming
+records, multiplying counts or shifting scores does not establish new coverage.
+Choose input scale to preserve the biological problem and measure execution cost. Maintain the single
 train split and the 30-minute attempt limit. Size targets remain uncalibrated
 until measured on the selected task environment.
 

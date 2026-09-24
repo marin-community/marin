@@ -7,7 +7,7 @@ import random
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_repo_sequences(seed: int, operation: str) -> Instance:
@@ -256,6 +256,6 @@ FORMATS = {
     "fasta-indexed-regions": ("fasta", "fai", "csv-header"),
 }
 RECIPES = tuple(
-    Recipe(name, "1", Difficulty.MEDIUM, skills, FORMATS[name], (), partial(generate_repo_sequences, operation=name))
+    Recipe(name, "1", skills, FORMATS[name], (), partial(generate_repo_sequences, operation=name))
     for name, skills in SKILLS.items()
 )

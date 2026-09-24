@@ -10,7 +10,7 @@ from functools import partial
 from itertools import combinations
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_statistics(seed: int, operation: str) -> Instance:
@@ -385,7 +385,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "2" if name in ["design-estimability", "paired-treatment-effect", "permutation-mean-test"] else "1",
-        Difficulty.MEDIUM,
         skills,
         ("gmt", "gene-lists") if name == "enrichment-universe" else ("csv-header",),
         ("https://www.statsmodels.org/stable/examples/index.html",),

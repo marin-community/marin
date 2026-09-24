@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def sbml_text(species: list[str], reactions: list[tuple], boundary: tuple[str, ...] = ()) -> str:
@@ -274,7 +274,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         skills,
         (
             ("sbml-level3-version2-core", "csv-header")

@@ -7,7 +7,7 @@ import random
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_workflow(seed: int, operation: str) -> Instance:
@@ -122,7 +122,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "2" if name in ["enrichment-identifier-mapping"] else "1",
-        Difficulty.MEDIUM,
         skills,
         ("csv-header",) if name == "sample-sheet-lanes" else ("csv-header", "gmt", "gene-lists"),
         (

@@ -7,7 +7,7 @@ import random
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def vcf_text(records: list[list], samples: tuple[str, ...] = ("alice", "bob"), contig_length: int = 1000) -> str:
@@ -342,7 +342,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "2" if name in ["variant-coding-consequences"] else "1",
-        Difficulty.MEDIUM,
         skills,
         (
             ("csv-header",)

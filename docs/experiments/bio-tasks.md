@@ -29,8 +29,11 @@ format profile, and repository mapping. The 137 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-Use three instances with distinct inputs and reference targets per recipe: 411 train tasks at this checkpoint.
-There are 66 real-data examples and 345 simulated controls. The manifest marks
+The default build contains one task per recipe: 137 authoring examples, comprising
+22 real-data candidates and 115 simulated controls. Add another task from a recipe
+only when its dataset, study design, modality or scientific decision contributes
+meaningful coverage. Deterministic generators can still produce extra validation
+cases without adding them to training. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
 The final training release targets real biological data for every task. Synthetic
 controls stay outside that release and remain available for verifier development.
@@ -47,9 +50,10 @@ licenses and transformations in `data_sources.json`. Full benchmark lineage scre
 and end-to-end workflow validation remain pending. See the
 [ID workflow gap analysis](bio-task-catalog.md#id-workflow-coverage-and-input-realism)
 for the distinction and the requirements for realistic inputs and artifact outputs.
-These are easy and medium tasks; hard compositions and the final difficulty
-mixture remain separate work. Evaluation uses the independent benchmarks in the
-program issue. No development or test split is generated.
+Select tasks for realistic biological inputs, scientific decisions and connected
+analysis stages. Record actual input scale and measured runtime; no difficulty
+labels or quotas apply. Evaluation uses the independent benchmarks in the program
+issue. No development or test split is generated.
 
 Native formats now include GFF3 and GTF, BED12 and bedGraph, SAM and VCF,
 Matrix Market/10x, Newick and NEXUS charsets, PDB and mmCIF, SBML, MGF,
@@ -85,7 +89,7 @@ From the repository root:
 ```bash
 uv run python -m experiments.post_training.bio_tasks.build \
   --output /tmp/bio-tasks-example \
-  --instances-per-recipe 3 \
+  --instances-per-recipe 1 \
   --seed 20260923 \
   --base-image python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
   --tool-ref 12bbd5d45b1b176167ab3cfe905e06004c2f02e3
@@ -122,7 +126,7 @@ number recorded; 64 unsuccessful draws stop generation. A reference mismatch sto
 generation immediately and leaves the manifest marked `incomplete`.
 
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
-and open `http://localhost:8757/`. The index groups three examples per recipe, with text search, domain filtering,
+and open `http://localhost:8757/`. The index groups tasks by recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
 50-repository execution-coverage table. A second page tracks 365 provisional ID task identifiers and 90 held-out OOD
 BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
@@ -174,9 +178,13 @@ alone do not freeze all build-time transitive packages.
 
 `validated_locally` means input-reading oracle and negative-control checks passed
 on the host. It does not establish container execution, network isolation, or
-scientific approval. Both `container_validation` and `scientific_review` remain
-`pending`. Before task release, review at least three varied examples per recipe
-and validate reference/failing solutions through the selected Harbor backend.
+scientific approval. Scientific review remains pending. The committed
+[container evidence](../../experiments/post_training/bio_tasks/container_validation.json)
+records 18 passing oracle trials and five rejected negative controls for six recipes
+at their recorded task and grader hashes. A new build requires checks against its
+own hashes. Before task release, review every selected task and validate its
+reference/failing solutions through the selected Harbor backend. Keep additional
+null, boundary and invalid-input cases in the validation suite.
 
 The verifier checks every record ID, field, type, missing value, and quantity.
 Integer counts are exact; proportions use the tolerances stated in the prompt.
@@ -237,7 +245,7 @@ uv run python -m experiments.post_training.bio_tasks.native.report \
   --output /path/to/native-report.json
 ```
 
-The report preserves the denominator of 50 repositories and requires three
+The report preserves the denominator of 50 repositories and requires all supplied
 completed, distinct-input executions with passing biological answers per repo.
 
 The 2026-09-23 run installed all 30 environments and completed 78 of 90 cases.
@@ -245,5 +253,5 @@ It used one CPU worker, serial environments, and no automatic retries or model
 calls. Private expected answers remained local. The frozen contract rejected
 10 completed cases; tolerances were unchanged. See the
 [catalog's failure table](bio-task-catalog.md#package-reference-run) for the eight
-packages that did not pass all three cases. The earlier five host-package checks
+packages that did not pass all requested cases. The earlier five host-package checks
 remain in the evidence file as separate runs with their original environments.

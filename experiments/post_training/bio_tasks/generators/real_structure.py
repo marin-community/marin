@@ -11,7 +11,7 @@ import numpy as np
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
 from experiments.post_training.bio_tasks.real_data import source_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 STRUCTURES = ("1UBQ", "1CRN", "4HHB")
 
@@ -114,7 +114,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         ("experimental-structures", "author-residue-identifiers", "alternate-conformers", "coordinate-geometry"),
         ("mmCIF",),
         tuple(f"https://www.rcsb.org/structure/{code}" for code in STRUCTURES),

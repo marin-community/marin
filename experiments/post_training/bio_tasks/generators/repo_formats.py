@@ -9,7 +9,7 @@ from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
 from experiments.post_training.bio_tasks.generators.variants import vcf_text
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_repo_formats(seed: int, operation: str) -> Instance:
@@ -364,6 +364,6 @@ FORMATS = {
     "sra-spot-export": ("csv-spot-ledger",),
 }
 RECIPES = tuple(
-    Recipe(name, "1", Difficulty.MEDIUM, skills, FORMATS[name], (), partial(generate_repo_formats, operation=name))
+    Recipe(name, "1", skills, FORMATS[name], (), partial(generate_repo_formats, operation=name))
     for name, skills in SKILLS.items()
 )

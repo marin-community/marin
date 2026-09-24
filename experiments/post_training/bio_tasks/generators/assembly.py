@@ -9,7 +9,7 @@ from functools import partial
 from itertools import combinations
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_assembly(seed: int, operation: str) -> Instance:
@@ -253,7 +253,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         skills,
         FORMATS[name],
         (

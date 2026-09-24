@@ -15,7 +15,7 @@ from scipy.stats import CensoredData, ecdf
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
 from experiments.post_training.bio_tasks.real_data import source_text, tsv_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 SOURCE_ID = "survival:PBC"
 SOURCE_URL = "https://stat.ethz.ch/R-manual/R-devel/library/survival/html/pbc.html"
@@ -209,7 +209,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         (
             "patient-identity",
             "cohort-eligibility",

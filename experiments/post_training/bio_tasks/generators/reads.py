@@ -8,7 +8,7 @@ from collections import Counter
 from functools import partial
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe, csv_text
 
 
 def generate_reads(seed: int, operation: str) -> Instance:
@@ -308,7 +308,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         skills,
         formats,
         ("https://samtools.github.io/hts-specs/SAMv1.pdf", "https://github.com/marcelm/cutadapt"),

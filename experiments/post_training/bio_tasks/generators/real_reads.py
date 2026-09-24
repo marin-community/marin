@@ -12,7 +12,7 @@ import numpy as np
 
 from experiments.post_training.bio_tasks.contract import Column, Contract, FastqContract
 from experiments.post_training.bio_tasks.real_data import source_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 
 def generate_real_reads(seed: int, operation: str) -> Instance:
@@ -199,25 +199,22 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        difficulty,
         skills,
         ("FASTQ",),
         ("https://www.ebi.ac.uk/ena/browser/view/ERR266411",),
         partial(generate_real_reads, operation=name),
     )
-    for name, difficulty, skills in (
-        ("real-fastq-pair-filter", Difficulty.MEDIUM, ("paired-read-qc", "threshold-boundaries", "native-fastq-output")),
+    for name, skills in (
+        ("real-fastq-pair-filter", ("paired-read-qc", "threshold-boundaries", "native-fastq-output")),
         (
             "real-fastq-fixed-trim",
-            Difficulty.EASY,
             ("paired-reads", "sequence-quality-synchronization", "native-fastq-output"),
         ),
-        ("real-fastq-cycle-quality", Difficulty.EASY, ("phred-encoding", "sequencing-cycles", "quality-denominators")),
+        ("real-fastq-cycle-quality", ("phred-encoding", "sequencing-cycles", "quality-denominators")),
         (
             "real-fastq-expected-errors",
-            Difficulty.MEDIUM,
             ("phred-probabilities", "paired-read-qc", "nonlinear-aggregation"),
         ),
-        ("real-fastq-quality-yield", Difficulty.EASY, ("phred-encoding", "read-pair-denominators", "quality-yield")),
+        ("real-fastq-quality-yield", ("phred-encoding", "read-pair-denominators", "quality-yield")),
     )
 )

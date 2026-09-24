@@ -13,7 +13,7 @@ import numpy as np
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
 from experiments.post_training.bio_tasks.real_data import mammary_samples, source_text, tsv_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 SOURCE_URL = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450"
 NAMES = (
@@ -178,7 +178,6 @@ RECIPES = tuple(
     Recipe(
         name,
         "1",
-        Difficulty.MEDIUM,
         ("sample-identifiers", "biological-replicates", "raw-counts", "library-normalization"),
         ("gene-count-tsv", "sample-metadata-tsv"),
         (SOURCE_URL,),

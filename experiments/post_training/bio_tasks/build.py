@@ -222,7 +222,6 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "recipe_version": recipe.version,
         "lineage": task.lineage,
         "split": task.split,
-        "difficulty": recipe.difficulty.value,
         **instance_provenance(instance),
         "domain": recipe.domain,
         "repositories": list(recipe.repositories),
@@ -436,6 +435,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         native_run_hashes[name] = digest
+    container_evidence = (SOURCE_DIR / "container_validation.json").read_bytes()
+    (output / "container_validation.json").write_bytes(container_evidence)
     data_sources = (SOURCE_DIR / "data_sources.json").read_bytes()
     (output / "data_sources.json").write_bytes(data_sources)
     benchmark_bytes = (SOURCE_DIR / "benchmark_coverage.json").read_bytes()
@@ -468,6 +469,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "harbor_revision": HARBOR_REVISION,
         "scientific_review": "pending",
         "container_validation": "pending",
+        "container_validation_history_sha256": hashlib.sha256(container_evidence).hexdigest(),
         "split_policy": "single train split; evaluation benchmarks remain separate",
         "source_hashes": {
             path.relative_to(SOURCE_DIR).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -543,7 +545,6 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "dockerfile_id": image_id,
                     "language": "python",
                     "tags": [
-                        recipe.difficulty.value,
                         task.split,
                         "offline",
                         f"data-origin:{instance.data_origin.value}",
@@ -561,7 +562,6 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     **asdict(task),
                     "recipe": recipe.id,
                     "recipe_version": recipe.version,
-                    "difficulty": recipe.difficulty.value,
                     "domain": recipe.domain,
                     "repositories": recipe.repositories,
                     "tool_execution": "pending",
@@ -585,9 +585,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 inspection_page(output, task, instance, files, validation)
                 index_rows.append(
                     f'<tr><td><a href="inspect/{task.task_id}.html">{task.task_id}</a></td>'
-                    f"<td>{recipe.difficulty.value}</td>"
                     f"<td>{entry['input_bytes']:,} bytes</td>"
-                    f"<td>{len(validation)}</td></tr>"
+                    f"<td>{len(validation)}</td><td>{validation_runtime:.2f} seconds</td></tr>"
                 )
                 counts[task.split] += 1
                 counts[recipe.id] += 1
@@ -595,7 +594,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 f'<section class="recipe" data-domain="{html.escape(recipe.domain)}" '
                 f'data-origin="{instance.data_origin.value}" '
                 f'id="{html.escape(recipe.id)}"><h2>{html.escape(recipe.id)}</h2>'
-                f"<p>{instances_per_recipe} examples · {recipe.difficulty.value}<br>"
+                f"<p>{instances_per_recipe} task(s)<br>"
                 f"Domain: {html.escape(recipe.domain)}<br>"
                 f"Data origin: <strong>{instance.data_origin.value}</strong><br>"
                 "Repository-derived operations: "
@@ -603,8 +602,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 "<br>Tool availability in generated task environment: pending<br>"
                 f"Input formats: {html.escape(', '.join(recipe.formats))}<br>"
                 f"Skills: {html.escape(', '.join(recipe.skills))}</p>"
-                "<table><thead><tr><th>Task</th><th>Difficulty</th><th>Input size</th>"
-                "<th>Validation controls</th></tr></thead>"
+                "<table><thead><tr><th>Task</th><th>Input size</th>"
+                "<th>Validation controls</th><th>Reference and control runtime</th></tr></thead>"
                 "<tbody>" + "\n".join(index_rows) + "</tbody></table></section>"
             )
     manifest.update(
@@ -673,11 +672,13 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "recorded package checks. Locked MUSCLE, fastp and Picard image contexts are prepared "
         "for their real-data tasks; "
         "other environments contain Python only. Container execution and teacher tool use require separate checks.</p>"
-        f"<p>{passed_packages}/50 packages have passed three reference cases each.</p>"
+        f"<p>{passed_packages}/50 packages have recorded successful native reference checks.</p>"
         "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish native format coverage. "
         "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
         "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
-        '<p><a href="native_validation.json">Recorded package reference checks</a></p>'
+        '<p><a href="native_validation.json">Recorded package reference checks</a> · '
+        '<a href="container_validation.json">Earlier Harbor oracle trials</a> '
+        "(apply only to their recorded task and grader hashes).</p>"
         '<p><a href="benchmark-coverage.html">Inspect workflow coverage: '
         f'{distribution_counts["ID"]} ID tasks; {distribution_counts["OOD"]} OOD tasks held out</a> · '
         '<a href="data_sources.json">Biological sources and provenance</a></p>'
@@ -712,7 +713,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--instances-per-recipe", type=int, required=True)
+    parser.add_argument("--instances-per-recipe", type=int, default=1, help="default: one task per recipe")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--base-image", required=True, help="digest-pinned Python image with pip and venv")
     parser.add_argument("--tool-ref", required=True, help="full Marin commit for tasktrove-verify")

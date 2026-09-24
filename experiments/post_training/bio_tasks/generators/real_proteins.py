@@ -10,7 +10,7 @@ from itertools import combinations
 
 from experiments.post_training.bio_tasks.contract import AlignmentContract, Column, Contract
 from experiments.post_training.bio_tasks.real_data import source_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Difficulty, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 
 SOURCE = "UniProt:globins-20260923"
 
@@ -77,7 +77,6 @@ RECIPES = (
     Recipe(
         id="real-protein-alignment",
         version="1",
-        difficulty=Difficulty.MEDIUM,
         skills=("protein multiple-sequence alignment", "affine gap scoring", "paralog awareness"),
         formats=("FASTA", "TSV", "JSON"),
         sources=("https://www.uniprot.org/help/license", "https://mafft.cbrc.jp/alignment/software/"),
