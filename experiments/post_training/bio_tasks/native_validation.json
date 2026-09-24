@@ -1442,6 +1442,54 @@
         ]
       },
       "decision": "Resolve public artifact checksums for the same exact package URLs, then use the existing checksum-verified offline installer. Preserve this failed setup independently of the corrected run."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "job_id": "/exedev/bio-singlecell-qc-locked-20260924-065711",
+      "source_revision": "f025377e0cf77007963d867a2b9ae3d106197321",
+      "environment_lock_revision": "80c21949b118477bdbd6dd5fc20a0374f3f9e29a",
+      "status": "failed-reference-sparse-indexing",
+      "model_calls": 0,
+      "biological_reference_attempted": true,
+      "completed_setup_seconds": {
+        "create-python-execution": 3.218836681000539,
+        "fetch-inputs-execution": 3.5191582350089448,
+        "install-python-execution": 15.936692939998466,
+        "install-scanpy-execution": 28.097457087002113
+      },
+      "reference_resource": {
+        "module": "experiments.post_training.bio_tasks.sources.prepare_singlecell_qc",
+        "status": "failed",
+        "seconds": 7.8242646169965155,
+        "peak_rss_kib": 894504,
+        "finished_at": "2026-09-24T06:59:19.867235+00:00"
+      },
+      "failure": "SciPy sparse column indexing received a Pandas Boolean Series and raised AttributeError: 'Series' object has no attribute 'nonzero'. No reference outputs were scored.",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-singlecell-qc-locked-20260924-065711/0/5fff6784acf680c7/outputs.tar.zst",
+        "size_bytes": 57718,
+        "sha256": "16797842c1417dd96952280979a823e0cded1031e5ec748cd0cea4b74d233baf",
+        "ttl_days": 7
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-singlecell-qc-locked-20260924-065711",
+        "state": "failed",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T07:02:29.265779+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "decision": "Convert the Boolean feature mask to a NumPy array before SciPy indexing; preserve exact packages, inputs and scientific criteria for the corrected run."
     }
   ]
 }

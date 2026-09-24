@@ -25,7 +25,7 @@ def prepare(inputs: Path, output: Path) -> None:
     features = pd.read_csv(inputs / "features.tsv", sep="\t", index_col="id")
     cells = pd.read_csv(inputs / "cells.tsv", sep="\t", index_col="id")
     with threadpool_limits(limits=1):
-        counts = mmread(inputs / "matrix.mtx.gz").T.tocsr()
+        counts = mmread(inputs / "matrix.mtx.gz", spmatrix=True).T.tocsr()
     if counts.shape != (len(cells), len(features)) or not np.issubdtype(counts.dtype, np.integer):
         raise ValueError("Source matrix and metadata do not agree")
     if not cells.index.is_unique or not features.index.is_unique or np.any(counts.data <= 0):
@@ -34,7 +34,7 @@ def prepare(inputs: Path, output: Path) -> None:
     data.var["ercc"] = data.var.feature_type == "ERCC"
     data.var["endogenous"] = data.var.feature_type == "endogenous"
     sc.pp.calculate_qc_metrics(data, qc_vars=["ercc", "endogenous"], percent_top=None, log1p=False, inplace=True)
-    detected = np.asarray(data.X[:, data.var.endogenous].getnnz(axis=1)).ravel()
+    detected = np.asarray(data.X[:, data.var.endogenous.to_numpy()].getnnz(axis=1)).ravel()
     qc = data.obs[
         ["geo_accession", "sorting_gate", "total_counts", "total_counts_ercc", "total_counts_endogenous"]
     ].copy()
