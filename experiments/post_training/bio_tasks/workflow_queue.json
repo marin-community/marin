@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:40:35.143831+00:00",
+  "updated_at": "2026-09-24T15:55:29.084390+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1241,15 +1241,15 @@
     "source_releases": 30,
     "inventory_records": 2881,
     "question_cards": 676,
-    "proposed_task_groups": 629,
-    "conditional_consolidations": 28,
+    "proposed_task_groups": 635,
+    "conditional_consolidations": 25,
     "non_alias_records_linked_to_questions": 2480,
     "known_cross_release_alias_records": 50,
     "identity_only_records_with_gap_dispositions": 350,
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "ffa616b07fc7f3c44209c366ff0f57fe5cf1c03e67e86e781332f3572d90e587",
-    "limit": "Every inventoried record has a planning disposition; question proposals and conditional merges have unequal inspection depth. No implemented task or validated coverage increased. Eight combinations were revised and 69 records now have estimand-specific cards."
+    "portfolio_sha256": "e8ba40d1f1d42e75fbb12c418a6ff7ca1935e5ec9bcbfca20e8639be344c6495",
+    "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged."
   }
 }

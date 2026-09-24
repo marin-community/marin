@@ -7,8 +7,8 @@ links 50 known BixBench-Verified aliases to their original designs, preserves 35
 SciGym systems as individual-endpoint review gaps, and retains one excluded
 objective. Twelve provisional-ID source leads still lack task inventories.
 
-The portfolio contains **676 question cards and 629 proposed task groups**, including
-28 conditional combinations across benchmarks. These are planning units, with
+The portfolio contains **676 question cards and 635 proposed task groups**, including
+25 conditional combinations of question cards. These are planning units, with
 substantial differences in source inspection depth. They add zero validated mappings
 and do not set a target dataset size. Each combined question retains all member
 contracts; incompatible inputs, methods or estimands require separate tasks.
@@ -38,6 +38,20 @@ excluded objective. Other shared studies, assays and protocols are not automatic
 independent workflows. Workstream membership alone does not show that a proposed
 question completes a benchmark endpoint, and the proposed question count is not a
 coverage forecast or a cap on authoring.
+
+All 30 original proposed combinations have now received a scientific planning
+review. Five were split completely and seven narrowed across the two review passes;
+25 combinations remain conditional. Each retained combination records its biological
+unit, complete artifact set, deterministic checks, incorrect-output checks and
+unresolved input/method decisions. The individual question cards still have uneven
+inspection depth, so this is not yet an implementation-ready portfolio.
+
+Compound-response prediction, scGen expression transfer and CRISPR-response prediction
+now remain separate. Breast-subtype mutations, post-treatment resistance and
+cross-cancer burden also have separate questions. Gastrointestinal segmentation and
+AMOS multi-organ segmentation retain their different modality/class requirements;
+medical image tasks cannot inherit microscopy inputs. Protein sequence-identity
+ranking is separate from database entry/attribute reconciliation.
 
 ## Endpoint contracts
 
@@ -133,7 +147,7 @@ associations and chromosome density also remain separate. Each of its 244 source
 is still assigned once. Required packages remain explicit: the Liu PyDESeq2 endpoint
 requires native PyDESeq2 execution even if an R DESeq2 cross-check is available.
 
-The 28 retained proposed combinations include ortholog metrics, donor pseudobulk expression,
+The 25 retained proposed combinations include ortholog metrics, donor pseudobulk expression,
 count contrasts and enrichment, reference-cell classification, paired RNA/protein
 prediction, receptor/state analysis and spatial neighborhoods. Every combination
 states when one independently observed study can support all its endpoints. For
@@ -141,7 +155,7 @@ example, a two-dimensional section cannot supply a three-dimensional neighborhoo
 endpoint, and a TCR-only study cannot supply BCR V/J outputs. These combinations
 remain conditional until the actual inputs and contracts are fixed.
 
-Eight combinations were narrowed or split after rechecking source questions. The
+The first review narrowed or split eight combinations after rechecking source questions. The
 former donor-pseudobulk group mixed 73 records with different estimands. Sixty-nine
 BAISBench/sc-HeurekaBench records now have 16 separate cards for localization,
 aging, tissue, genotype, sex interaction, disease state and observed host-response

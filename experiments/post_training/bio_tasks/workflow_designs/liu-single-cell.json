@@ -281,7 +281,7 @@
         }
       ],
       "matching_workstreams": [
-        "clinical-response-model"
+        "single-cell-integration"
       ],
       "source_inspection_tiers": [
         "task-description-reviewed"
@@ -293,7 +293,7 @@
         "evaluate held-out expression"
       ],
       "observed_input_requirements": [
-        "De-identified observed cohort with outcome timing, covariates, subject identifiers and documented missingness; no clinical decision support output."
+        "Observed single-cell count/expression layers with cell type, biological replicate and measured condition; training contexts must support the declared scGen transfer. Keep held-out cell-condition observations private."
       ],
       "required_formats": [
         "H5AD"
@@ -305,10 +305,10 @@
         "The requested UMAP endpoint does not test counterfactual expression accuracy; exclude held-out observations from fitting."
       ],
       "proposed_artifact_requirements": [
-        "Cohort inclusion flow, subject-level model matrix, complete coefficient/uncertainty tables, held-out predictions, calibration and subgroup diagnostics"
+        "Cell/sample/feature manifest, exact held-out context and fit-cell IDs, expression transformation, scGen configuration, all predicted gene values and observed-target evaluation sufficient statistics; latent coordinates and UMAP panel data as secondary artifacts."
       ],
       "deterministic_verifier_design": [
-        "Independent likelihood/metric checks and pinned numerical fit; verify temporal eligibility, patient disjointness and outcome encoding; retain uncertainty and missing values."
+        "Check cell-condition exclusion and feature alignment; evaluate complete predictions against private observed expression under a prespecified scale and metric. Run native scGen as the feasibility reference; accept model variability within a frozen performance contract instead of exact latent-coordinate equality. A UMAP alone cannot establish response prediction."
       ],
       "status": "question-proposal-input-and-contract-decisions-pending",
       "validated_new_mappings": 0

@@ -314,7 +314,7 @@
     {
       "proposed_id": "portfolio-biomlbench-medical-image-segmentation",
       "benchmark": "BioML-bench",
-      "scientific_question": "Which segmentation method best recovers independently annotated biological regions under overlap and boundary-distance checks?",
+      "scientific_question": "How accurately can a bounded model delineate gastrointestinal organs in independently annotated medical image series across held-out patients?",
       "source_family": "medical-image-segmentation",
       "benchmark_targets": [
         {
@@ -335,21 +335,24 @@
         "biological-imaging"
       ],
       "required_endpoint_stages": [
-        "join observations to patient, image, sequence or time-series identifiers",
-        "fit and validate the task-specific prediction model while preventing group leakage",
-        "produce the complete submission artifact and apply the released scorer"
+        "Resolve patient, scan, slice, spacing and gastrointestinal class identities",
+        "Fit a bounded organ segmentation model with patient-disjoint evaluation",
+        "Export every requested mask with reversible orientation and encoding",
+        "Compute the pinned overlap and boundary metrics, including absent-organ rules"
       ],
       "observed_input_requirements": [
-        "Observed microscopy/histology images with pixel size, section/subject identifiers and measured annotations; temporal images for dynamics."
+        "Observed medical image series with gastrointestinal organ masks, patient/scan/slice identity, physical spacing and explicit class definitions. Microscopy cell masks do not satisfy this endpoint."
       ],
       "required_formats": [
         "CSV",
         "task-specific biological observations"
       ],
       "proposed_artifact_requirements": [
-        "Image/annotation manifest, masks, object tables, calibration/scale checks, replicate summaries and held-out predictions"
+        "Image and patient manifest, image-to-mask transform, class map, complete masks or losslessly decoded submission masks, per-class overlap and physical boundary-distance sufficient statistics, patient-disjoint fit/evaluation assignments."
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The registry points to UW-Madison gastrointestinal segmentation. BioXArena names AMOS multi-organ segmentation; exact label, modality and metric compatibility has not been established, so retain separate questions."
+      ],
       "deterministic_verification_approach": [
         "Mask/object overlap and geometric invariants against observed annotations; independent sample-level statistics; exact plots are secondary to validated numerical artifacts."
       ],

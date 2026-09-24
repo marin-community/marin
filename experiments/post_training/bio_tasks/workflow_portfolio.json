@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:40:35.143831+00:00",
+  "updated_at": "2026-09-24T15:55:29.084390+00:00",
   "scope": "Full question-proposal portfolio for the 30 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Twelve source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 30,
     "inventory_records": 2881,
     "question_cards": 676,
-    "proposed_task_groups": 629,
-    "conditional_consolidations": 28,
+    "proposed_task_groups": 635,
+    "conditional_consolidations": 25,
     "non_alias_records_linked_to_questions": 2480,
     "known_cross_release_alias_records": 50,
     "identity_only_records_with_gap_dispositions": 350,
@@ -40,7 +40,7 @@
     },
     {
       "path": "workflow_designs/biomlbench.json",
-      "sha256": "491ad2e31d7b63bbb6b5c8409664d97fe5728af55181490615f4f0560f69893f"
+      "sha256": "b573ec9614dd8497c6090658bd6241a005391f869777260ab09832df981ce207"
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
@@ -64,7 +64,7 @@
     },
     {
       "path": "workflow_designs/liu-single-cell.json",
-      "sha256": "52d3f0f2dcf56ffa015510c62e2d6398a447fdecead7d2220cf80ce61c874077"
+      "sha256": "30db27a46a17c3806228a4afae65c38eef976021c5a74e493ef09623b7f00a74"
     },
     {
       "path": "workflow_designs/bio-task-bench.json",
@@ -103,7 +103,15 @@
       "scope_record_count": 47,
       "workstreams": [
         "ortholog-tree-signal"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Orthogroup within clade; taxa are observations within a locus, not extra locus replicates.",
+        "complete_artifacts": "Locus/taxon manifest; every alignment metric, branch metric, tip score and pairwise distance; complete paired and unpaired comparisons.",
+        "deterministic_acceptance": "Native PhyKIT reference plus independent branch/path sums and site counts; explicit SD, quantile, root, gap and zero-denominator rules.",
+        "required_incorrect_output_checks": "Drop one low-signal locus; swap tree/alignment identities; corrupt one patristic distance.",
+        "unresolved_before_assignment": "Input lineage clearance, actual metric definitions and tolerances; measure full native run.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "ortholog-discovery-inference",
@@ -123,7 +131,15 @@
       "scope_record_count": 10,
       "workstreams": [
         "ortholog-tree-signal"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Species and original gene/orthogroup; duplicated isoforms cannot become independent orthologs.",
+        "complete_artifacts": "FASTA/GFF extraction map; BUSCO calls including failures; all retained/excluded groups; alignment and trimmed-column maps; inferred trees and support.",
+        "deterministic_acceptance": "Run native extraction, BUSCO, BLAST where requested, MAFFT, ClipKIT and chosen tree tool; verify CDS phase/strand, memberships, residues, trimmed columns and leaf sets. Freeze deterministic inference or explicitly accepted topology/score equivalence.",
+        "required_incorrect_output_checks": "Supply a precomputed ortholog list without discovery; mismatch GFF phase; drop a duplicate hit; attach a tree to another locus.",
+        "unresolved_before_assignment": "Compatible compact observed genomes, pinned BUSCO lineage and model; complete pipeline must fit 30 minutes.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "reads-to-replicated-expression",
@@ -141,7 +157,15 @@
       "scope_record_count": 2,
       "workstreams": [
         "rna-seq-contrast-enrichment"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Independent biological sample; paired reads are technical mates.",
+        "complete_artifacts": "FASTQ pair manifest and QC; SAM/BAM alignment accounting; gene counts; full sample/design/contrast matrices and all gene effects, SE, p and q.",
+        "deterministic_acceptance": "Pinned aligner/counter and DESeq2; independently check read/sample identities, count conservation, design rank, contrast signs and multiplicity.",
+        "required_incorrect_output_checks": "Swap mates or samples; reverse a contrast; omit filtered genes; treat unreplicated samples as population inference.",
+        "unresolved_before_assignment": "Independent replicated FASTQ/reference/GTF combination; strandedness and count policy; bounded reference/index size.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "count-contrast-enrichment",
@@ -161,7 +185,15 @@
       "scope_record_count": 18,
       "workstreams": [
         "rna-seq-contrast-enrichment"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Biological sample for expression; genes/sets are tested features.",
+        "complete_artifacts": "Complete gene effects before/after shrinkage; eligible universe and identifier map; GO/KEGG memberships; every ORA/GSEA result and semantic-reduction map; numeric plot data.",
+        "deterministic_acceptance": "Native DESeq2 and pinned enrichment methods; independent contrast, overlap, ranking, FDR and universe checks. Freeze ontology release, tie handling, set sizes and undefined-result rules.",
+        "required_incorrect_output_checks": "Use significant genes as the enrichment background; reverse rank direction; substitute ORA for GSEA; omit nonsignificant sets.",
+        "unresolved_before_assignment": "Observed replicated counts, pinned ontology snapshots and exact semantic reduction; prediction/reference set comparison is a separate check within the card.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "single-cell-qc-representation",
@@ -181,7 +213,15 @@
       "scope_record_count": 15,
       "workstreams": [
         "single-cell-qc-embedding"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Cell within biological sample; sample-level conclusions need biological replication.",
+        "complete_artifacts": "Every cell/gene QC decision, layer semantics, feature map, PCA loadings/variance, graph, clusters, embeddings, marker statistics, reference labels and nested lineage membership.",
+        "deterministic_acceptance": "Recompute QC and normalization; check full IDs and PCA reconstruction/subspaces; use label-invariant cluster and geometric checks. Native SingleR, t-SNE and UMAP are separate method outputs where requested.",
+        "required_incorrect_output_checks": "Read normalized values as raw counts; change mitochondrial denominator; omit excluded cells; relabel clusters without preserving membership.",
+        "unresolved_before_assignment": "Count layers, mitochondrial annotation, independent reference and tissue with requested lineage; freeze feature, graph and stochastic method settings.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "donor-pseudobulk-expression",
@@ -199,7 +239,15 @@
       "scope_record_count": 3,
       "workstreams": [
         "single-cell-pseudobulk"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Paired donor and cell type; cells contribute counts, not independent donor replicates.",
+        "complete_artifacts": "All cell QC/assignment decisions, cell-type donor counts, pseudobulk gene counts, paired design, every gene/contrast effect and complete uncertainty/test tables.",
+        "deterministic_acceptance": "Native specified count model plus independent aggregation, donor pairing, rank/contrast and FDR checks; preserve missing or ineligible donor-celltype combinations explicitly.",
+        "required_incorrect_output_checks": "Permute donor pairing; fit cells as replicates; omit zero-count genes; reverse the treatment contrast.",
+        "unresolved_before_assignment": "Independent actually paired cohort, cell-type eligibility, feature filter, design, contrast and shrinkage settings.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "reference-cell-classification",
@@ -221,7 +269,15 @@
       "workstreams": [
         "single-cell-annotation",
         "single-cell-integration"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Held-out donor/study; query cells never enter reference training.",
+        "complete_artifacts": "Feature correspondence, fit/query donor assignment, label hierarchy, classifier predictions/scores, majority votes and all private-label metric counts.",
+        "deterministic_acceptance": "Run native CellTypist; verify training/query separation and label vocabulary; compute full accuracy/confusion and uncertainty endpoints from private labels. Reference-derived truth must be labeled as such.",
+        "required_incorrect_output_checks": "Leak query labels into fitting; omit unknown populations; majority-vote across unrelated sample groups; drop difficult cells.",
+        "unresolved_before_assignment": "Independent reference and query annotations; source-specific unknown-label policy; BioXArena full prompts are still unavailable.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "paired-rna-protein-prediction",
@@ -242,28 +298,15 @@
       "scope_record_count": 4,
       "workstreams": [
         "single-cell-integration"
-      ]
-    },
-    {
-      "proposed_task_id": "held-out-perturbation-expression",
-      "scientific_question": "Which expression responses to independently measured benign perturbation-context combinations can be predicted from observed training contexts?",
-      "question_card_ids": [
-        "portfolio-biomlbench-held-out-perturbation-response",
-        "portfolio-liu-single-cell-perturbation-response-prediction",
-        "biox-design-perturbation-dynamics-crispr-perturbation-prediction"
       ],
-      "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Biological replicate and perturbation identity must define the held-out boundary; a random cell split is inadequate. Preserve the specific Liu native model and source perturbation level. Frozen baseline and mean-prediction controls must precede solver evaluation.",
-      "benchmark_record_scope": {
-        "BioML-bench": 1,
-        "BioXArena": 1,
-        "Liu-single-cell": 1
-      },
-      "scope_record_count": 3,
-      "workstreams": [
-        "clinical-response-model",
-        "single-cell-integration"
-      ]
+      "acceptance_planning_review": {
+        "biological_unit": "Donor and paired cell; no random-cell substitute for donor generalization.",
+        "complete_artifacts": "Cell and antibody maps, raw/normalized layers, donor fit/query assignment, totalVI settings, complete predicted protein matrix and per-protein metrics.",
+        "deterministic_acceptance": "Native totalVI oracle; identity/layer checks and metrics against private paired measurements. Reject missing or constant target columns explicitly; undefined correlation must not earn the source scorer midpoint.",
+        "required_incorrect_output_checks": "Expose query ADT to fitting; permute antibody IDs; output constants; omit proteins with poor predictions.",
+        "unresolved_before_assignment": "Paired donor data and background controls, scale-specific evaluation, frozen baseline threshold and bounded training time; BioXArena schemas pending.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "weighted-expression-modules",
@@ -281,7 +324,15 @@
       "scope_record_count": 3,
       "workstreams": [
         "gene-program-factorization"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Independent spinal-cord sample with documented disease status; genes are network nodes.",
+        "complete_artifacts": "Sample QC, transformation, all tested powers, weighted network definition, module assignments/eigengenes, membership, trait tests and separate thresholded edges/hubs.",
+        "deterministic_acceptance": "Native WGCNA; independently check correlations, module sizes, eigengene reconstruction up to sign and multiplicity. Freeze signedness, power criterion, merge rule and module-label invariance.",
+        "required_incorrect_output_checks": "Replace WGCNA with a thresholded graph; count cells as spinal-cord subjects; reverse eigengene sign without updating trait effects.",
+        "unresolved_before_assignment": "Independent disease-relevant spinal-cord cohort with enough subjects; full gene/network memory bound and stable module acceptance.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "expression-subtype-stability",
@@ -302,7 +353,15 @@
       "workstreams": [
         "gene-program-factorization",
         "multimodal-clinical-discovery"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Patient; repeated specimens stay together during resampling and evaluation.",
+        "complete_artifacts": "Input transform, PCA, every resample/split, cluster-label matching, consensus opportunities/agreements, memberships, factor-rank results, pathway and pathology tests.",
+        "deterministic_acceptance": "Native specified clustering/factorization; independently reconstruct consensus denominators and held-out membership predictions. Freeze label-invariant acceptance and keep pathology out of rank/cluster selection.",
+        "required_incorrect_output_checks": "Use pathology to choose K; omit failed resamples; divide agreement by all iterations instead of pair co-occurrence.",
+        "unresolved_before_assignment": "Independent liver expression with pathology; source underspecified bootstrap/train-test policy must be frozen; bounded complete resampling run.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "observed-guide-screen-effects",
@@ -321,7 +380,15 @@
       "workstreams": [
         "crispr-screen-pathway",
         "target-evidence"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Guide within gene, biological replicate and observed screen round.",
+        "complete_artifacts": "Full guide counts and identities, negative-control roles, normalization factors, guide/gene effect tables, round/replicate summaries and complete tested pathways.",
+        "deterministic_acceptance": "Native screen method plus independent guide mapping, library totals, replicate contrasts and set membership checks; pin null controls and multiple-testing universe.",
+        "required_incorrect_output_checks": "Pool biological rounds before the requested comparison; treat guides as independent biological replicates; omit negative controls or failed guides.",
+        "unresolved_before_assignment": "Independent observed screen with requested rounds/replication; exact guide-to-gene exclusions, enrichment universe and native method.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "paired-protein-effects",
@@ -340,7 +407,15 @@
       "workstreams": [
         "dose-response",
         "proteomics-metabolomics"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Patient pair; peptides map to proteins under a frozen grouping rule.",
+        "complete_artifacts": "Sample/patient map, measured/missing intensities and scale, normalization factors, every protein effect/uncertainty/test and ranked result.",
+        "deterministic_acceptance": "Pinned proteomics model; independent pairing, scale transformation, mean/effect and multiplicity checks. Freeze missing-not-at-random treatment rather than replacing all absent intensities by zero.",
+        "required_incorrect_output_checks": "Lose patient pairing; log already logged values; silently impute zero; return only significant proteins.",
+        "unresolved_before_assignment": "Observed paired abundance study, protein inference/measurement provenance, explicit missing-value policy and complete tested universe.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "cross-assay-effect-concordance",
@@ -358,7 +433,15 @@
       "scope_record_count": 4,
       "workstreams": [
         "proteomics-metabolomics"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Matched subject or explicitly comparable independent contrast; identifier aliases are not new features.",
+        "complete_artifacts": "RNA/protein identity and isoform map, eligible matched universe, separate full assay effects, joint directions/ranks, correlation/uncertainty and pathway memberships.",
+        "deterministic_acceptance": "Compute each assay model separately; independently check join multiplicity, contrast signs, correlation and prespecified joint-signal formula.",
+        "required_incorrect_output_checks": "Correlate unmatched patients; mix linear and log effects; duplicate a protein-to-gene mapping; flip one contrast.",
+        "unresolved_before_assignment": "Observed comparable contrasts, one-to-many identity policy, joint-effect scale and pathway combination rule.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "paired-repertoire-cell-states",
@@ -380,7 +463,15 @@
       "scope_record_count": 7,
       "workstreams": [
         "immune-repertoire"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Observed paired receptor chains and RNA from the same cells, grouped by donor/sample.",
+        "complete_artifacts": "Complete barcode/sample/chain/productivity map, receptor QC, paired clonotypes, expansion/sharing denominators, RNA states, all clone-state associations and sort-gate evidence where required.",
+        "deterministic_acceptance": "Native receptor tools on their required input boundary; independently reconstruct chain pairing, clone membership and full denominators. Distinguish observed transcriptional labels from experimental sorting and cancer context.",
+        "required_incorrect_output_checks": "Pair chains across cells; collapse identical barcodes across donors; count cells as donors; infer tumor exhaustion from an unrelated developmental cohort.",
+        "unresolved_before_assignment": "Independent paired TCR/RNA study with actual required sorting/disease metadata; observed reads are mandatory for any claimed raw-read assembly.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "assembly-read-support",
@@ -398,26 +489,40 @@
       "scope_record_count": 4,
       "workstreams": [
         "assembly-qc"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Original contig and observed read pair; overlapping fragments are not independent genomes.",
+        "complete_artifacts": "All contig sequences/lengths, length-weighted N50, read alignments/coverage, every proposed overlap/join with evidence and full mismatch/base totals.",
+        "deterministic_acceptance": "Native assembly/alignment where claimed; independently recompute N50, join orientation/extent and error denominators. A reference alignment and read support are distinct evidence.",
+        "required_incorrect_output_checks": "Use the median contig length for N50; reverse a join; drop mismatches; use unsupported duplicate fragments to inflate coverage.",
+        "unresolved_before_assignment": "Observed assembly with informative contig joins; existing PhiX N50 evidence alone does not validate this expanded task.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "protein-identity-attribute-audit",
-      "scientific_question": "Which protein identities and attributes agree across frozen independent database records, and which entries remain ambiguous or unresolved?",
+      "scientific_question": "Which versioned protein entries and attributes in an independent frozen graph agree with their source records, and which are obsolete, contradicted or unresolved?",
       "question_card_ids": [
         "portfolio-biokgbench-protein-attribute-reconciliation",
-        "portfolio-biokgbench-database-entry-reconciliation",
-        "portfolio-drugdiscoverybench-protein-identity-ranking"
+        "portfolio-biokgbench-database-entry-reconciliation"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Version, taxonomy, accession aliases and provenance must be explicit. Closed-world absence is not biological nonexistence; ranking criteria remain distinct from identity reconciliation. KGCheck literature/negation endpoints may remain partial adaptations.",
+      "condition_for_one_task": "Use the same frozen graph and source exports for entry and field reconciliation. Protein-sequence candidate ranking remains separate; literature entailment and biological absence are not established by structured joins.",
       "benchmark_record_scope": {
-        "BioKGBench KGCheck": 100,
-        "DrugDiscoveryBench public preview": 1
+        "BioKGBench KGCheck": 100
       },
-      "scope_record_count": 101,
+      "scope_record_count": 100,
       "workstreams": [
         "database-identity-evidence"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Versioned protein accession and isoform within species/source release.",
+        "complete_artifacts": "All queried identifiers, aliases, version history, node presence, source attributes, field-level agreements/contradictions and scoped unknown states.",
+        "deterministic_acceptance": "Exact frozen joins and field comparison with provenance. Explicit evidence rules distinguish absent fields, obsolete records and absent entries; no unrestricted literature-entailment credit.",
+        "required_incorrect_output_checks": "Treat missing graph node as biological nonexistence; merge species/isoforms; drop contradictory fields.",
+        "unresolved_before_assignment": "Independent frozen graph/source export and machine-checkable predicates; open literature claims remain an uncovered objective.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "directed-interaction-evidence",
@@ -435,7 +540,15 @@
       "scope_record_count": 130,
       "workstreams": [
         "database-identity-evidence"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Typed entity pair, relation and experimental context in a frozen evidence release.",
+        "complete_artifacts": "Complete query/entity map, every candidate directed edge, evidence/source identifiers, context, support class and unresolved/contradicted states.",
+        "deterministic_acceptance": "Independently recompute directed typed joins under explicit evidence rules; citations must point to correct entries. Grade structured predicates only, with no inference from citation presence to entailment.",
+        "required_incorrect_output_checks": "Reverse an edge; substitute predicted association for measured interaction; turn missing evidence into a negative experimental result.",
+        "unresolved_before_assignment": "Independent evidence exports, relation-specific rules and exact coverage limit for source literature questions.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "structure-ligand-contacts",
@@ -454,7 +567,15 @@
       "scope_record_count": 10,
       "workstreams": [
         "ligand-structure-affinity"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Observed complex/assembly, chain, residue and ligand atom with model/alternate-location identity.",
+        "complete_artifacts": "mmCIF/PDB and component manifest, assembly transforms, complete selected atom/residue map, ligand identity/bonds, all required distances/contacts and exclusions.",
+        "deterministic_acceptance": "Native structure parser/chemistry tool plus independent coordinate-distance calculations; freeze occupancy/alternate-location rules, contact cutoffs, waters/metals and ligand identity criteria.",
+        "required_incorrect_output_checks": "Use asymmetric-unit coordinates for a biological-assembly claim; confuse residue and atom indices; merge alternate conformers; substitute a protein-DNA contact.",
+        "unresolved_before_assignment": "Independent observed complex with unambiguous ligand and required biological assembly; exact chemical identity and contact definitions.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "structure-affinity-generalization",
@@ -474,7 +595,15 @@
       "scope_record_count": 3,
       "workstreams": [
         "ligand-structure-affinity"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Measured target-ligand assay, with target-family/scaffold groups for held-out evaluation.",
+        "complete_artifacts": "Structure/ligand/assay joins, units and censoring, full fit/query group map, feature/model configuration, every affinity prediction and complete ranking/regression sufficient statistics.",
+        "deterministic_acceptance": "Native baseline checks feasibility; independently validate assay identity, unit conversion, grouping and frozen metrics against private measured affinity. Prediction scores do not establish mechanistic binding explanations.",
+        "required_incorrect_output_checks": "Mix IC50 with Kd without a declared model; leak a scaffold/target family; expose query affinity; drop censored or poorly predicted compounds.",
+        "unresolved_before_assignment": "Independent measured structure/affinity collection, compatible assay semantics, bounded native model and metric acceptance; BioXArena full prompt pending.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "population-genotype-qc",
@@ -493,7 +622,15 @@
       "scope_record_count": 6,
       "workstreams": [
         "population-genetics"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Participant; related individuals are retained for kinship but controlled in population-reference estimation.",
+        "complete_artifacts": "VCF allele/sample eligibility, genotype counts, full pairwise kinship/IBS, reference selection, PCs, uncertainty, all site frequency/HWE/Fst components and outlier decisions.",
+        "deterministic_acceptance": "Pinned genotype tools plus independent allele-count, missingness and Fst denominator checks; verify relationship classes and projection against frozen definitions. Genetic ancestry and reported population labels remain separate.",
+        "required_incorrect_output_checks": "Swap reference alleles without dosage recoding; train ancestry axes on duplicates; drop monomorphic sites silently; replace weighted Fst with mean site ratios.",
+        "unresolved_before_assignment": "Independently licensed VCF/reference cohort with relatedness evidence; estimator, LD pruning, uncertainty and outlier criteria.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "spatial-neighborhood-enrichment",
@@ -511,7 +648,15 @@
       "scope_record_count": 2,
       "workstreams": [
         "spatial-expression"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Cell within section and biological subject; neighborhood edges are dependent observations.",
+        "complete_artifacts": "Coordinate/cell-type/sample manifest, complete graph edges, every tested type pair, observed/expected counts, null strata, effect/statistic/p/q and section-level summaries.",
+        "deterministic_acceptance": "Native specified spatial methods plus independent distance/graph and type-pair counts; freeze physical radius, boundary policy, density correction and within-section null.",
+        "required_incorrect_output_checks": "Use UMAP coordinates; permute across subjects; treat one volume as replicated conditions; omit depleted/nonsignificant pairs.",
+        "unresolved_before_assignment": "Independent replicated sections with physical coordinates and cell identities; eligibility, null and section-to-subject aggregation rules.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "spatial-variable-expression",
@@ -531,7 +676,15 @@
       "scope_record_count": 5,
       "workstreams": [
         "spatial-expression"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Biological section/subject; spots are spatially dependent observations.",
+        "complete_artifacts": "Coordinate and count manifest, neighborhood/weight matrices, every gene statistic/p/q, null settings, ranked genes, domain membership and Hotspot module scores.",
+        "deterministic_acceptance": "Native named autocorrelation and Hotspot methods; independently check coordinate/feature joins, graph weights, FDR and ranking. Each null/normalization is recorded separately.",
+        "required_incorrect_output_checks": "Use embedding coordinates as physical positions; omit nonsignificant genes; shuffle between unrelated sections; substitute one method p-value for another.",
+        "unresolved_before_assignment": "Observed sections, physical units and appropriate replication; replace the BioML synthetic source openly, without claiming the same data distribution.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "methylation-chromosome-density",
@@ -549,7 +702,15 @@
       "scope_record_count": 7,
       "workstreams": [
         "methylation-expression"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Unique genomic CpG and biological sample; repeated probes/sites must be reconciled.",
+        "complete_artifacts": "BED coordinate map, all eligibility/age/extreme flags, sample methylated/total counts where available, callable/reference lengths and separate chromosome tests.",
+        "deterministic_acceptance": "Independent unique-site counts, coordinate convention, density and expected-count reconstruction; freeze methylation, age-association and extreme thresholds.",
+        "required_incorrect_output_checks": "Use chromosome length in a callable-space test; count duplicate sites twice; replace all eligible sites by significant extremes.",
+        "unresolved_before_assignment": "Independent age-annotated methylation observations plus reference/callability evidence; exact test and multiplicity rules.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "measured-rna-folding",
@@ -569,44 +730,15 @@
       "scope_record_count": 4,
       "workstreams": [
         "small-rna-sequence-structure"
-      ]
-    },
-    {
-      "proposed_task_id": "donor-aware-mutation-cohort",
-      "scientific_question": "Which patient-level alteration frequencies, co-occurrences and mutation burdens differ across independently observed tumor subgroups?",
-      "question_card_ids": [
-        "biomni-design-20-breast-subtype-mutation-landscape",
-        "biomni-design-21-endocrine-resistance-events",
-        "promptbio-design-mutation-cohort-summary"
       ],
-      "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Independent cohort must support the specified tissue, receptor and treatment subgroups; retain callable territory and post-treatment timing. General tumor frequency summaries cannot satisfy a resistance-specific clinical objective without measured context.",
-      "benchmark_record_scope": {
-        "BiomniBench-DA": 3,
-        "PromptBio-Bench": 5
-      },
-      "scope_record_count": 8,
-      "workstreams": [
-        "clinical-variant-cohort"
-      ]
-    },
-    {
-      "proposed_task_id": "observed-image-segmentation",
-      "scientific_question": "How accurately does a bounded native segmentation workflow recover independently annotated anatomical regions on held-out subjects?",
-      "question_card_ids": [
-        "portfolio-biomlbench-medical-image-segmentation",
-        "biox-design-imaging-amos-organ-segmentation"
-      ],
-      "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Use genuinely observed image/mask pairs with physical spacing; preserve class sets and both overlap and boundary metrics where required. BioXArena's full modality/schema must be reviewed; an unrelated cell mask does not count as organ segmentation.",
-      "benchmark_record_scope": {
-        "BioML-bench": 1,
-        "BioXArena": 1
-      },
-      "scope_record_count": 2,
-      "workstreams": [
-        "biological-imaging"
-      ]
+      "acceptance_planning_review": {
+        "biological_unit": "Versioned complete transcript/isoform.",
+        "complete_artifacts": "Accession/sequence provenance, FASTA, all dot-bracket/MFE/ensemble outputs, full pairing-probability data, units and plot data.",
+        "deterministic_acceptance": "Native pinned folding tool/parameters; check sequence identity, bracket validity, base-pair indexing and probability bounds/sums. Freeze temperature, constraints and pseudoknot scope.",
+        "required_incorrect_output_checks": "Fold a truncated transcript; shift pair indices; report energy in wrong units; present predicted pairs as observed structure.",
+        "unresolved_before_assignment": "Independent observed sequences and exact isoforms; length/runtime bounds and thermodynamic model.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "observed-lesion-classification",
@@ -624,7 +756,15 @@
       "scope_record_count": 2,
       "workstreams": [
         "biological-imaging"
-      ]
+      ],
+      "acceptance_planning_review": {
+        "biological_unit": "Patient and lesion; multiple views of a lesion stay together.",
+        "complete_artifacts": "Image/patient/lesion manifest, label dictionary, fit/query groups, full class probabilities and predictions, confusion counts and all source metrics.",
+        "deterministic_acceptance": "Compute metrics against private observed diagnostic labels, including positive-class conventions and probabilities. Check label provenance, class imbalance and a frozen baseline.",
+        "required_incorrect_output_checks": "Split alternate views across fit/query; invert positive label; omit rare classes; return labels when probabilities are required.",
+        "unresolved_before_assignment": "Independent licensed images and recorded diagnostic evidence; source prompt taxonomy and bounded model weights/runtime.",
+        "status": "planning-contract-not-executed"
+      }
     },
     {
       "proposed_task_id": "biomni-design-01-tumor-cell-enrichment",
@@ -9640,6 +9780,141 @@
       "workstreams": [
         "observed-dynamics"
       ]
+    },
+    {
+      "proposed_task_id": "biomni-design-20-breast-subtype-mutation-landscape",
+      "scientific_question": "How do patient-level alteration frequencies differ across independently observed receptor-defined breast-cancer subgroups?",
+      "question_card_ids": [
+        "biomni-design-20-breast-subtype-mutation-landscape"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "BiomniBench-DA": 1
+      },
+      "workstreams": [
+        "clinical-variant-cohort"
+      ]
+    },
+    {
+      "proposed_task_id": "biomni-design-21-endocrine-resistance-events",
+      "scientific_question": "Among independently observed post-treatment receptor-positive tumors, how prevalent are pathway alterations and how do they co-occur with a prespecified resistance gene?",
+      "question_card_ids": [
+        "biomni-design-21-endocrine-resistance-events"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 2,
+      "benchmark_record_scope": {
+        "BiomniBench-DA": 2
+      },
+      "workstreams": [
+        "clinical-variant-cohort"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-biomlbench-medical-image-segmentation",
+      "scientific_question": "How accurately can a bounded model delineate gastrointestinal organs in independently annotated medical image series across held-out patients?",
+      "question_card_ids": [
+        "portfolio-biomlbench-medical-image-segmentation"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "BioML-bench": 1
+      },
+      "workstreams": [
+        "biological-imaging"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-biomlbench-held-out-perturbation-response",
+      "scientific_question": "Which expression responses to held-out benign perturbation-context pairs can be predicted from measured training contexts?",
+      "question_card_ids": [
+        "portfolio-biomlbench-held-out-perturbation-response"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "BioML-bench": 1
+      },
+      "workstreams": [
+        "single-cell-integration"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-mutation-cohort-summary",
+      "scientific_question": "How do observed mutation burdens and co-occurrence patterns differ across eligible tumor cohorts under explicit callable-territory denominators?",
+      "question_card_ids": [
+        "promptbio-design-mutation-cohort-summary"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 5,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 5
+      },
+      "workstreams": [
+        "clinical-variant-cohort"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-drugdiscoverybench-protein-identity-ranking",
+      "scientific_question": "Which observed protein records satisfy explicit identity, taxonomy and annotation criteria with stable tie handling?",
+      "question_card_ids": [
+        "portfolio-drugdiscoverybench-protein-identity-ranking"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "DrugDiscoveryBench public preview": 1
+      },
+      "workstreams": [
+        "database-identity-evidence"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-liu-single-cell-perturbation-response-prediction",
+      "scientific_question": "Which expression responses can be predicted for a held-out benign cell-condition combination from measured training contexts?",
+      "question_card_ids": [
+        "portfolio-liu-single-cell-perturbation-response-prediction"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "Liu-single-cell": 1
+      },
+      "workstreams": [
+        "single-cell-integration"
+      ]
+    },
+    {
+      "proposed_task_id": "biox-design-imaging-amos-organ-segmentation",
+      "scientific_question": "How accurately does a bounded segmentation method recover measured organ masks on held-out subjects under physical-coordinate and label conventions?",
+      "question_card_ids": [
+        "biox-design-imaging-amos-organ-segmentation"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "BioXArena": 1
+      },
+      "workstreams": [
+        "biological-imaging"
+      ]
+    },
+    {
+      "proposed_task_id": "biox-design-perturbation-dynamics-crispr-perturbation-prediction",
+      "scientific_question": "Can a bounded model predict measured gene-expression responses to held-out benign perturbations across biological replicates?",
+      "question_card_ids": [
+        "biox-design-perturbation-dynamics-crispr-perturbation-prediction"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "BioXArena": 1
+      },
+      "workstreams": [
+        "single-cell-integration"
+      ]
     }
   ],
   "planning_review_order": [
@@ -9694,7 +9969,7 @@
     {
       "rank": 9,
       "proposed_task_id": "protein-identity-attribute-audit",
-      "reason": "Many source records share identity/attribute checks; structured evidence is deterministically verifiable but open-world biological absence and literature entailment remain separate gaps.",
+      "reason": "Entry and attribute reconciliation share frozen evidence. Sequence-identity ranking is separate; unrestricted literature entailment remains a gap.",
       "predicted_validated_gain": null
     },
     {
@@ -9735,8 +10010,8 @@
     },
     {
       "rank": 16,
-      "proposed_task_id": "held-out-perturbation-expression",
-      "reason": "Real held-out perturbation contexts test generalization; separate biological groups and freeze model/metric feasibility first.",
+      "proposed_task_id": "portfolio-biomlbench-held-out-perturbation-response",
+      "reason": "Freeze compound/cell-type DE-target prediction separately from scGen expression transfer and CRISPR response prediction; the three interventions/targets are not interchangeable.",
       "predicted_validated_gain": null
     },
     {
@@ -9770,7 +10045,8 @@
     "Every question appears exactly once in the portfolio; all proposed merges preserve every member endpoint by reference.",
     "Before implementation assignment: resolve each selected question into independent input accession/license/checksum and exact schemas, method versions, scientific estimand, complete private oracle/verifier contract and bounded runtime design.",
     "Preserve unsupported source objectives and inaccessible releases in the ledger instead of manufacturing equivalence.",
-    "Review the full source-level portfolio and cross-benchmark consolidation before launching task-creation agents. No implementation agent is assigned by this file."
+    "Review the full source-level portfolio and cross-benchmark consolidation before launching task-creation agents. No implementation agent is assigned by this file.",
+    "All 30 originally proposed cross-card combinations now have a planning review; 25 remain conditional. Before calling the full plan ready, resolve individual-card acceptance gaps, uninspected prompt schemas and the missing source inventories or record an explicit scoped disposition for each."
   ],
   "assignment_contract": {
     "unit": "One coherent scientific question with all inherited endpoint requirements and one task by default.",
@@ -9821,7 +10097,7 @@
   "consolidation_review": {
     "reviewed_at": "2026-09-24",
     "basis_revision": "5d9d83cc0a",
-    "scope": "Eight proposed combinations were revised after inspecting exact permitted question stems, inherited endpoint stages and source-study metadata. This is scientific planning review; no input payload or reference execution was validated.",
+    "scope": "All 30 original conditional combinations have a scientific planning disposition: retain conditionally, narrow or split. Twenty-two received endpoint/output review after the first eight refinements. This review does not clear input provenance, establish full benchmark equivalence or execute an oracle.",
     "question_record_refinement": {
       "records": 69,
       "previous_broad_cards": 4,
@@ -9872,8 +10148,146 @@
         "previous_group_id": "structure-affinity-generalization",
         "decision": "narrow",
         "reason": "Pose/force-field hypothesis ranking has source-specific physical assumptions and acceptance gaps; it is not identical to held-out prediction against measured affinity."
+      },
+      {
+        "previous_group_id": "ortholog-signal-comparison",
+        "decision": "retain-conditional",
+        "reason": "One matched orthogroup supplies tree and alignment endpoints; source rooting and residue conventions still need reconciliation."
+      },
+      {
+        "previous_group_id": "ortholog-discovery-inference",
+        "decision": "retain-conditional",
+        "reason": "Discovery requires actual annotated genomes/proteomes. Previously inherited precomputed-locus inputs only support downstream stages."
+      },
+      {
+        "previous_group_id": "reads-to-replicated-expression",
+        "decision": "retain-conditional",
+        "reason": "Read processing and replicated expression can share one experiment. The source two-sample construction needs an explicitly corrected replicated adaptation."
+      },
+      {
+        "previous_group_id": "count-contrast-enrichment",
+        "decision": "retain-conditional",
+        "reason": "Count-model effects, selected-set enrichment and ranked enrichment form one analysis only with separately specified universes."
+      },
+      {
+        "previous_group_id": "single-cell-qc-representation",
+        "decision": "retain-conditional",
+        "reason": "QC, representations and nested lineage analysis can use one count collection; each named algorithm and annotation stage remains required."
+      },
+      {
+        "previous_group_id": "reference-cell-classification",
+        "decision": "retain-conditional",
+        "reason": "Reference projection shares identities and labels; closed-set classification and unknown-cell detection must remain separately scored."
+      },
+      {
+        "previous_group_id": "paired-rna-protein-prediction",
+        "decision": "retain-conditional",
+        "reason": "One paired RNA/ADT study supports reconstruction, but normalized prediction and totalVI count likelihood require separate layers."
+      },
+      {
+        "previous_group_id": "held-out-perturbation-expression",
+        "decision": "split",
+        "reason": "Chemical compound DE-target prediction, scGen cell-condition expression transfer and CRISPR response prediction have different intervention and target definitions. Preserve all three cards separately.",
+        "acceptance_planning_review": {
+          "biological_unit": "Compound-celltype combination, cell-condition combination or guide/target perturbation according to the separate card.",
+          "complete_artifacts": "Each card needs its own perturbation identity, control definition, target transformation, fit/query manifest and complete gene predictions.",
+          "deterministic_acceptance": "Use the actual observed intervention and native method; score DE targets with specified RMSE, expression transfer on its declared layer, and CRISPR response only from measured genetic perturbations.",
+          "required_incorrect_output_checks": "Treat a chemical condition as a CRISPR knockout; score expression against DE statistics; leak held-out context cells.",
+          "unresolved_before_assignment": "Independent input series and a separate metric/baseline per question; a shared model architecture does not justify a merged task.",
+          "status": "planning-contract-not-executed"
+        }
+      },
+      {
+        "previous_group_id": "weighted-expression-modules",
+        "decision": "retain-conditional",
+        "reason": "WGCNA and thresholded-correlation views can share the same sample matrix; the latter cannot replace native weighted-network construction."
+      },
+      {
+        "previous_group_id": "expression-subtype-stability",
+        "decision": "retain-conditional",
+        "reason": "A liver patient cohort can support subtype stability and pathology association. Each resampling and factorization protocol needs separate outputs."
+      },
+      {
+        "previous_group_id": "paired-protein-effects",
+        "decision": "retain-conditional",
+        "reason": "Replicated protein effects and abundance summaries can share paired intensities; raw spectrum identification is outside this boundary."
+      },
+      {
+        "previous_group_id": "cross-assay-effect-concordance",
+        "decision": "retain-conditional",
+        "reason": "Comparable RNA/protein contrasts support effect concordance; sample-level correlation requires actually matched samples."
+      },
+      {
+        "previous_group_id": "assembly-read-support",
+        "decision": "retain-conditional",
+        "reason": "Contiguity, joins and mismatch accounting can share an assembly only when the chosen observed data actually contain evaluable joins and errors."
+      },
+      {
+        "previous_group_id": "protein-identity-attribute-audit",
+        "decision": "narrow",
+        "reason": "Keep graph attribute and entry-version reconciliation together; sequence-identity candidate ranking is a separate scientific question and grader."
+      },
+      {
+        "previous_group_id": "directed-interaction-evidence",
+        "decision": "retain-conditional",
+        "reason": "Typed directed relations can share structured evidence contracts. Unrestricted literature interpretation remains outside deterministic structured coverage."
+      },
+      {
+        "previous_group_id": "population-genotype-qc",
+        "decision": "retain-conditional",
+        "reason": "Kinship, reference projection and population summary QC can share observed genotypes if relation and population evidence are actually available."
+      },
+      {
+        "previous_group_id": "spatial-variable-expression",
+        "decision": "retain-conditional",
+        "reason": "Spatial variability, domains and Hotspot modules can share observed sections with method-specific spatial nulls."
+      },
+      {
+        "previous_group_id": "methylation-chromosome-density",
+        "decision": "retain-conditional",
+        "reason": "Extreme age-associated sites and all callable sites can share measured methylation only with separate site sets and denominator definitions."
+      },
+      {
+        "previous_group_id": "measured-rna-folding",
+        "decision": "retain-conditional",
+        "reason": "Sequence retrieval and folding can share transcripts; predicted structure is a model output and carries no experimental-structure accuracy claim."
+      },
+      {
+        "previous_group_id": "donor-aware-mutation-cohort",
+        "decision": "split",
+        "reason": "Receptor-defined breast subtype frequency, post-treatment resistance and cross-cancer mutation burden require different cohort eligibility and denominators. Preserve all three questions.",
+        "acceptance_planning_review": {
+          "biological_unit": "Patient with specified tissue, receptor status, treatment timing and callable territory for each question.",
+          "complete_artifacts": "Separate cohort flows, patient/sample maps, all qualifying variants/events, denominator tables and full subgroup/co-occurrence/burden tests.",
+          "deterministic_acceptance": "Recompute patient-level event logic and callable denominators under each cohort-specific protocol. Never infer therapy resistance from generic tumor alteration frequency.",
+          "required_incorrect_output_checks": "Treat pretreatment samples as resistance cases; count repeated biopsies as patients; use a breast-only cohort for cross-cancer burden comparisons.",
+          "unresolved_before_assignment": "Independent study with the actual tissue/timing/callability needed by each card; do not replace absent clinical context with labels.",
+          "status": "planning-contract-not-executed"
+        }
+      },
+      {
+        "previous_group_id": "observed-image-segmentation",
+        "decision": "split",
+        "reason": "UW-Madison gastrointestinal segmentation and AMOS multi-organ prediction have unconfirmed modality, label and metric equivalence. Preserve separate cards and exact source scope.",
+        "acceptance_planning_review": {
+          "biological_unit": "Patient and scan; adjacent slices stay in one fit/evaluation group.",
+          "complete_artifacts": "Each task exports image/scan manifest, spacing/orientation map, exact organ classes and every required mask with reversible encoding.",
+          "deterministic_acceptance": "Independent per-class overlap and physical boundary metrics with absent-organ rules; grade complete held-out masks. Native baseline feasibility does not require exact learned-mask equality.",
+          "required_incorrect_output_checks": "Mix patient slices across fit/query; resize masks without coordinate transform; drop absent/poorly predicted organs.",
+          "unresolved_before_assignment": "Independent licensed medical images and masks, exact source prompt/scorer and bounded training approach; microscopy is not a substitute.",
+          "status": "planning-contract-not-executed"
+        }
+      },
+      {
+        "previous_group_id": "observed-lesion-classification",
+        "decision": "retain-conditional",
+        "reason": "Recorded lesion diagnoses and patient-level evaluation may share one image study only after source label taxonomies agree."
       }
-    ]
+    ],
+    "latest_basis_revision": "da03ab7b69",
+    "original_combinations_reviewed": 30,
+    "current_conditional_combinations": 25,
+    "current_combination_acceptance_reviews": 25
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",

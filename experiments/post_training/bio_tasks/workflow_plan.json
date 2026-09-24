@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:40:35.143831+00:00",
+  "updated_at": "2026-09-24T15:55:29.084390+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -61,7 +61,7 @@
     "validated_coverage_added_by_plan": 0,
     "unrouted_family_groups": 0,
     "detailed_question_cards": 676,
-    "proposed_task_groups_after_conditional_consolidation": 629
+    "proposed_task_groups_after_conditional_consolidation": 635
   },
   "workstreams": [
     {
@@ -13185,7 +13185,7 @@
     },
     {
       "path": "workflow_designs/biomlbench.json",
-      "sha256": "491ad2e31d7b63bbb6b5c8409664d97fe5728af55181490615f4f0560f69893f",
+      "sha256": "b573ec9614dd8497c6090658bd6241a005391f869777260ab09832df981ce207",
       "benchmark_id": "BioML-bench",
       "inventory_records_assigned": 406,
       "proposed_question_cards": 25,
@@ -13241,7 +13241,7 @@
     },
     {
       "path": "workflow_designs/liu-single-cell.json",
-      "sha256": "52d3f0f2dcf56ffa015510c62e2d6398a447fdecead7d2220cf80ce61c874077",
+      "sha256": "30db27a46a17c3806228a4afae65c38eef976021c5a74e493ef09623b7f00a74",
       "benchmark_id": "Liu-single-cell",
       "inventory_records_assigned": 63,
       "excluded_records": 0,
@@ -13295,13 +13295,13 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "ffa616b07fc7f3c44209c366ff0f57fe5cf1c03e67e86e781332f3572d90e587",
+    "sha256": "e8ba40d1f1d42e75fbb12c418a6ff7ca1935e5ec9bcbfca20e8639be344c6495",
     "counts": {
       "source_releases": 30,
       "inventory_records": 2881,
       "question_cards": 676,
-      "proposed_task_groups": 629,
-      "conditional_consolidations": 28,
+      "proposed_task_groups": 635,
+      "conditional_consolidations": 25,
       "non_alias_records_linked_to_questions": 2480,
       "known_cross_release_alias_records": 50,
       "identity_only_records_with_gap_dispositions": 350,
