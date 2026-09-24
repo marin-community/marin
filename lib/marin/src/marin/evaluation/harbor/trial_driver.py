@@ -43,6 +43,8 @@ _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_ACP_AGENT_PREFIX = "acp:"
+_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -138,9 +140,9 @@ def _validate_agent(agent: AgentConfig) -> str:
         agent_class = _resolve_import_path(agent.import_path, "agent")
         _validate_agent_callbacks(agent_class, agent.import_path)
         return agent.import_path
-    if agent.name is None or agent.name not in AgentName.values():
+    if agent.name is None or (agent.name not in AgentName.values() and not agent.name.startswith(_ACP_AGENT_PREFIX)):
         raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    agent_name = AgentName(agent.name)
+    agent_name = AgentName.ACP if agent.name.startswith(_ACP_AGENT_PREFIX) else AgentName(agent.name)
     agent_registry = AgentFactory._LOCAL_AGENT_MAP if agent.mode == "local" else AgentFactory._AGENT_MAP
     if agent_name not in agent_registry:
         raise ValueError("Harbor config agent is not available in the pinned runtime")
@@ -249,11 +251,15 @@ def _agent_config(
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
+    runtime_env = agent.env
+    if agent.name is not None and agent.name.startswith(_ACP_AGENT_PREFIX):
+        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
     return AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
+            "env": runtime_env,
         },
         extra="forbid",
     )
