@@ -1,0 +1,3246 @@
+{
+  "benchmark": "BioKGBench KGCheck",
+  "source_revision": "4d992e7e735d81cb84d02f86f6489c82479c290e",
+  "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck",
+  "scope": "Agentic KGCheck only: all 20 source-dev and 205 source-test records. Atomic KGQA and SCV tasks and retrieval documents are excluded from this task count. Source partitions are metadata; final training still has one train split.",
+  "identity_policy": "Upstream rows have no explicit ID. Inventory IDs combine KGCheck, source subset and zero-based position in the checksum-pinned JSON; each row also carries its instruction SHA-256.",
+  "inspection": "All identifiers and source categories enumerated; all ten instruction templates reviewed after replacing accession strings. Three shared workflow patterns assessed. Individual scientific evidence, graph correctness and expected labels remain unassessed.",
+  "inventory_completeness": {
+    "records": 225,
+    "unique_instruction_hashes": 225,
+    "source_subsets": {
+      "dev": 20,
+      "test": 205
+    },
+    "source_categories": {
+      "node attribute": 55,
+      "existence": 45,
+      "one-hop": 92,
+      "existing one-hop": 26,
+      "potential one-hop": 7
+    },
+    "normalized_instruction_templates": 10,
+    "shared_workflow_patterns": 3
+  },
+  "source_files": [
+    {
+      "path": "dataset/README.md",
+      "url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/resolve/4d992e7e735d81cb84d02f86f6489c82479c290e/README.md",
+      "bytes": 5082,
+      "sha256": "4e2baa8458d010b5f10dc99337f5c0a6dd32f0e4a0e440eb93f97a1e8e837fb6"
+    },
+    {
+      "path": "dataset/kgcheck/dev.json",
+      "url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/resolve/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "bytes": 19027,
+      "sha256": "4ed4060a17eef3c68dc9019aab4929e18a985a9fff6970a0fce92c58daaefa2a"
+    },
+    {
+      "path": "dataset/kgcheck/test.json",
+      "url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/resolve/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "bytes": 199013,
+      "sha256": "2a80b494eafddc919cdf33759c40bca609359b2f0d6138a986676191c1d5291d"
+    },
+    {
+      "path": "code/README.md",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/README.md",
+      "bytes": 13819,
+      "sha256": "f01d02ab24546172295a9374c97b9e97389af8d15242efab30d9d132034c959d"
+    },
+    {
+      "path": "code/tasks/KGCheck/README.md",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/README.md",
+      "bytes": 4489,
+      "sha256": "c0387b15736f8b6f7010ba50d39e8ea8616e575952d5de073a309fae158ae126"
+    },
+    {
+      "path": "code/tasks/KGCheck/evaluation/evaluate.py",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/evaluation/evaluate.py",
+      "bytes": 3766,
+      "sha256": "1f1a895defeb19e892cc17fb80bff7e03f2c5aeba17c567472d5dd55cec1b67d"
+    },
+    {
+      "path": "code/tasks/KGCheck/prompts.py",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/prompts.py",
+      "bytes": 11876,
+      "sha256": "21002124941d63abb7d965058b858070fd85249c4c7e328190d4fce57f690b5c"
+    },
+    {
+      "path": "code/tasks/KGCheck/utils/tools.py",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/utils/tools.py",
+      "bytes": 13593,
+      "sha256": "6019f37f1b2555034a338dad7e5d43d347bf1bf2b987e5d6739e0fdd2600974a"
+    },
+    {
+      "path": "code/tasks/KGCheck/agents.py",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/agents.py",
+      "bytes": 3969,
+      "sha256": "9d7fd569955dd47597c48fda5ea43bb6061dd29a2c4b1820b4388031e1e6b6d0"
+    },
+    {
+      "path": "code/tasks/KGCheck/base.py",
+      "url": "https://raw.githubusercontent.com/westlake-autolab/BioKGBench/9e166e2679122d2e064e7e6856ff294bd5763546/tasks/KGCheck/base.py",
+      "bytes": 12405,
+      "sha256": "8889be0178b6777d2de49d9f30deba33777ad07e98f5bbe60ee5aca3f955d2d2"
+    }
+  ],
+  "license_and_lineage": "Dataset card and code declare MIT. The project explicitly retains constituent database licenses; this does not license all graph records or literature for redistribution. Only abstract patterns and inventory metadata are retained here. The downloaded task JSON contains graph, evidence and label fields, which are not copied into this inventory or used for training authoring. Large graph tables, literature corpus and atomic suites were not downloaded.",
+  "source_grading": {
+    "repository": "westlake-autolab/BioKGBench",
+    "revision": "9e166e2679122d2e064e7e6856ff294bd5763546",
+    "path": "tasks/KGCheck/evaluation/evaluate.py",
+    "sha256": "1f1a895defeb19e892cc17fb80bff7e03f2c5aeba17c567472d5dd55cec1b67d",
+    "review": "Final-answer evaluator and graph/database/literature tool implementations inspected, not executed. Shared protocol assessed from KGCheck README, runner and normalized instructions; no model calls.",
+    "main_metric": "Exact match of the final support/refute conclusion to the reference label.",
+    "supplementary_metric": "The README describes a Qwen2-72B process judge; it is not required for the exact-match endpoint and will not be adopted for training rewards.",
+    "solver_model_dependency": "The baseline literature tool calls an LLM to assess documents. A deterministic endpoint does not make the supplied solver or its retrieval tools model-free.",
+    "static_code_findings": [
+      "judge_conclusion aligns submissions and references by list position and instruction equality; it does not enforce complete ID coverage or order-independent alignment.",
+      "The exact-match denominator is len(answer), so omitted records reduce the denominator. A new verifier must require the full declared task set.",
+      "The final exact-match check does not validate the reason text, citations or retrieved graph evidence.",
+      "The existence and relation tools use live UniProt and STRING responses. A new offline task needs pinned snapshots and separate handling of missing records, failed access and genuine refutation."
+    ]
+  },
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "Shared instruction pattern reviewed; accession-specific scientific evidence unreviewed. No benchmark answers or fixtures used for authoring.",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null,
+    "remaining_gaps": [
+      "Use independent observed database records and published evidence, with dated releases, constituent licenses and benchmark-lineage screening.",
+      "Freeze retrieval inputs for offline execution. Retain access failures and insufficient evidence as distinct outcomes; absence of an annotation does not establish biological absence.",
+      "Define complete graph-query, evidence and reconciliation artifacts with deterministic checks; a binary label alone does not validate the workflow.",
+      "Validate an input-reading oracle, relevant native tools and corrupted-artifact controls within 30 minutes."
+    ]
+  },
+  "patterns": {
+    "protein-attribute-reconciliation": {
+      "scientific_decision": "Determine whether a graph protein attribute agrees with the corresponding versioned source record.",
+      "required_stages": [
+        "resolve protein identifier, species and source version",
+        "query the graph node and requested attribute",
+        "retrieve the corresponding database record and distinguish missing fields from missing entries",
+        "reconcile naming and identifier changes and preserve the evidence"
+      ],
+      "required_formats": [
+        "graph node/property records",
+        "UniProt flatfile or equivalent pinned record",
+        "JSON reconciliation result"
+      ],
+      "required_tools": [
+        "Neo4j/Cypher or equivalent reproducible graph queries"
+      ],
+      "scientific_constraints": [
+        "The baseline treats name as a gene name. Gene symbol, protein name and accession are distinct identifiers and must not be silently interchanged."
+      ]
+    },
+    "database-entry-reconciliation": {
+      "scientific_decision": "Determine whether entity presence agrees between a graph snapshot and a source database snapshot.",
+      "required_stages": [
+        "resolve canonical and isoform identifiers",
+        "query node presence in the specified graph release",
+        "check source-record presence and documented identifier history",
+        "separate missing, obsolete, redirected and inaccessible records and export reconciliation"
+      ],
+      "required_formats": [
+        "graph node records",
+        "versioned database record and identifier history",
+        "JSON reconciliation result"
+      ],
+      "required_tools": [
+        "Neo4j/Cypher or equivalent reproducible graph queries"
+      ],
+      "scientific_constraints": [
+        "Record deletion or absence is a database-state observation, not proof that a protein does not exist biologically."
+      ]
+    },
+    "directed-relation-evidence": {
+      "scientific_decision": "Check a directed graph relation against its appropriate database or literature evidence.",
+      "required_stages": [
+        "resolve both typed entities and the exact relation semantics",
+        "query directed relations, node presence and source provenance",
+        "retrieve supporting or contradicting source records and literature when required",
+        "distinguish physical interaction, association, localization and inferred annotation",
+        "export relation, evidence identifiers and a scoped conclusion"
+      ],
+      "required_formats": [
+        "typed graph edges and source TSV tables",
+        "versioned database responses",
+        "literature/PDF evidence where required",
+        "JSON conclusion and evidence ledger"
+      ],
+      "required_tools": [
+        "Neo4j/Cypher or equivalent reproducible graph queries",
+        "source-specific evidence retrieval"
+      ],
+      "scientific_constraints": [
+        "STRING association does not by itself establish direct physical binding.",
+        "Protein-to-protein, cellular-component, tissue and disease relations have different evidence meanings.",
+        "The public prompt asks to confirm absence. An adaptation must scope this to a declared source snapshot or preserve insufficient-evidence outcomes."
+      ]
+    }
+  },
+  "workflow_patterns": {
+    "database-entry-reconciliation": [
+      "kgcheck-dev-005",
+      "kgcheck-dev-006",
+      "kgcheck-dev-007",
+      "kgcheck-dev-008",
+      "kgcheck-dev-009",
+      "kgcheck-test-050",
+      "kgcheck-test-051",
+      "kgcheck-test-052",
+      "kgcheck-test-053",
+      "kgcheck-test-054",
+      "kgcheck-test-055",
+      "kgcheck-test-056",
+      "kgcheck-test-057",
+      "kgcheck-test-058",
+      "kgcheck-test-059",
+      "kgcheck-test-060",
+      "kgcheck-test-061",
+      "kgcheck-test-062",
+      "kgcheck-test-063",
+      "kgcheck-test-064",
+      "kgcheck-test-065",
+      "kgcheck-test-066",
+      "kgcheck-test-067",
+      "kgcheck-test-068",
+      "kgcheck-test-069",
+      "kgcheck-test-070",
+      "kgcheck-test-071",
+      "kgcheck-test-072",
+      "kgcheck-test-073",
+      "kgcheck-test-074",
+      "kgcheck-test-075",
+      "kgcheck-test-076",
+      "kgcheck-test-077",
+      "kgcheck-test-078",
+      "kgcheck-test-079",
+      "kgcheck-test-080",
+      "kgcheck-test-081",
+      "kgcheck-test-082",
+      "kgcheck-test-083",
+      "kgcheck-test-084",
+      "kgcheck-test-085",
+      "kgcheck-test-086",
+      "kgcheck-test-087",
+      "kgcheck-test-088",
+      "kgcheck-test-089"
+    ],
+    "directed-relation-evidence": [
+      "kgcheck-dev-010",
+      "kgcheck-dev-011",
+      "kgcheck-dev-012",
+      "kgcheck-dev-013",
+      "kgcheck-dev-014",
+      "kgcheck-dev-015",
+      "kgcheck-dev-016",
+      "kgcheck-dev-017",
+      "kgcheck-dev-018",
+      "kgcheck-dev-019",
+      "kgcheck-test-090",
+      "kgcheck-test-091",
+      "kgcheck-test-092",
+      "kgcheck-test-093",
+      "kgcheck-test-094",
+      "kgcheck-test-095",
+      "kgcheck-test-096",
+      "kgcheck-test-097",
+      "kgcheck-test-098",
+      "kgcheck-test-099",
+      "kgcheck-test-100",
+      "kgcheck-test-101",
+      "kgcheck-test-102",
+      "kgcheck-test-103",
+      "kgcheck-test-104",
+      "kgcheck-test-105",
+      "kgcheck-test-106",
+      "kgcheck-test-107",
+      "kgcheck-test-108",
+      "kgcheck-test-109",
+      "kgcheck-test-110",
+      "kgcheck-test-111",
+      "kgcheck-test-112",
+      "kgcheck-test-113",
+      "kgcheck-test-114",
+      "kgcheck-test-115",
+      "kgcheck-test-116",
+      "kgcheck-test-117",
+      "kgcheck-test-118",
+      "kgcheck-test-119",
+      "kgcheck-test-120",
+      "kgcheck-test-121",
+      "kgcheck-test-122",
+      "kgcheck-test-123",
+      "kgcheck-test-124",
+      "kgcheck-test-125",
+      "kgcheck-test-126",
+      "kgcheck-test-127",
+      "kgcheck-test-128",
+      "kgcheck-test-129",
+      "kgcheck-test-130",
+      "kgcheck-test-131",
+      "kgcheck-test-132",
+      "kgcheck-test-133",
+      "kgcheck-test-134",
+      "kgcheck-test-135",
+      "kgcheck-test-136",
+      "kgcheck-test-137",
+      "kgcheck-test-138",
+      "kgcheck-test-139",
+      "kgcheck-test-140",
+      "kgcheck-test-141",
+      "kgcheck-test-142",
+      "kgcheck-test-143",
+      "kgcheck-test-144",
+      "kgcheck-test-145",
+      "kgcheck-test-146",
+      "kgcheck-test-147",
+      "kgcheck-test-148",
+      "kgcheck-test-149",
+      "kgcheck-test-150",
+      "kgcheck-test-151",
+      "kgcheck-test-152",
+      "kgcheck-test-153",
+      "kgcheck-test-154",
+      "kgcheck-test-155",
+      "kgcheck-test-156",
+      "kgcheck-test-157",
+      "kgcheck-test-158",
+      "kgcheck-test-159",
+      "kgcheck-test-160",
+      "kgcheck-test-161",
+      "kgcheck-test-162",
+      "kgcheck-test-163",
+      "kgcheck-test-164",
+      "kgcheck-test-165",
+      "kgcheck-test-166",
+      "kgcheck-test-167",
+      "kgcheck-test-168",
+      "kgcheck-test-169",
+      "kgcheck-test-170",
+      "kgcheck-test-171",
+      "kgcheck-test-172",
+      "kgcheck-test-173",
+      "kgcheck-test-174",
+      "kgcheck-test-175",
+      "kgcheck-test-176",
+      "kgcheck-test-177",
+      "kgcheck-test-178",
+      "kgcheck-test-179",
+      "kgcheck-test-180",
+      "kgcheck-test-181",
+      "kgcheck-test-182",
+      "kgcheck-test-183",
+      "kgcheck-test-184",
+      "kgcheck-test-185",
+      "kgcheck-test-186",
+      "kgcheck-test-187",
+      "kgcheck-test-188",
+      "kgcheck-test-189",
+      "kgcheck-test-190",
+      "kgcheck-test-191",
+      "kgcheck-test-192",
+      "kgcheck-test-193",
+      "kgcheck-test-194",
+      "kgcheck-test-195",
+      "kgcheck-test-196",
+      "kgcheck-test-197",
+      "kgcheck-test-198",
+      "kgcheck-test-199",
+      "kgcheck-test-200",
+      "kgcheck-test-201",
+      "kgcheck-test-202",
+      "kgcheck-test-203",
+      "kgcheck-test-204"
+    ],
+    "protein-attribute-reconciliation": [
+      "kgcheck-dev-000",
+      "kgcheck-dev-001",
+      "kgcheck-dev-002",
+      "kgcheck-dev-003",
+      "kgcheck-dev-004",
+      "kgcheck-test-000",
+      "kgcheck-test-001",
+      "kgcheck-test-002",
+      "kgcheck-test-003",
+      "kgcheck-test-004",
+      "kgcheck-test-005",
+      "kgcheck-test-006",
+      "kgcheck-test-007",
+      "kgcheck-test-008",
+      "kgcheck-test-009",
+      "kgcheck-test-010",
+      "kgcheck-test-011",
+      "kgcheck-test-012",
+      "kgcheck-test-013",
+      "kgcheck-test-014",
+      "kgcheck-test-015",
+      "kgcheck-test-016",
+      "kgcheck-test-017",
+      "kgcheck-test-018",
+      "kgcheck-test-019",
+      "kgcheck-test-020",
+      "kgcheck-test-021",
+      "kgcheck-test-022",
+      "kgcheck-test-023",
+      "kgcheck-test-024",
+      "kgcheck-test-025",
+      "kgcheck-test-026",
+      "kgcheck-test-027",
+      "kgcheck-test-028",
+      "kgcheck-test-029",
+      "kgcheck-test-030",
+      "kgcheck-test-031",
+      "kgcheck-test-032",
+      "kgcheck-test-033",
+      "kgcheck-test-034",
+      "kgcheck-test-035",
+      "kgcheck-test-036",
+      "kgcheck-test-037",
+      "kgcheck-test-038",
+      "kgcheck-test-039",
+      "kgcheck-test-040",
+      "kgcheck-test-041",
+      "kgcheck-test-042",
+      "kgcheck-test-043",
+      "kgcheck-test-044",
+      "kgcheck-test-045",
+      "kgcheck-test-046",
+      "kgcheck-test-047",
+      "kgcheck-test-048",
+      "kgcheck-test-049"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "kgcheck-dev-000",
+      "source_subset": "dev",
+      "source_row_index": 0,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "340477455b8baf385e67988240259601a6acfc7ab621707a5e3ee22160d172ac",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-001",
+      "source_subset": "dev",
+      "source_row_index": 1,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "4c77db5d16d8cb6d578277f8694d4fb53b18176083b34cd45a3dca1b0d8c78fa",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-002",
+      "source_subset": "dev",
+      "source_row_index": 2,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "73a74466c1e7119ebb4b3e42395b0a5c73eed1cc5720775870e8ac5fed9c2a31",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-003",
+      "source_subset": "dev",
+      "source_row_index": 3,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "f2a932c149e24fb2dd8a981530a96dd8413380a2fa7d96a047f46c8e202780c5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-004",
+      "source_subset": "dev",
+      "source_row_index": 4,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "02f5d0fd9a0c7f06fb8ebc26652dc6dd5eec27cc2e167c6d61c8aeb872c04952",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-005",
+      "source_subset": "dev",
+      "source_row_index": 5,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "adee1a16c73ddfb4adc8d659044c7118166ec6268835a45ac4ce4a9109dd0ac2",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-006",
+      "source_subset": "dev",
+      "source_row_index": 6,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "2f4816809bca1e16bf74cd741a324e31ab401e7f965cae72b9e31c473bc926c8",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-007",
+      "source_subset": "dev",
+      "source_row_index": 7,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "e0dd65365249c5855a526bc3b03285784467a009ad2fcd60875be58445e47cd7",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-008",
+      "source_subset": "dev",
+      "source_row_index": 8,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "bfc632d8f61f0bcc87b3408cfa57333b7f6875c835b533f192c870e64cbfccee",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-009",
+      "source_subset": "dev",
+      "source_row_index": 9,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "b9ac42258b12a997204550cc1d0bad03279a4e08792bfb5e7297d2ff4c68a93a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-010",
+      "source_subset": "dev",
+      "source_row_index": 10,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "d7549e5dfbd6e6c9539f2d42e6c362d88eb7114980a2cc31c59dc6c3f69b867c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-011",
+      "source_subset": "dev",
+      "source_row_index": 11,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "c573cf37d3284dabaea7c104cbd39e3e2a6b75213b5056ef0693577d544d314c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-012",
+      "source_subset": "dev",
+      "source_row_index": 12,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "43531f62ea0880e150ad887c323e793c80caea183c08f375de8957e9a394d1a7",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-013",
+      "source_subset": "dev",
+      "source_row_index": 13,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e6a0ba37675d18a2759e7d15362809558dfaef2f14a272e1a054b86c60f86250",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-014",
+      "source_subset": "dev",
+      "source_row_index": 14,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "866aadf3d1d27f31e0aaf80fb18c4d0bc8609d380491bc585411504445878385",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-015",
+      "source_subset": "dev",
+      "source_row_index": 15,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "ac87c507c68ae848f459c5b5f06f2d30930f61e0656cb6dc55b7747543bcc631",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-016",
+      "source_subset": "dev",
+      "source_row_index": 16,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "be293d24f709715c9c02458f0831afb8274678af5d08ac8a88aee23b7c28bf26",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-017",
+      "source_subset": "dev",
+      "source_row_index": 17,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "17576ebbbd19b541bf50b810324e6f00df3cdadebfbf51321fce3dbb8e69f238",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-018",
+      "source_subset": "dev",
+      "source_row_index": 18,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "64855d987031dd2225cbd1fb093737c65af07100fb65ade11be2465e6606650a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-dev-019",
+      "source_subset": "dev",
+      "source_row_index": 19,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "da0ff75d0dfd2235bfc8417abe06984c2b04d3e71b527552aa0761cf10ad51a1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/dev.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-000",
+      "source_subset": "test",
+      "source_row_index": 0,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "9bf72a8dd45f6570044a7a7f3bf018eb5ffa03983ecd9220443c70ca4947de12",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-001",
+      "source_subset": "test",
+      "source_row_index": 1,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "8f4da34475ba6723936bd754cf0f7a3bc347e3cb427fc97a43bebf729147f3aa",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-002",
+      "source_subset": "test",
+      "source_row_index": 2,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "ace06ca04f4197beede27eb09774ae6144e397abd7baa7b99fc0fdef3648835e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-003",
+      "source_subset": "test",
+      "source_row_index": 3,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "c31b95305f850a7d06a142d0f238362fda1be12c2d2f743321fad2634ab1e208",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-004",
+      "source_subset": "test",
+      "source_row_index": 4,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "020dcb6857d0a80e594a047cff8825b32ce46abb8651c4e0374a507bd4b4975e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-005",
+      "source_subset": "test",
+      "source_row_index": 5,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "1c8f43df3e8778b3600fe851ea4813cf94a386b89e0d8153dc3a452f640abc05",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-006",
+      "source_subset": "test",
+      "source_row_index": 6,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "5738e20cc03b7b6114acd4edd4f00e0a340d814ee683885811b0485da9115e8d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-007",
+      "source_subset": "test",
+      "source_row_index": 7,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "b9a66d11b75f5a7931c6fbbbc3a76569315de3012e4313760513d281952831b3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-008",
+      "source_subset": "test",
+      "source_row_index": 8,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "2b636e7be26c240a1b1839e97bed1eca90b6ad84108c9e6d9ef7e9cf2dd001ec",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-009",
+      "source_subset": "test",
+      "source_row_index": 9,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "22f890dee75ba8fdab078ec9a1842ac0e467ac759ba969a4d5f67419a936d9ff",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-010",
+      "source_subset": "test",
+      "source_row_index": 10,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "20e7cb81cdb940519bb6f34087c9989ebc4571a4630c1c1d033e51ff273c2966",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-011",
+      "source_subset": "test",
+      "source_row_index": 11,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "b04a71aebd651e85b0efc64915e3e9e24740a0eccdc36643508ef1043ece220b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-012",
+      "source_subset": "test",
+      "source_row_index": 12,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "afeec582bc0c2814af12b1cb0a5ceaecc977ebd2ce96e640ee686d99dee2dcc4",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-013",
+      "source_subset": "test",
+      "source_row_index": 13,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "2496f41d996392de48c38ec85b59c742ccbba0d849ef0c6359f8c91c456e0db1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-014",
+      "source_subset": "test",
+      "source_row_index": 14,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "a020b752c0bfcbbf27efa7bcae62a355fe4e7a2fc6cbc3315be731a6af91f222",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-015",
+      "source_subset": "test",
+      "source_row_index": 15,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "2cf2ab76af5467238251f9df34bb86fa2e8525574f7da0df9df386a34670e711",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-016",
+      "source_subset": "test",
+      "source_row_index": 16,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "41285355c4758cf537e71731e0892bab5fca29610ea5e80973de64d37b1c29b3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-017",
+      "source_subset": "test",
+      "source_row_index": 17,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "aec67922eaafda54aa213a41ef4889db2785ddd1f8aeb0347318bc91bcae3167",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-018",
+      "source_subset": "test",
+      "source_row_index": 18,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "1b672a61110ffb976f5998a1b3de6efa470c678c2b852b72bd7c2eb36c7878b3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-019",
+      "source_subset": "test",
+      "source_row_index": 19,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "0ead4dfa533ab505f245ccab1134c781f68215a639ed050fc75e51203eb29aa5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-020",
+      "source_subset": "test",
+      "source_row_index": 20,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "050f29b1b017224a10297aa877d9da784a1a5b3d7881fa5c39c0be09afe190a8",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-021",
+      "source_subset": "test",
+      "source_row_index": 21,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "343ca7f84c767587e2cc62603625d6a710783791bab40b96d8620855d6a6c01e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-022",
+      "source_subset": "test",
+      "source_row_index": 22,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "43d14d3a457f5f91fb18bea597defefec99ae4a7945bcca1928f9beef17806e6",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-023",
+      "source_subset": "test",
+      "source_row_index": 23,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "035646ea786fb6f50087d217180b6f5620b49175575c3e8741bdefb900560229",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-024",
+      "source_subset": "test",
+      "source_row_index": 24,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "a634b2bd265ebb2c8fad8f818b3306ca15e38a8cca4eece43921197afcf66622",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-025",
+      "source_subset": "test",
+      "source_row_index": 25,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "d62028dfa580f2ed98bad1ed012886add78bd966c3e000f473f34a92b91d8941",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-026",
+      "source_subset": "test",
+      "source_row_index": 26,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "b06f7d102938ccf604e91c50a304a67371daac15f82c2f3c8f89706389eee682",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-027",
+      "source_subset": "test",
+      "source_row_index": 27,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "89096205f03a3ab22d2dc27bcf502bbda90796e5e97b3de1ac5349b6f4b29e0b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-028",
+      "source_subset": "test",
+      "source_row_index": 28,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "8801ef4a153bee9cd97e1efdd890b3d8073d7b170380e21a3d98865ad45d77ea",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-029",
+      "source_subset": "test",
+      "source_row_index": 29,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "9ff0deeb1f340fe35028d8fbe595df26fd5b0714a7e262281cc71b47a4266f51",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-030",
+      "source_subset": "test",
+      "source_row_index": 30,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "16787c2b2cab15ef37a88d2524a518e1ee33daf26b6773e015a50ccb7220e901",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-031",
+      "source_subset": "test",
+      "source_row_index": 31,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "1d9157b07a7d5bff95f7f5a25ef4af159dbbddde07cc77f78fdb33484e157077",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-032",
+      "source_subset": "test",
+      "source_row_index": 32,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "aedb1b3ee70167a03ea81c01c84453242270175dab396e8a8caf8aceb5d11c3f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-033",
+      "source_subset": "test",
+      "source_row_index": 33,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "d37865756c44e2bb8551f76dc1238738b8da05bc769ff51d6005919d1be310ce",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-034",
+      "source_subset": "test",
+      "source_row_index": 34,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "ac42c733fa07676dc72f5c6ea839a2d2e2790ff2a2c10f993d8d775eba604710",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-035",
+      "source_subset": "test",
+      "source_row_index": 35,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "4175961b4fa2907e9653adfed3b3af4dd376a6194de01185c902561672379c62",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-036",
+      "source_subset": "test",
+      "source_row_index": 36,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "124cbc8bca6615cb734c98eebb90b9ea9b9828850ad1ad9c2467377c2047f041",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-037",
+      "source_subset": "test",
+      "source_row_index": 37,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "bb5138ed775d3ebd7bdf7cc60dd5d4216150ca9a46dc00a1780d6fef6806bf68",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-038",
+      "source_subset": "test",
+      "source_row_index": 38,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "70a05bd9a8bfc72ef4c9f3f3c7a155f0044eea942b520ac0085a668dbab46699",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-039",
+      "source_subset": "test",
+      "source_row_index": 39,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "50b5255d2de9e9a6801fc5a8156078fe7dd4641541313e1d3ef69483a76b76c7",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-040",
+      "source_subset": "test",
+      "source_row_index": 40,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "10ec56cec3d0e9a042f941ca7a23db7d946e2aba13dba18b946248c38ad38790",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-041",
+      "source_subset": "test",
+      "source_row_index": 41,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "fb5fa5750ad20f0f161ccc60f36ef7976170728e0a3701e431966a99f7940280",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-042",
+      "source_subset": "test",
+      "source_row_index": 42,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "2aaa4b04ac97c15d15fe60f4575c24c5234b9a7532c50d62de065b2803ae895d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-043",
+      "source_subset": "test",
+      "source_row_index": 43,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "3c953cf9ec2a1863d726b757f6381fac82ab9660b228c74b46a5a7bfa4cbe2f3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-044",
+      "source_subset": "test",
+      "source_row_index": 44,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "541b0758f24e27d91b79083ca5e5288516cd6b5a44d1c04d3f676ce10f8fe58c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-045",
+      "source_subset": "test",
+      "source_row_index": 45,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "034f8d55a7c695932e9b2f145d937057543e40fa6a3027e0393a3dca51ee289c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-046",
+      "source_subset": "test",
+      "source_row_index": 46,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "14ef41aa59ca037f645feff05c6f60e0a448d1c4add50e0ade847bc31f24db95",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-047",
+      "source_subset": "test",
+      "source_row_index": 47,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "7a63bd52ee90a8376a1107b6380947bb90d51e97dc72d56f3f20c073c2c839db",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-048",
+      "source_subset": "test",
+      "source_row_index": 48,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "859aaec518a2dfead7326b1423679fced31e1884a38e763f6ef9b6e30c46fbd5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-049",
+      "source_subset": "test",
+      "source_row_index": 49,
+      "source_check_type": "node attribute",
+      "workflow_family": "protein-attribute-reconciliation",
+      "source_prompt_sha256": "95b85fe3e59f0e9626ac8513407025bea76d5505559e7c5e4e656ad14b50376e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-050",
+      "source_subset": "test",
+      "source_row_index": 50,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "ac8f6d48fe12b26cdd8267a9817974534034b8caae6bf49254240cd4dfa40e08",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-051",
+      "source_subset": "test",
+      "source_row_index": 51,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "9dd58dc7ba62a0370aeba11c3eda13fed8c09160f89a67a4a24fd46e05ace10d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-052",
+      "source_subset": "test",
+      "source_row_index": 52,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "0e8f8475f37d597e897cf6f63fec8c2a82f38a370c0c972a79d77429242bd6d2",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-053",
+      "source_subset": "test",
+      "source_row_index": 53,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "7b904cc544bc1b836fe32b3a4e23112b315e309b788e63555618ad53c419474d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-054",
+      "source_subset": "test",
+      "source_row_index": 54,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "df316d90bc074f25a141800e6b6a8711e4d4a6c60f7882379d4ad53adb707d2c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-055",
+      "source_subset": "test",
+      "source_row_index": 55,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "bf56c9823c8340372fb0827a77ac95a8940531fac6a09f9993ffc9371fc9e456",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-056",
+      "source_subset": "test",
+      "source_row_index": 56,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "cd6345f2fd436284dec97bf7d596e4d0eac82aafd2173e53109f9770461a2eeb",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-057",
+      "source_subset": "test",
+      "source_row_index": 57,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "2909f491ff48046af0da7b2c8086b57b2bb229977986b0e42f8eb975d09c3c31",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-058",
+      "source_subset": "test",
+      "source_row_index": 58,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "49bd32fe8db69fc64b6a4e58448d515aeade19209160ee05aba4bb4fdd4e5336",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-059",
+      "source_subset": "test",
+      "source_row_index": 59,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "6f6d48670f51edfaba1cc784878eae5315c37112945c8f70c3471cddf251b264",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-060",
+      "source_subset": "test",
+      "source_row_index": 60,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "ea4c3d08646d04dc848fd54eec3d08fbadde5c7ce86e192d67333384e479e67c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-061",
+      "source_subset": "test",
+      "source_row_index": 61,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "566739f2bacd82264bd9756b3018278cb60eda806bac9f37df4feab21465480f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-062",
+      "source_subset": "test",
+      "source_row_index": 62,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "1edd3dad1e895bf4459065614a2bcad8ce4fe3a48e9fc744ca474db555ad6db1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-063",
+      "source_subset": "test",
+      "source_row_index": 63,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "42be7cd61697cc2049c709a8e025f75a284d35535da5ef5bc66363ec3d2db006",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-064",
+      "source_subset": "test",
+      "source_row_index": 64,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "cc3147dccb1eed84f9241402496977331a77ebbdcf945cbe75db48e97e1867f5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-065",
+      "source_subset": "test",
+      "source_row_index": 65,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "747badfe482baca823088699dfb654e6a9e2fbf81541c533c48ed938b013067a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-066",
+      "source_subset": "test",
+      "source_row_index": 66,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "3b85878ad579e8f8e11d174fb7a677b6940e151ba73412b83b61cc47f0959754",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-067",
+      "source_subset": "test",
+      "source_row_index": 67,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "ae89f82930d618072efc9fa785966f1181d3e8c83cfa798156ef7f58a8ab38ea",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-068",
+      "source_subset": "test",
+      "source_row_index": 68,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "b8babba63e3f97e88d1f6fe93482f792e5301cc7da0bda89d3ae15512f2969ee",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-069",
+      "source_subset": "test",
+      "source_row_index": 69,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "6a1095154ead3fb8df8127ee6aa3dd8e8c0adc545fdcfbf6a3d85bbbb0b7499a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-070",
+      "source_subset": "test",
+      "source_row_index": 70,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "b59511e0248a52fdcf4e61dafdc19834a7e92a96e7a825c739fa15a74b5a2654",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-071",
+      "source_subset": "test",
+      "source_row_index": 71,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "72040fddd49790581852a22501776194e52639122ca48cf02b70f0efd4ce2241",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-072",
+      "source_subset": "test",
+      "source_row_index": 72,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "f7d0ad365912d88c0398a4f973788ef3590d745578236c35b21c89f6360b6c3d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-073",
+      "source_subset": "test",
+      "source_row_index": 73,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "1b6852c57f1b65a80e939fb4bd375fc75513d3db3f2362af8402f6b80367f987",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-074",
+      "source_subset": "test",
+      "source_row_index": 74,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "576b9536c8155585e11ee92c48a5e2e064dd309210d5a950cc0c80a8b55807f0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-075",
+      "source_subset": "test",
+      "source_row_index": 75,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "98c8679ef49e58416603488c4be8afbbbdb76f6e6a359fac7b4b0b0f40e1a100",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-076",
+      "source_subset": "test",
+      "source_row_index": 76,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "954af2469b50cfb5d3835340154baa8bd20c91c3a8fbb9e44e8bd9a1a1d21cda",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-077",
+      "source_subset": "test",
+      "source_row_index": 77,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "c9effcc767f2da83d94a6efe22ce931421a1c122031f1a9c8e2213ffd3d28eb4",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-078",
+      "source_subset": "test",
+      "source_row_index": 78,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "2b238ac9b0fef5707f48cb71a511996fe6d98f186ee1a861aae4badea5ce9acc",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-079",
+      "source_subset": "test",
+      "source_row_index": 79,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "e61361facfbb5d16297df3dbba64c4e99b471b238198f8191d4c62973b40da9e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-080",
+      "source_subset": "test",
+      "source_row_index": 80,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "e0c0d05793df1f080b13859e4e76b0fc2600b6e55c84789b75af45dbfeef0f87",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-081",
+      "source_subset": "test",
+      "source_row_index": 81,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "fc4b6cfa19c3377706c3961115b3a5700e9aef433dbc0fc8438715546ffae8ff",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-082",
+      "source_subset": "test",
+      "source_row_index": 82,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "cef84e235ede9c0928dd46333225af3a69ca408d79f457f334a2665960e0e5ed",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-083",
+      "source_subset": "test",
+      "source_row_index": 83,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "a5c2266587b3bcd92affe1c015902b0493e006b3e2c0ebbf187b169065d4502d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-084",
+      "source_subset": "test",
+      "source_row_index": 84,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "1db72111657ae4c0c6f6c436f91bbe4d8755f01d6b800e4a42ce2d2269fd84a8",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-085",
+      "source_subset": "test",
+      "source_row_index": 85,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "7a602ad59648245bb4cc07e1b2cdf25f82b3035f5d7b3536721148fbaf882a89",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-086",
+      "source_subset": "test",
+      "source_row_index": 86,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "62dd7067757a476959b8665c14cee03c4f601331bed9d7e064f9c6b9c2a7ed9b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-087",
+      "source_subset": "test",
+      "source_row_index": 87,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "dd932db9d5c51123263c97a763db42e5819a694a4ce2db1b5212592d977d0c16",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-088",
+      "source_subset": "test",
+      "source_row_index": 88,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "f0d826ed3f5ce1ebf3e9f759e600e775b0126218e6cedf1351e39a1cdecdca11",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-089",
+      "source_subset": "test",
+      "source_row_index": 89,
+      "source_check_type": "existence",
+      "workflow_family": "database-entry-reconciliation",
+      "source_prompt_sha256": "cbc695edbf99b20bf3e9a406e916ffd10d2df4354f8f3b00c45862146bf966ed",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-090",
+      "source_subset": "test",
+      "source_row_index": 90,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "90cef27a97ea1e275872231b6c1f39184a06c3ef6bde767ab1ed70f12ddcdf8e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-091",
+      "source_subset": "test",
+      "source_row_index": 91,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e2ed9b0cd564829421218b75667fff8366ab034cdab50987814beb337b0ad6b8",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-092",
+      "source_subset": "test",
+      "source_row_index": 92,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "f65b0bb94f597ccc5f9c0e606673e09020dad91f9f164093ff40d1b84ef014f1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-093",
+      "source_subset": "test",
+      "source_row_index": 93,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "510c3556c9d9e5b814f8397e1494e62e0c60263ef74a696c82ca7f78358679be",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-094",
+      "source_subset": "test",
+      "source_row_index": 94,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "773b2b428db1438af7d85ec9a4f1b2662879ddc1c80920abc27bd04ed9157da3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-095",
+      "source_subset": "test",
+      "source_row_index": 95,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "fbdf3d20eabc9d2f3f6a1e171e6b869089f8cd6e652d7e20c0edc3cb6f7fe391",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-096",
+      "source_subset": "test",
+      "source_row_index": 96,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "42c1b32d3e4ccfa3788c16717f6b66bd8940b43c5481491b1307350837d23632",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-097",
+      "source_subset": "test",
+      "source_row_index": 97,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "458e47b9abc32ab9e2e322e87c242abca05177f783f8770e2a4290885ec63202",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-098",
+      "source_subset": "test",
+      "source_row_index": 98,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "b1296c8c13a5ffbfe63c034de9b23808b71fed5d2860c8bfe71dbf7a661216c6",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-099",
+      "source_subset": "test",
+      "source_row_index": 99,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "60db4923a1bbd81d60651b32a1b86f6a654815a3db2b1022f2d81b633dc4fc68",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-100",
+      "source_subset": "test",
+      "source_row_index": 100,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "ee5d2918f8393cb7e2cf5c9dec524692d15723cb6b0c60061274097a4d1a216b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-101",
+      "source_subset": "test",
+      "source_row_index": 101,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "6322dbca15e4066a1161122be592518dbc0f8b51265e03638fb9203b7f5161fd",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-102",
+      "source_subset": "test",
+      "source_row_index": 102,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "22a303c6e972f48b30934df6b36b9b71a28e50275c42539e5161b8a778a06f5c",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-103",
+      "source_subset": "test",
+      "source_row_index": 103,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "eec8694039c8c8532b963e55814ce68f2e0c4a17870e2f9a25d3a606b5fec43b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-104",
+      "source_subset": "test",
+      "source_row_index": 104,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "cdf62fb1a1381a3b6f51ae3efd2bfd0217e45046255d68a393dc312bfde39b5e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-105",
+      "source_subset": "test",
+      "source_row_index": 105,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "7c2c6cc95cc8f486b40efe20f8f180277bd789b6e255022f387ee3fbb81fa1fe",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-106",
+      "source_subset": "test",
+      "source_row_index": 106,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "714142f7f675e3b62e3410c46d2efb3e8446e066395222571c60f16eabe7b25e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-107",
+      "source_subset": "test",
+      "source_row_index": 107,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "c71819a0e46c65ba8840e7c9fd76afadfd6166564c74d5396f32529905ff70f1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-108",
+      "source_subset": "test",
+      "source_row_index": 108,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "cdd41418474484ee64a99e74d725d7158ad2be5b85cbc5e06de40c9e230e14cf",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-109",
+      "source_subset": "test",
+      "source_row_index": 109,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "358ea86695d84c6d19d3cf1ac397055bdbd2193ba646440d317ce1811f70b3e5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-110",
+      "source_subset": "test",
+      "source_row_index": 110,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "23bc541b27f2adeeffc511eb139ba9254a298743ba2589f34df806d3c105efdb",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-111",
+      "source_subset": "test",
+      "source_row_index": 111,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "f354278a6f5fcca8891b445182cca94d8c42d340052e0aadd2cb4fa285f2dbf8",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-112",
+      "source_subset": "test",
+      "source_row_index": 112,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "b1adba3a78d4e39c420ff4020396bb3174ec1987dbaaef89a2e7214730bba3a9",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-113",
+      "source_subset": "test",
+      "source_row_index": 113,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "5dd5ff2dc7d0cbb7d8ad9771ab044dc39372bdc77c41915d530f50e50fecd293",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-114",
+      "source_subset": "test",
+      "source_row_index": 114,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "78e602e88133c25554b105019dc9cb7d9b38f8138a95a43790293336154f616b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-115",
+      "source_subset": "test",
+      "source_row_index": 115,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "f938e4b5f8751156d3a38fc5658359b4ff3c18a432fe665997404afd2628eec0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-116",
+      "source_subset": "test",
+      "source_row_index": 116,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "afa21bb1978c6837bb387e53d24f07b9ca0aec515588c7ede37b056f3759fcfc",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-117",
+      "source_subset": "test",
+      "source_row_index": 117,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "761c84aa389726ee5dbb6187703e23cb2cf4b71fe62f7e34973cb69d8d1c9a50",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-118",
+      "source_subset": "test",
+      "source_row_index": 118,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "2b1d304986df5397aedff675b10bf68cff41328e33c66f77fbd6d020ce22b8af",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-119",
+      "source_subset": "test",
+      "source_row_index": 119,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "94920b052fec4375491eec9faa94a64f5fde7c194e34e4502f5e21eedbe004d1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-120",
+      "source_subset": "test",
+      "source_row_index": 120,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "3f2c66bd308dcaff262e665a959a6900ea2afb7cde0fdcce27fa35371e06110e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-121",
+      "source_subset": "test",
+      "source_row_index": 121,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "a73aba2b5862a8af00fc2d9298bce2f324ef8d97a5094a174e7f1f1d4c034f3f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-122",
+      "source_subset": "test",
+      "source_row_index": 122,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "fde76334bb6c0404d91a05ef10555a69dd20b4cfd31c08c4436581aeacfbb68e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-123",
+      "source_subset": "test",
+      "source_row_index": 123,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "9d7213f512fffeaa43e68af9e4fa5f3afcbce59ddc85f4088082b98bb57880b2",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-124",
+      "source_subset": "test",
+      "source_row_index": 124,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "a972b6f2325c813aa54bbbfe796f749fe8e112c87c07f35ea9fe58cd96510f13",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-125",
+      "source_subset": "test",
+      "source_row_index": 125,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "18bac24c6fa8a665c2638fedad0a0d875fa18ef3ecd64affe1bd1984a406f2df",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-126",
+      "source_subset": "test",
+      "source_row_index": 126,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "28b4c28bca6ee68aa0552956eb3420a9dde6c1521fbca03775b403cdc940c5b7",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-127",
+      "source_subset": "test",
+      "source_row_index": 127,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "faa4991abd26dc81306096db003c7342b61a29ec906ac72baff1325fabd0abb9",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-128",
+      "source_subset": "test",
+      "source_row_index": 128,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "39dc12bfbab14d605d1b2a027e941a24327738acdbd357c290679c4fd40874f9",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-129",
+      "source_subset": "test",
+      "source_row_index": 129,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "16f0b2955881b5954eff7726338802d47309bddabe784aef185fe78e801cdc26",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-130",
+      "source_subset": "test",
+      "source_row_index": 130,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "932afe9f4876c4b7706149eb5ea5f40ed2289c1606fd449ff7a54ceaa62f49f4",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-131",
+      "source_subset": "test",
+      "source_row_index": 131,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "f53be07a846d0662c22ce5af0112a1f4eb4a237b9aa45fe85cf9a7ceeed00707",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-132",
+      "source_subset": "test",
+      "source_row_index": 132,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "10cc2bc2f9d974108ec6b6a2a26d14309e43ed3c3d56ed350a754e825d53834a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-133",
+      "source_subset": "test",
+      "source_row_index": 133,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e0e32251749de2a839e941a62147822156bc029b4c625d91a61cc85033d61067",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-134",
+      "source_subset": "test",
+      "source_row_index": 134,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "dbe1ef0ffc3ef1ad405d4cb28902d160c846a668e2511e7b1ed02c9688b3fb54",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-135",
+      "source_subset": "test",
+      "source_row_index": 135,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "ac3e7c34ef4e16400d8d26eacb65e8c740def4161c63d4b3a01534a374d684f0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-136",
+      "source_subset": "test",
+      "source_row_index": 136,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "aa776ca31901e283ab76c8823776f86dbf293e24a2ad2ff056f42e1c7add8625",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-137",
+      "source_subset": "test",
+      "source_row_index": 137,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "fced65f74e1b81e0fd217d23810058b1f72e53912870b36570abb33385fe54d4",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-138",
+      "source_subset": "test",
+      "source_row_index": 138,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "836c97cded1cf89ec59f48fd3f9b7788c60bb2d153108f590093eae14ecb0421",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-139",
+      "source_subset": "test",
+      "source_row_index": 139,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "958770478304a2472fac5d6ce100ec3c6f10cacd3c5ebdecd987db389db9e252",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-140",
+      "source_subset": "test",
+      "source_row_index": 140,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "7604a9ef89d1527b3f800f443c774d4b4d0ee4b3df5f6321f08ee3359554b8a0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-141",
+      "source_subset": "test",
+      "source_row_index": 141,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "ee3cd4450544cf54599753152daba8e32e54a3dd5a1c2ce3dbe617181d82e8f0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-142",
+      "source_subset": "test",
+      "source_row_index": 142,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "8232bd414e1dc71c1d65c3e3791c815d3cf39396a703fec1ac21d08a26b487a2",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-143",
+      "source_subset": "test",
+      "source_row_index": 143,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "bddb376ef765947d39352d6e1d8722d8337cd9ab37fefaaeb9259a737b8993e0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-144",
+      "source_subset": "test",
+      "source_row_index": 144,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "4ae10a171129f17ae851e47a27d4a3b0046039fe37c9e876af19b91fdfb2db2b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-145",
+      "source_subset": "test",
+      "source_row_index": 145,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "8e8ed2c03e6045bbb54f3c52c169874b29c6f959ea3973691ae11774ae485d69",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-146",
+      "source_subset": "test",
+      "source_row_index": 146,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "930fab1a34f3a31f49d7b388d13ae6b0f764941ae970649b45ecbf27c80d1e66",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-147",
+      "source_subset": "test",
+      "source_row_index": 147,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "c1bddcb9e5f993a4b98c0054e4ae1c6017b48f6e18c2e67beb576abfe9fb273b",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-148",
+      "source_subset": "test",
+      "source_row_index": 148,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "0ff6fc45d8d8ecb554b9227cbe62ece901fe05163bea3ab36be3243090170202",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-149",
+      "source_subset": "test",
+      "source_row_index": 149,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "ea86d33631f8615e46657e6a6d1f4fd91339e5bee5c4613ef1edaa4951454505",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-150",
+      "source_subset": "test",
+      "source_row_index": 150,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "589c3b6dd556fb7495de3905e14bccf0c764506638317c56729ff0b3a074bc05",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-151",
+      "source_subset": "test",
+      "source_row_index": 151,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "d54ec7b49b16a8a90278bf8fa62ee225f723990252920a444b989661629eaa20",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-152",
+      "source_subset": "test",
+      "source_row_index": 152,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "a8698251881c2757ff6c6068b3aa742b7a5818eef3c6e2c343864d3763916460",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-153",
+      "source_subset": "test",
+      "source_row_index": 153,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "de1ff53b4091a277d0bef13b3ad2a01ae3dcee551c0c9a6e162c8d6edbf0d917",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-154",
+      "source_subset": "test",
+      "source_row_index": 154,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "74c8515bc1067ea815d2a90a05eb4c0b58b40985eba2d8a364a3281675b15b7a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-155",
+      "source_subset": "test",
+      "source_row_index": 155,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e51652fc43311ea9fbc49a76f0c1db1d7b2beef6e24a85e7ce6a32edf04bb207",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-156",
+      "source_subset": "test",
+      "source_row_index": 156,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "1b65a2ae276e305d419d909547dbbd1530c61e5e6362e3839ddec478eec9c468",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-157",
+      "source_subset": "test",
+      "source_row_index": 157,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "1f48ed76d762664661cb57fd18fc0bddc696e2c356de6914bc1962c11ad06d24",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-158",
+      "source_subset": "test",
+      "source_row_index": 158,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "0d611faec37a87730287cb6409718f29289b5be5c75fd4b81f38cfbafb4a2286",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-159",
+      "source_subset": "test",
+      "source_row_index": 159,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "1dba0cc9695ef127fc317384feab3e9c67c759ed321873f4593161ffc1c2a550",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-160",
+      "source_subset": "test",
+      "source_row_index": 160,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "1eed3cebc112307ebe00901585ae3052446d798a2f0fc0065da52b68f0ccb5f3",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-161",
+      "source_subset": "test",
+      "source_row_index": 161,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "64349d815ec503b75bf0b758c2652b487071cdff2bfd09ef3d5bf418875d14bb",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-162",
+      "source_subset": "test",
+      "source_row_index": 162,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "b9c27949d1e33136e68d6d672bd86bfb15ad5e5f9d73bc82d986287f02031dc2",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-163",
+      "source_subset": "test",
+      "source_row_index": 163,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "63e2aa7f21bc9d3b23c49302b6f480b0821b81004cd496c350510e429f87c441",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-164",
+      "source_subset": "test",
+      "source_row_index": 164,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "60677b7649500ba8e0756a6e8dcbdb7f57704d6cfad13996e69c20db81042adc",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-165",
+      "source_subset": "test",
+      "source_row_index": 165,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "df381f9cd1f968096f1d02168ba741d76d25d488ca2fa7b812392b9cff33eb5e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-166",
+      "source_subset": "test",
+      "source_row_index": 166,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "27d03bc2a6ec7a824c7917d5750b7dcd17f7c86f9c989cf108c6c397ca71c912",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-167",
+      "source_subset": "test",
+      "source_row_index": 167,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "f2d02a581a0eba45d95e9e66bf0b7f997a720505fbf1141df648274d045c33e7",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-168",
+      "source_subset": "test",
+      "source_row_index": 168,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "19c66b1de4afdd1a4d66c6f7d08fb88afbcaf18ad15c7a3e370f66793fdc0f09",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-169",
+      "source_subset": "test",
+      "source_row_index": 169,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "a2546a13ef18975f07f8eb9d8f21af2505f6779d1ccd66597abfe44de17a83dd",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-170",
+      "source_subset": "test",
+      "source_row_index": 170,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "025b4d79cdb3a1000b3b7adb222a08c20601de0ddec71c413b7780346bf080d6",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-171",
+      "source_subset": "test",
+      "source_row_index": 171,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "604fbb825905d3a21eddb36fc0619e3feb1cfc43d4a01db557161aff971a1d31",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-172",
+      "source_subset": "test",
+      "source_row_index": 172,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "96952f4c2404f96514c22d31f3a8790e856076542c52990b768020bc94d1442f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-173",
+      "source_subset": "test",
+      "source_row_index": 173,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "881712384a525777df40e3b46171438e3c6c52fe326905a41b8e43bb9ec9eac9",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-174",
+      "source_subset": "test",
+      "source_row_index": 174,
+      "source_check_type": "one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "21d73a0173bb580cde7d216dd670ff55c8b9f56830bc4a5b89d9573b14cf3625",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-175",
+      "source_subset": "test",
+      "source_row_index": 175,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e609bfd7feb5c8528343cc8d14f3bd699ca0c1756fc2e87e3f6663559f9d12e5",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-176",
+      "source_subset": "test",
+      "source_row_index": 176,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "9ae8eada8275334b30a98eb08a8ba997349a6bbf2c285e33284fe149195909d0",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-177",
+      "source_subset": "test",
+      "source_row_index": 177,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "664f05266131ca7a64c5e087709dece6dcfa89d0a87ffd7693bce46c49e7d1c1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-178",
+      "source_subset": "test",
+      "source_row_index": 178,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "0bd9081d8939a12a62cc512d518f15005090b766a6f4b8e885341f922367e017",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-179",
+      "source_subset": "test",
+      "source_row_index": 179,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "526bc56eddf0cd0eaaa552e035b3b8455e5a0beafd9982251218cec1230226a1",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-180",
+      "source_subset": "test",
+      "source_row_index": 180,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "c19871fea8a494095fac013fb938591ad990bde95fe750002116c69f374ccd99",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-181",
+      "source_subset": "test",
+      "source_row_index": 181,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "2cccb85d01e43bf7442d1a4ec5ace7fa8746ca862850f9b4e469985a1671839d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-182",
+      "source_subset": "test",
+      "source_row_index": 182,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "3205379484876ac9b55a2764719958428c0b188fd2a3532ef2fff9d76e51bf47",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-183",
+      "source_subset": "test",
+      "source_row_index": 183,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "b790f691921295711ed79291a8125a1e69829f8fc8e07b8e2dbe8a993498ca90",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-184",
+      "source_subset": "test",
+      "source_row_index": 184,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "d49eba87829c09264666c01d777f1de528a31de7439f70de68b57c522dbf324f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-185",
+      "source_subset": "test",
+      "source_row_index": 185,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "35fa7466c1e51a90b853d7cd95cdff2b1e90ccaf3a687c20d06b059e4f05ccdb",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-186",
+      "source_subset": "test",
+      "source_row_index": 186,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "3c3bb87e2caa43a7f4fec621a9decf2a2e8f01c7d4a3c26be48e1a2af62b2d4a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-187",
+      "source_subset": "test",
+      "source_row_index": 187,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "3b6d51038a42e9d774c73c0c5ff89c255bd4e2f8639c0fc3882dd20d0c7bb5e6",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-188",
+      "source_subset": "test",
+      "source_row_index": 188,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "34ee9bee2e4ce7c40a04abb8e2ba9b538a6c8026f071f22304f41c9a73b6d15e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-189",
+      "source_subset": "test",
+      "source_row_index": 189,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "14f5e173295289676b51dc59a54ae6dbd02da627ed694b444dedf8151579ec99",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-190",
+      "source_subset": "test",
+      "source_row_index": 190,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "97ed22d8589bbf8d7ff48d176cc8a8fdc4fdf10b02d21b8c42110edd2f1db563",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-191",
+      "source_subset": "test",
+      "source_row_index": 191,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "62c71f2003b99c91b30fe2cc632d932aaa33822df79a45c14de992584633d145",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-192",
+      "source_subset": "test",
+      "source_row_index": 192,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "d82aea90a6fdc35e2253a9402be6966a1711d3161166796a259413a726a7563d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-193",
+      "source_subset": "test",
+      "source_row_index": 193,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "9598907d902a8ce66d26adc28c9b999514ce5846faae052c3fd6955492e6272f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-194",
+      "source_subset": "test",
+      "source_row_index": 194,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "75f9ac54b8cd05794eb1142da0309b6eb26f8fa6648ed91e5287a13ae2aa2fe9",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-195",
+      "source_subset": "test",
+      "source_row_index": 195,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "bc0ecf99f095f5f8d6278b11ffea61c649263fc577c964d3b74f6bdef4ef2b2d",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-196",
+      "source_subset": "test",
+      "source_row_index": 196,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "fdbd3d29e234384e1b986d61ce9c1608d06c279ea9de3d2cfa8d96910d16588e",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-197",
+      "source_subset": "test",
+      "source_row_index": 197,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "56280b3b38bcb341c960e14b26c49636618462408f474f7406c58c06eb86c683",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Tissue"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-198",
+      "source_subset": "test",
+      "source_row_index": 198,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "d71fd6b2244a24d800abed965b7d1e3cf7b58d50ce31a0d8737d6aaa0294918a",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-199",
+      "source_subset": "test",
+      "source_row_index": 199,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "3359633dc715c41ff7f3ef6a3d480b6f3da29de36f0a38829d2220be8d44f528",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-200",
+      "source_subset": "test",
+      "source_row_index": 200,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "8a4bb512c9ebded76d0b5d20bb7497383e35bddbf46ae14d5ee8d1cf87ef204f",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-201",
+      "source_subset": "test",
+      "source_row_index": 201,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "6835500c8e53ecff7e70591d5a59f6391c46e7e1f1722018191fe2a85671c163",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-202",
+      "source_subset": "test",
+      "source_row_index": 202,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "eebf8f0756861b87f4bdebb24508da0b0ed762e45708076a49b85123b94855fd",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Disease"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-203",
+      "source_subset": "test",
+      "source_row_index": 203,
+      "source_check_type": "potential one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "e9d4a311f9f153947faeffe02cdaf62f02379251029468f344a72f66fc265f18",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Protein"
+      ]
+    },
+    {
+      "task_id": "kgcheck-test-204",
+      "source_subset": "test",
+      "source_row_index": 204,
+      "source_check_type": "existing one-hop",
+      "workflow_family": "directed-relation-evidence",
+      "source_prompt_sha256": "15b39c66f0021c5cf13f9bb13cc3ca3a19743af21ee016926c0467a3bcead0ca",
+      "source_metadata_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "entity_types_in_instruction": [
+        "Protein",
+        "Cellular_component"
+      ]
+    }
+  ]
+}

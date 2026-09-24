@@ -408,6 +408,17 @@
       "tasks_file": "benchmark_tasks/scigym.json",
       "source_inventory_name": "SciGym",
       "task_inventory_status": "all identifiers; shared protocol and source scorer reviewed; individual system inputs uninspected"
+    },
+    "BioKGBench KGCheck": {
+      "revision": "4d992e7e735d81cb84d02f86f6489c82479c290e",
+      "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck",
+      "inventory_count": 225,
+      "public_inventory_count": 225,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/biokgbench.json",
+      "source_inventory_name": "BioKGBench",
+      "task_inventory_status": "all KGCheck rows enumerated; shared instructions and scorer reviewed; individual scientific evidence unreviewed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

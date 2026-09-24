@@ -305,9 +305,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
 | [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 system IDs; shared protocol and scorer reviewed, individual systems uninspected | — |
+| [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 
-Of these 2,656 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,608 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 2,881 ID task/protocol/definition records, 47 have manually assessed component mappings,
+2,833 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -350,6 +351,13 @@ so a training adaptation needs independent observed time courses. Static scorer
 review found an unperturbed reference used in perturbation scoring, zero-error
 summaries when every simulation fails, and incomplete species alignment. These
 findings are recorded with source revisions; they have not been reproduced by execution.
+
+BioKGBench contributes 225 agentic KGCheck records: graph attributes, entity
+presence and directed relations checked against source evidence. Atomic KGQA
+and SCV exercises are excluded. The main score is exact label matching;
+the optional process judge and baseline literature tool use LLMs. An offline
+adaptation needs frozen evidence and complete artifact checks. Missing
+annotations and failed retrieval do not establish biological absence.
 
 LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.
 The public harness and card are inspected, but existing access lacks the dataset
