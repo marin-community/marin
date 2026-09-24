@@ -13,6 +13,7 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
 from harbor_qemu.backends.qemu.image import QemuAssets
+from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 from harbor_qemu.image import DockerfileSource, RegistryImage
 from harbor_qemu.machine import (
     HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
@@ -23,7 +24,6 @@ from harbor_qemu.machine import (
     ShellSession,
 )
 from harbor_qemu.machine import NetworkPolicy as MachineNetworkPolicy
-from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 
 
 class NetworkPolicy(StrEnum):

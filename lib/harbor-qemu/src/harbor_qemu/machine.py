@@ -38,7 +38,7 @@ class ShellUpdate:
 
 
 class ShellSession(Protocol):
-    """One persistent interactive shell owned by an agent trial."""
+    """One persistent shell owned by an agent trial."""
 
     @property
     def interactive(self) -> bool: ...

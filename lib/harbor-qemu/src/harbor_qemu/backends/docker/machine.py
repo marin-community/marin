@@ -5,7 +5,7 @@
 
 import asyncio
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from harbor_qemu.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
@@ -20,7 +20,14 @@ from harbor_qemu.machine import (
 )
 
 
-async def docker(*args: str, stdin: bytes = b"", timeout: float | None = None) -> tuple[int, bytes, bytes]:
+@dataclass(frozen=True)
+class DockerCommandResult:
+    exit_code: int
+    stdout: bytes
+    stderr: bytes
+
+
+async def docker(*args: str, stdin: bytes = b"", timeout: float | None = None) -> DockerCommandResult:
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -31,7 +38,7 @@ async def docker(*args: str, stdin: bytes = b"", timeout: float | None = None) -
         await process.wait()
         raise
     assert process.returncode is not None
-    return process.returncode, stdout, stderr
+    return DockerCommandResult(process.returncode, stdout, stderr)
 
 
 class DockerMachine:
@@ -52,7 +59,7 @@ class DockerMachine:
             args.extend(("-e", f"{key}={value}"))
         args.extend((self.name, *command.argv))
         try:
-            code, stdout, stderr = await docker(*args, stdin=command.stdin, timeout=command.timeout)
+            completed = await docker(*args, stdin=command.stdin, timeout=command.timeout)
         except TimeoutError:
             # docker exec has no reliable process-tree cancellation; dispose of the trial.
             await self.close()
@@ -61,30 +68,37 @@ class DockerMachine:
             await self.close()
             raise
         limit = command.output_limit_bytes
-        return Result(code, stdout[:limit], stderr[:limit], len(stdout) > limit, len(stderr) > limit, ExitReason.EXITED)
+        return Result(
+            completed.exit_code,
+            completed.stdout[:limit],
+            completed.stderr[:limit],
+            len(completed.stdout) > limit,
+            len(completed.stderr) > limit,
+            ExitReason.EXITED,
+        )
 
     async def upload(self, source: Path, target: str) -> None:
         parent = str(PurePosixPath(target).parent)
-        code, _, stderr = await docker("exec", self.name, "mkdir", "-p", parent)
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
-        code, _, stderr = await docker("cp", str(source), f"{self.name}:{target}")
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
+        result = await docker("exec", self.name, "mkdir", "-p", parent)
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+        result = await docker("cp", str(source), f"{self.name}:{target}")
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        code, _, stderr = await docker("cp", f"{self.name}:{source}", str(target))
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
+        result = await docker("cp", f"{self.name}:{source}", str(target))
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        code, _, stderr = await docker("rm", "-f", self.name)
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
+        result = await docker("rm", "-f", self.name)
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
 
 class DockerMachineFactory:
@@ -133,7 +147,7 @@ class DockerMachineFactory:
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
         args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
-        code, _, stderr = await docker(*args)
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
+        result = await docker(*args)
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
         return DockerMachine(name, spec)
