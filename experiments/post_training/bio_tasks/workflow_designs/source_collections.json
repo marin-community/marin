@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-09-24T22:00:16.536092+00:00",
+  "reviewed_at": "2026-09-24T22:16:43.621630+00:00",
   "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export. The pinned GO.db reference graph was also audited against the existing mouse membership asset.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
@@ -627,13 +627,13 @@
         "There are two libraries per population and developmental stage. Replicate numbers do not establish donor pairing across stages or basal/luminal populations; do not invent a donor block or treat the stages as repeated measures.",
         "Inspected metadata provides no documented failed replicate. Removing one sample leaves only one in that stage, so this source is rejected for the proposed evidence-backed replicate-QC exclusion question.",
         "Bulk sorted populations do not exercise single-cell preprocessing or pseudobulk aggregation. The Liu PyDESeq2 task is an explicit count-model adaptation.",
-        "New native preparation passes scoped count/shrinkage/ORA checks and GSEA enrichment-score/leading-edge checks. Only adjusted-tested semantic reduction completed; full raw-genome reduction, GSEA repeatability and new Harbor validation remain pending. Coverage is unchanged.",
+        "Native count/shrinkage, ORA and GSEA walk checks pass. Every native semantic contribution vector and ancestor count matches the independent reduction; the larger result uses that equivalent calculation because the full package call timed out. Complete count-fit reference metadata, GSEA repeatability and Harbor validation remain pending; coverage is unchanged.",
         "The existing mouse GO membership asset is BP-only. The term-label table has no ontology edges; neither supplies a complete semantic graph or a KEGG snapshot.",
         "Count bytes match the Zenodo record declared CC BY 4.0. Retain the deposit and original study citations. This does not confer redistribution rights on additional ontology/pathway snapshots.",
         "The Zenodo tutorial FASTQs contain 1,000 reads each and cannot substantiate a full raw-read workflow. The observed gene-count matrix retains the original count totals.",
         "Expanded benchmark-cohort lineage review remains open. Sample-sheet agreement and a public license do not establish independence from every ID benchmark input."
       ],
-      "planning_status": "native-count-shrinkage-ora-and-gsea-audited; adjusted-semantic-result-reproduced; raw-semantic-repeatability-harbor-and-lineage-pending",
+      "planning_status": "native-count-ora-gsea-and-semantic-components-audited; complete-reference-repeatability-harbor-and-lineage-pending",
       "candidate_question_or_card_ids": [
         "count-contrast-enrichment",
         "portfolio-liu-single-cell-count-model-differential-expression"
@@ -746,9 +746,9 @@
             "change a semantic representative",
             "substitute raw p for adjusted p in a required plot"
           ],
-          "unresolved_inputs": "Reconcile the pinned native semantic graph, obtain the full annotation universe, acquire compatible frozen pathway inputs and complete source-cohort lineage. Record species/reference-release adaptations explicitly; the original human labels are not an input gate.",
+          "unresolved_inputs": "Full annotation and both graph exports are available and inspected. Finish native semantic intermediate comparisons; compatible KEGG inputs and unnamed benchmark-input lineage remain unresolved. Species/reference-release adaptations are explicit.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
-          "status": "native-count-shrinkage-ora-and-gsea-audited; adjusted-semantic-result-reproduced; raw-semantic-repeatability-harbor-and-lineage-pending",
+          "status": "native-count-ora-gsea-and-semantic-components-audited; complete-reference-repeatability-harbor-and-lineage-pending",
           "validated_mappings_added": 0,
           "acceptance_contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
           "visual_scoring_scope": "Grade the numerical biological and plot-data outputs; defer subjective or unsupported figure scoring, preserve component-only mappings, and do not delay viable numerical tasks.",
@@ -850,8 +850,196 @@
           "content_length": "92817018"
         },
         "orgdb_access_result": "The provider archive passed its MD5 check; the earlier local extraction ran out of disk and was removed. The reserved-CPU installation now passed the expected SQLite hash check and namespace loading, and its complete BP export (25,730 genes, 1,400,728 memberships) passed the scoped independent audit. The full SQLite file was not copied to this VM.",
-        "native_graph_boundary": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 181 retained adjusted-view terms, but full native S-value/pair comparisons remain pending.",
+        "native_graph_boundary": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 3,811 native contribution vectors and ancestor counts, 608 sampled pair scores and all 181 retained adjusted-view terms. The larger equivalent reduction retained 798 of 3,786 terms in 23.25 seconds; the original full clusterProfiler call remains timed out.",
         "verified_new_native_runs": "The ordered-install attempt passed database hash and namespace checks. Completed count/ORA/adjusted-semantic outputs passed scoped audits; the overall job timed out in raw-genome reduction. See bixbench.json:expression_enrichment_contract.native_preparation."
+      },
+      "lineage_screen": {
+        "checked_at": "2026-09-24T22:08:38.009776+00:00",
+        "scope": "Declared source metadata in all 32 permitted ID inventories and agent-facing definitions for all 244 PromptBio tasks. Authored independent_data_sources and proposed mappings excluded; no OOD contents inspected.",
+        "needles": [
+          "GSE60450",
+          "4249555",
+          "MCL1-D",
+          "MCL1-L",
+          "10.1038/ncb3117",
+          "25730472",
+          "SRR1552444",
+          "SRR1552455"
+        ],
+        "inventory_files": [
+          {
+            "path": "benchmark_tasks/baisbench.json",
+            "sha256": "2182bf10688d9f096d5f9db2f0f25212aa32c7f9e90f2c4a25ecba6cb3ba0c8b",
+            "source_metadata_fields": 1397
+          },
+          {
+            "path": "benchmark_tasks/bio-task-bench.json",
+            "sha256": "4a57d1f711e32b135ab59323ef09fa529be85e63477080f57890c7592359635e",
+            "source_metadata_fields": 136
+          },
+          {
+            "path": "benchmark_tasks/bioagent.json",
+            "sha256": "2915e369b49c11ee83d90c4aa7521d6155230751d7a2205b3b36a114466cdc8d",
+            "source_metadata_fields": 10
+          },
+          {
+            "path": "benchmark_tasks/biokgbench.json",
+            "sha256": "cecdac5f28f15c1cdbb79c21082c8813a32cf50b2877b143f4858c09441e0811",
+            "source_metadata_fields": 1131
+          },
+          {
+            "path": "benchmark_tasks/biomlbench.json",
+            "sha256": "186ef625bb8d6cce60260e01aff8b42f4da899b1d22a43193ff035d3e499a4a2",
+            "source_metadata_fields": 2550
+          },
+          {
+            "path": "benchmark_tasks/biomni-eval1.json",
+            "sha256": "312dabda1c34eec6f061c33f1f1578a0847fc84fa96de4f6813e2b34ba7ae388",
+            "source_metadata_fields": 2602
+          },
+          {
+            "path": "benchmark_tasks/biomnibench-da.json",
+            "sha256": "04ff8de4ffacc3e8f9b5e01471790043fb02b7be4a2efb40461342d3d79df20a",
+            "source_metadata_fields": 101
+          },
+          {
+            "path": "benchmark_tasks/bioxarena.json",
+            "sha256": "7be57efd440fc0f637f8f9162b629b5df380263777ae8192603db3c66d390f54",
+            "source_metadata_fields": 447
+          },
+          {
+            "path": "benchmark_tasks/bixbench-verified-50.json",
+            "sha256": "2521fbbc67d7fa8e57e3c3f20820d71c92c0cb2477a4f541bb8a465cd473682f",
+            "source_metadata_fields": 352
+          },
+          {
+            "path": "benchmark_tasks/bixbench.json",
+            "sha256": "aea7bce180d74615adc38f06c593dc6461b9f94696078ffd14c98f050385ae0e",
+            "source_metadata_fields": 412
+          },
+          {
+            "path": "benchmark_tasks/bixbench3.json",
+            "sha256": "c8afe307e2e9ad2826c713da597da36e6dca1e3e1ccd84d3d41f041ef0e35d29",
+            "source_metadata_fields": 100
+          },
+          {
+            "path": "benchmark_tasks/cellbench.json",
+            "sha256": "3269a79bf813494be6679a5c45ca16b21d798f2cca7d1536b7dd5a6421f21536",
+            "source_metadata_fields": 301
+          },
+          {
+            "path": "benchmark_tasks/compbiobench.json",
+            "sha256": "dc5651f1afa08ab5274026792b610e49e3aa74427dab2b1a217290275524874f",
+            "source_metadata_fields": 401
+          },
+          {
+            "path": "benchmark_tasks/core-bench.json",
+            "sha256": "f6c0719ee736d6e87734e9dff74a4447f5b5ff7c2e9756947b344a9b213964a8",
+            "source_metadata_fields": 176
+          },
+          {
+            "path": "benchmark_tasks/discoverybench.json",
+            "sha256": "2e2b6156b4c9dbd7b39c3c1e5a2cf20baf0c924cb26ac1f457ffaecbecc9542d",
+            "source_metadata_fields": 158
+          },
+          {
+            "path": "benchmark_tasks/drugdiscoverybench.json",
+            "sha256": "3b513073c4fa4af5de592a94215bb3947d2e7def5340b2ad88d5ccd92ebc82af",
+            "source_metadata_fields": 248
+          },
+          {
+            "path": "benchmark_tasks/epibench.json",
+            "sha256": "4bc94b5110637fb11e97195bbbcd0ffb0a9e2c670c9299008deb62f657214c58",
+            "source_metadata_fields": 28
+          },
+          {
+            "path": "benchmark_tasks/labbench-literature-database.json",
+            "sha256": "a0337954ec6e645c4b24d9c21603ac01a9b790032979041e062636e8c5f40372",
+            "source_metadata_fields": 3977
+          },
+          {
+            "path": "benchmark_tasks/liu-single-cell.json",
+            "sha256": "d722bb44228cf72c04b1bfa6bc084f7aa2ebfb6b5218fe6614f6f19f349fbdc9",
+            "source_metadata_fields": 442
+          },
+          {
+            "path": "benchmark_tasks/promptbio-bench.json",
+            "sha256": "f05fb3099d64276e9c983867b31f09775cd9dbf268348bf53249fd896cd4b80d",
+            "source_metadata_fields": 1223
+          },
+          {
+            "path": "benchmark_tasks/sc-heurekabench.json",
+            "sha256": "ed065ba6502918c4e83fdb5f870d4b54e7393bf34438d8c333390e148a17c0ef",
+            "source_metadata_fields": 1171
+          },
+          {
+            "path": "benchmark_tasks/scbench-long.json",
+            "sha256": "895ae27af87709a0ca31cf41edd75625a8c54b98aa38d94453fb24c3fe1dcd09",
+            "source_metadata_fields": 17
+          },
+          {
+            "path": "benchmark_tasks/scbench.json",
+            "sha256": "b379b4d840d43afd612f6bd260e2b9312dc2658d8bf61d790b52e02b81b5a76d",
+            "source_metadata_fields": 24
+          },
+          {
+            "path": "benchmark_tasks/scholarqabench-bio.json",
+            "sha256": "e24b1155003253deb69c8de19c923c2cc33a1b0345c19560fda6cd370ce749db",
+            "source_metadata_fields": 1455
+          },
+          {
+            "path": "benchmark_tasks/scienceagentbench.json",
+            "sha256": "6f85405ff563ada594d6ea9744d4f71c0497f77bcdb197e99e3dd5843e7ac12a",
+            "source_metadata_fields": 162
+          },
+          {
+            "path": "benchmark_tasks/scigym.json",
+            "sha256": "f353b16ec45af36bbdb0c4a45229dedaa462bac5d12be033e7b7324ed70e2a03",
+            "source_metadata_fields": 706
+          },
+          {
+            "path": "benchmark_tasks/spatialbench-long.json",
+            "sha256": "24dd539da4663c1df96568d5427757c6007a2e10b2930e2d32e2e8455b806bf9",
+            "source_metadata_fields": 17
+          },
+          {
+            "path": "benchmark_tasks/spatialbench.json",
+            "sha256": "b138c8b13681528766f364a173cb22bcd38ebe568bf6be8200d51ddcba883b94",
+            "source_metadata_fields": 64
+          },
+          {
+            "path": "benchmark_tasks/txbench-ab.json",
+            "sha256": "576cbc70ee3173d5a58916de782f843235ffad688608c1771afc4faa241d2f38",
+            "source_metadata_fields": 32
+          },
+          {
+            "path": "benchmark_tasks/txbench-od.json",
+            "sha256": "f254c9dad29559fa625f08d235d7ef9947cce4ff2b328c1ddc39aded9094c486",
+            "source_metadata_fields": 22
+          },
+          {
+            "path": "benchmark_tasks/txbench-pp.json",
+            "sha256": "18deb4b9c36c4555d12e27c6e0f061df8b6deb73c7681ed3d011e31386c51af0",
+            "source_metadata_fields": 63
+          },
+          {
+            "path": "benchmark_tasks/variantbench.json",
+            "sha256": "6d8d2de14109a7f188edeaed073cfcdf51ac67ba555debc9abae17be6cea3e67",
+            "source_metadata_fields": 41
+          }
+        ],
+        "promptbio_definitions": 244,
+        "promptbio_manifest_sha256": "dadc3a27c23904910ddc806b21d7b471b03c4356a8a409efb86ee14606797947",
+        "matches": [],
+        "result": "No matching declared identifiers",
+        "limits": "Metadata screening does not prove absence from unnamed or inaccessible biological assets. Generic PromptBio gene_rnk/count_matrix inputs do not declare their study lineage. No training-clearance or coverage promotion from this negative screen.",
+        "target_study_comparison": {
+          "source_bixbench_study": "https://doi.org/10.1172/jci.insight.167744",
+          "authored_study": "https://doi.org/10.1038/ncb3117",
+          "authored_deposit": "https://zenodo.org/records/4249555",
+          "bibliographic_evidence": "https://pubmed.ncbi.nlm.nih.gov/25730472/",
+          "conclusion": "Distinct human ASXL1 disease study and mouse mammary developmental study. This establishes the explicit BixBench context change; it does not resolve generic unlabelled inputs in other benchmark releases."
+        }
       }
     },
     {

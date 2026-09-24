@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T22:00:16.536092+00:00",
+  "updated_at": "2026-09-24T22:16:43.621630+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -31,7 +31,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "e31a6bee3cbc0a2aa87e33be6f93ebd9de3855b598a9a6325b16f318028c8c4b"
+      "sha256": "387f961a0c4e422830f0a838cd476860a4166586b2d40eda456bd64b802b363d"
     },
     {
       "path": "workflow_designs/compbiobench.json",
@@ -212,7 +212,7 @@
       "source_input_review": {
         "collection_id": "existing-mammary-observed-counts",
         "review_path": "workflow_designs/source_collections.json",
-        "status": "native-count-shrinkage-ora-and-gsea-audited; adjusted-semantic-result-reproduced; raw-semantic-repeatability-harbor-and-lineage-pending",
+        "status": "native-count-ora-gsea-and-semantic-components-audited; complete-reference-repeatability-harbor-and-lineage-pending",
         "validated_mappings_added": 0
       },
       "judge_free_scoring_dispositions": {
@@ -10857,7 +10857,7 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "9da1ab71f09efbd81268a6c3d269d92d6294b53239ef186ffdf2adf2df90d722",
+    "sha256": "99c1be59859d2fb5b3d04ff8c42d4415a13cec27fa7b26fafb4b5bc28bde5851",
     "candidate_collections": 7,
     "new_biological_payloads_downloaded": 4,
     "cleared_for_training": 0,

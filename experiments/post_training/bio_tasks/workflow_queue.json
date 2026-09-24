@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T22:00:16.536092+00:00",
+  "updated_at": "2026-09-24T22:16:43.621630+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1251,7 +1251,7 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "58ffa5ee6091223fd3120dc48f73e571d1a23d798c322bcac2c350b46b0cf729",
+    "portfolio_sha256": "8a6e7a4a917c5a8010303c69d7c48345e3d79678ddc07dcd0f1c39ba22fa8962",
     "limit": "Broad question planning and all 30 original consolidation reviews are complete with explicit source/endpoint dispositions; 25 combinations remain conditional. Resolve selected-task input, method and acceptance gaps before implementation, and source-specific evidence gaps before coverage claims. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
@@ -1277,7 +1277,7 @@
     },
     "predicted_validated_gain": null,
     "execution_boundary": "No model calls, new cloud job, implementation assignment or child agent is launched by this selection. Existing shared-node and explicit-concurrency requirements still apply.",
-    "native_preparation_status": "Count fit/apeglm, full annotation export, both ORA tables and adjusted-tested reduction audited. The run timed out after 1200 analysis seconds in raw-genome simplification; that output is incomplete. No Harbor validation or new coverage credit. Separate GSEA preparation succeeded with enrichment-score and leading-edge checks; repeatability remains pending."
+    "native_preparation_status": "Count fit/apeglm, full annotation, both ORAs and adjusted-tested native reduction passed scoped audits. Every native semantic contribution vector and ancestor count matched independent reconstruction; the full raw-genome equivalent reduction finished in 23.25 seconds with 798 retained terms. The original full clusterProfiler call timed out. No Harbor validation or new coverage. GSEA repeatability is running separately."
   },
   "deferred_preparations": [
     {

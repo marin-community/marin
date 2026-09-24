@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T22:00:16.536092+00:00",
+  "updated_at": "2026-09-24T22:16:43.621630+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. The broad question portfolio is complete with explicit limits. Prepare selected input and acceptance contracts before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13349,7 +13349,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "e31a6bee3cbc0a2aa87e33be6f93ebd9de3855b598a9a6325b16f318028c8c4b",
+      "sha256": "387f961a0c4e422830f0a838cd476860a4166586b2d40eda456bd64b802b363d",
       "benchmark_id": "BixBench",
       "reviewed_question_ids": 205,
       "proposed_designs": 27,
@@ -13524,7 +13524,7 @@
   "authoring_phase": "task-contract-preparation",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "58ffa5ee6091223fd3120dc48f73e571d1a23d798c322bcac2c350b46b0cf729",
+    "sha256": "8a6e7a4a917c5a8010303c69d7c48345e3d79678ddc07dcd0f1c39ba22fa8962",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

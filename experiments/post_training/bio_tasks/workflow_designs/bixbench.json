@@ -1707,7 +1707,7 @@
         "bix-5",
         "bix-49"
       ],
-      "scientific_question_on_independent_observations": "Which disease-associated expression effects and GO processes persist after explicit count filtering, effect shrinkage and semantic term reduction?",
+      "scientific_question_on_independent_observations": "Which mammary developmental expression effects and GO processes persist after count filtering, effect shrinkage and semantic term reduction?",
       "matching_existing_workstream_ids": [
         "rna-seq-contrast-enrichment"
       ],
@@ -1717,21 +1717,21 @@
         "rna-seq-contrast-enrichment-03",
         "rna-seq-contrast-enrichment-04"
       ],
-      "input_design": "Independent replicated case/control raw RNA counts with documented covariates, GTF/GFF3 gene identifiers and pinned GO/gene annotations.",
+      "input_design": "Observed GSE60450 raw gene counts for sorted luminal and basal populations, with sample/stage metadata, stable Entrez IDs and pinned mouse gene/GO annotations. Use the explicit context adaptation in the shared contract.",
       "proposed_artifacts_and_key_columns": [
         "samples.tsv: sample, condition, covariates, inclusion",
         "results.tsv: gene, base_mean, raw_lfc, shrunken_lfc, p, q, testable",
         "go.tsv: term, gene_universe, overlap, p, q, representative_term",
         "members.tsv: term, gene, direction, eligibility"
       ],
-      "method_and_decision_parameters_to_freeze": "The shared expression_enrichment_contract specifies named model/masks, distinct ORA backgrounds, native simplification and complete artifacts. Annotation acquisition, installed source checks, numerical tolerances and runtime remain unresolved.",
+      "method_and_decision_parameters_to_freeze": "The shared expression_enrichment_contract fixes model/mask semantics, both ORA backgrounds and semantic reduction. Native fit/ORA/GSEA outputs have scoped audits; full reduction runtime, repeatability and final verifier tolerances are being checked.",
       "deterministic_verifier_design_and_negative_controls": "Run native DESeq2/clusterProfiler oracle and independently check contrast direction, complete gene/term universes, memberships and multiplicity. Mutate a contrast sign, universe size or simplified representative and require failure.",
-      "unresolved_data_and_runtime_requirements": "Need independent raw counts and sufficiently replicated condition design; annotation snapshot must be license-compatible offline and complete enough for semantic reduction; runtime unmeasured.",
+      "unresolved_data_and_runtime_requirements": "The luminal count fit, full gene annotation and both GO graph sources are inspected. Complete native semantic intermediate checks, GSEA repeatability, the separate basal analysis, scoped input-lineage review and complete offline Harbor validation.",
       "endpoint_adaptation_limits": "The mouse developmental context is eligible for workflow-equivalent coverage under the explicit adaptation policy. Preserve all methods, masks, population-selection decisions and lookup semantics, with source-to-authored gene/term identities specified before outcomes are examined. Multi-population requirements still need the corresponding fits; no actual human ASXL1 finding is claimed.",
       "benchmark_study_exclusion_identifiers": [
         "https://doi.org/10.1172/jci.insight.167744"
       ],
-      "status": "proposed-design-only-no-coverage-credit",
+      "status": "native-preparation-in-progress-no-coverage-credit",
       "contract_reference": "expression_enrichment_contract in this file",
       "endpoint_contracts": [
         {
@@ -3714,7 +3714,7 @@
       "semantic_graph": "Use the checksum-pinned GOSemSim 2.36.0 bundled gotbl.rda for Wang similarity and the separately pinned GO.db 3.22.0 ancestors for clusterProfiler tie-breaking. Inspect the bundled relation table and eligible-term representation before freezing acceptance. Do not overwrite the native table with the audited GO.db export or claim the two graphs agree without comparison.",
       "semantic_native_conventions": "The inspected Wang source assigns weights 0.8 to is_a, 0.6 to part_of and 0.7 to other relationships. For BP it sets the universal all root contribution to zero. Its traversal retains the first duplicate ancestor entry rather than explicitly maximizing over path contributions. Preserve native table/traversal order and record this behavior; an independently implemented textbook maximum-path score is not automatically the same oracle. Use a fresh R process per task so global semantic caches cannot mix graph versions. GOSemSim mgoSim rounds the similarity matrix to three decimals before clusterProfiler applies the strict >0.7 comparison; reproduce that rounding boundary.",
       "semantic_data": "For Wang, construct godata(annoDb=the pinned mouse OrgDb, keytype=ENTREZID, ont=BP, computeIC=FALSE, processTCSS=FALSE). Information content is not used by the inspected Wang path. This avoids an unnecessary IC fit without changing the intended native similarity method.",
-      "semantic_observed_behavior": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 181 retained adjusted-view terms, but full native S-value/pair comparisons remain pending."
+      "semantic_observed_behavior": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 3,811 native contribution vectors and ancestor counts, 608 sampled pair scores and all 181 retained adjusted-view terms. The larger equivalent reduction retained 798 of 3,786 terms in 23.25 seconds; the original full clusterProfiler call remains timed out."
     },
     "kegg": {
       "source_endpoints": [
@@ -3764,7 +3764,7 @@
       "all input genes with raw/shrunken statistics and statuses; identifier mapping and independent-filter metadata",
       "requested/effective backgrounds and exact selected IDs for each ORA view",
       "all term memberships and eligibility, native ORA values and native testing denominator",
-      "semantic similarity matrix, neighborhood tie decisions and retained/removal identities for each ORA view",
+      "semantic contribution vectors, above-cutoff neighborhoods, tie decisions and retained/removal identities for each ORA view; the full dense pair matrix is derivable and need not be submitted",
       "complete ranked list, all GSEA sets/results, permutation settings and leading edges",
       "separate top-ten-significant and top-five-absolute-NES tables",
       "complete numerical plotting tables; supporting plots are inspectable but their visual quality is not part of the reward",
@@ -3788,8 +3788,8 @@
     },
     "remaining_before_assignment": [
       "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
-      "The full 25,730-gene BP annotation universe and both graph exports are inspected. Preserve the observed literal-label weights, three-decimal rounding and missing-term behavior; compare native intermediate S-values/pairs before adopting the fast reconstruction for the larger case. Compatible frozen KEGG inputs remain unresolved.",
-      "Native count/shrinkage and both ORAs pass scoped independent checks. Native GSEA passed enrichment-score/leading-edge checks in 391.8 seconds including Python audit; validate repeatability and finish raw-genome semantic reduction without term truncation. The combined R attempt hit its 1200-second analysis limit.",
+      "The full 25,730-gene BP annotation universe and both graphs are inspected; native contribution vectors/ancestor counts and sampled pair scores match the independent calculation. Keep the explicit equivalent-computation adaptation for the larger reduction. Compatible frozen KEGG inputs remain unresolved and do not block GO-only endpoints.",
+      "Native count/shrinkage and both ORAs pass scoped independent checks. GO reduction completes with the audited equivalent computation; GSEA score/leading-edge checks pass. Finish the fresh GSEA repeat and a complete successful count-fit reference, preserving model/filter diagnostics missing from the timed-out parent run.",
       "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
       "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
     ],
@@ -3801,7 +3801,7 @@
       "script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
       "environment_lock": "sources/enrichment-preparation.lock.json",
       "environment_lock_sha256": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
-      "status": "Count fit/apeglm, full annotation export, both ORA tables and adjusted-tested reduction audited. The run timed out after 1200 analysis seconds in raw-genome simplification; that output is incomplete. No Harbor validation or new coverage credit.",
+      "status": "Count fit/apeglm, full annotation, both ORAs and adjusted-tested native reduction passed scoped audits. Every native semantic contribution vector and ancestor count matched independent reconstruction; the full raw-genome equivalent reduction finished in 23.25 seconds with 798 retained terms. The original full clusterProfiler call timed out. No Harbor validation or new coverage.",
       "failed_attempt": {
         "job_id": "/exedev/bio-enrichment-native-20260924-204426",
         "terminal_state": "FAILED",
@@ -4030,17 +4030,118 @@
       "audit_scripts": [
         {
           "path": "sources/validate_enrichment.py",
-          "sha256": "13765ae99f719a7ce271f4a85aa9bb110f9f1d3837074a9a1e9614b9a7f3d3d0"
+          "sha256": "13765ae99f719a7ce271f4a85aa9bb110f9f1d3837074a9a1e9614b9a7f3d3d0",
+          "source_revision": "3d69b62135"
         },
         {
           "path": "sources/audit_go_graph.py",
-          "sha256": "86ee37f9e55f7e11796be2078ebafa469991abc358b61272a7cd2add64eda704"
+          "sha256": "86ee37f9e55f7e11796be2078ebafa469991abc358b61272a7cd2add64eda704",
+          "source_revision": "3d69b62135"
         },
         {
           "path": "sources/audit_go_semantics.py",
-          "sha256": "b38331d0738d46c56d624ccfa1d18e68874873cb6d902a5d94119dc12c59e503"
+          "sha256": "b38331d0738d46c56d624ccfa1d18e68874873cb6d902a5d94119dc12c59e503",
+          "source_revision": "3d69b62135"
         }
-      ]
+      ],
+      "native_semantic_intermediate_preparation": {
+        "job_id": "/exedev/bio-go-semantic-native-20260924-220240",
+        "terminal_state": "SUCCEEDED",
+        "archive_sha256": "c9e5ff4b8117d0818cd59101a0b98fe603d7a33b2e891d6bc9bc65dff496e377",
+        "archive_bytes": 379625,
+        "bundle_sha256": "149470d49d22613b704ff5b6ce1978e5220a02565fb1a08a81c555e8cfb7e9c3",
+        "executed_script_sha256": "023d94ab70fa2659054e33a0bd9f5aec03475337bb80ce1fb43a85b2948100a8",
+        "script_path": "sources/prepare_go_semantics.R",
+        "audit_script_path": "sources/audit_go_semantics.py",
+        "audit_script_sha256": "a45d8cc9c1c79939d38256c73c236d9e8972b679cdef370bab0112c8a5536415",
+        "native_result": {
+          "status": "native-intermediates-only",
+          "terms": 3811,
+          "contribution_rows": 77538,
+          "pair_checks": 608,
+          "missing_bundle_terms": [
+            "GO:0106380",
+            "GO:0140627",
+            "GO:0140632",
+            "GO:0140694",
+            "GO:0140861",
+            "GO:0140888",
+            "GO:0140894",
+            "GO:0140895",
+            "GO:0140896",
+            "GO:0140928",
+            "GO:0140962",
+            "GO:0141084",
+            "GO:0141085",
+            "GO:0141086",
+            "GO:0141087",
+            "GO:0141091",
+            "GO:0141162",
+            "GO:0141188",
+            "GO:0141193",
+            "GO:0160049",
+            "GO:0160075",
+            "GO:0160240",
+            "GO:0170033",
+            "GO:0170034",
+            "GO:0170035",
+            "GO:0170038",
+            "GO:0170039",
+            "GO:0170040",
+            "GO:0170041",
+            "GO:0170062",
+            "GO:0180046",
+            "GO:0180064"
+          ],
+          "contribution_seconds": 118.43,
+          "total_seconds": 118.521,
+          "limits": "Full clusterProfiler simplify on the larger set did not complete; these intermediates support a separate equivalent calculation."
+        },
+        "worker_analysis": {
+          "exit_code": 0,
+          "seconds": 122.43184621000546,
+          "peak_child_rss_kib": 776924
+        },
+        "native_output_files": {
+          "references/native-ancestor-counts.tsv.gz": "e9f4a703756956c8130b17014214c4a1e6bf5cf5d582c025fe1039c6c5b8992e",
+          "references/native-pair-scores.tsv.gz": "017cb4b040440b99a20f2704a484a426e390a8b13aa49744bc17954cfe728442",
+          "references/native-s-values.tsv.gz": "f9e82b8847b9d138e7dec847d21dbf72b3c8fe916cd793b399e6ece69ff45357",
+          "references/native-semantic-result.json": "bf166555e862b9b71e1bfdb653164d5134c0fc9df650b61b48ff99d0a2fc973d",
+          "references/session-info.txt": "82fd859a5b8f9f95741b8f0d2f9a6310275a0b1dffa95ce1b751427897a9431e"
+        },
+        "independent_audit": {
+          "status": "independent-reduction-audited",
+          "native_intermediate_checks": {
+            "contribution_vectors": 3811,
+            "contribution_entries": 77538,
+            "maximum_absolute_contribution_error": 1.1102230246251565e-16,
+            "ancestor_counts": 3811,
+            "native_pair_scores": 608
+          },
+          "views": {
+            "adjusted_tested": {
+              "significant_terms": 406,
+              "retained": 181,
+              "ordered_pair_comparisons": 164836,
+              "seconds": 0.2572911329334602,
+              "closest_similarity_to_rounding_boundary": 3.465052136120139e-05,
+              "complete_native_retained_set_compared": true
+            },
+            "raw_genome": {
+              "significant_terms": 3786,
+              "retained": 798,
+              "ordered_pair_comparisons": 14333796,
+              "seconds": 23.250756455934606,
+              "closest_similarity_to_rounding_boundary": 1.067376458574465e-05,
+              "complete_native_retained_set_compared": false
+            }
+          },
+          "method": "The observed native BP bundle uses only labels that getSV maps to other (0.7). Reconstruct first-duplicate contributions by shortest-path traversal, apply native three-decimal rounding and local-neighborhood min-p/GO.db ancestor-count tie-breaking.",
+          "limits": "Only completed native reductions are compared as full retained sets. Native intermediate comparisons, when supplied, cover every S-value and ancestor count but sample pair scores. The raw-genome full clusterProfiler call timed out. No Harbor or benchmark coverage validation."
+        },
+        "retained_terms_sha256": "b656bd69707fbeb5463b344eda36e698d9598ed93717b68639d04526368c4801",
+        "validation_boundary": "All 3,811 contribution vectors/ancestor counts and 608 sampled pair scores match. Independent reduction matches the native 406-term retained set. The 3,786-term result is a complete equivalent calculation, not a completed full clusterProfiler simplify call."
+      }
     },
     "context_adaptation": {
       "coverage_policy": "benchmark_coverage.json:workflow_adaptation_policy",
@@ -4156,6 +4257,32 @@
         "pip_report_sha256": "3a204b273235ba0d34e20325ad56fdc62a46add431fd8fa661ff8a3b6268d972",
         "environment_validation": "All 19 installed wheel hashes occur in the committed requirements lock; pip check passed. Executed script and lock match committed files; all archived reference hashes verified.",
         "memory_scope": "The worker peak is cumulative child RSS, not an isolated GSEA allocation measurement."
+      },
+      "repeatability_attempt": {
+        "job_id": "/exedev/bio-gsea-repeat-20260924-221432",
+        "status": "submitted; not yet observed",
+        "bundle_sha256": "69f87c0c3c6035ff00adb8da9f9e13b084d2429c348c5d9f207b832f45057315",
+        "comparison_script_path": "sources/compare_gsea.py",
+        "comparison_script_sha256": "f04a4f07e7311bc4c1b4f88a6dde0e8243815923dfece2735d96b49063cfed61",
+        "local_incorrect_output_checks": [
+          {
+            "case": "changed-nes",
+            "rejected": true
+          },
+          {
+            "case": "missing-term",
+            "rejected": true
+          },
+          {
+            "case": "wrong-leading-edge",
+            "rejected": true
+          },
+          {
+            "case": "reordered-top-five",
+            "rejected": true
+          }
+        ],
+        "scope": "Compare all native statistics and identities from two separate executions; local comparator checks alone do not establish native repeatability."
       }
     }
   }
