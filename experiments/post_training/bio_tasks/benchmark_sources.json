@@ -565,7 +565,7 @@
       "scoring_access": "External scoring",
       "source_url": "https://arxiv.org/abs/2605.15766",
       "data_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/README.md",
-      "inspection": "All 76 task IDs reconciled across public graders, launch lists and data manifest. Catalog objectives and scorer endpoints assessed; authoritative per-task descriptions, sample submissions and biological data uninspected. No workflow execution credit.",
+      "inspection": "All 76 IDs, catalog objectives and scorer endpoints assessed. Two official checksum-verified archives supply 16 full chemical/network descriptions and CSV headers; 60 full prompts remain uninspected. Row values, private answers and biological lineage unreviewed; no workflow execution credit.",
       "training_mapping_allowed": true,
       "task_inventory": "benchmark_tasks/bioxarena.json"
     },

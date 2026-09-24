@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:07:52.900463+00:00",
+  "updated_at": "2026-09-24T18:52:02.997737+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -75,7 +75,7 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "140332394376532e1300f45a9e9acf9043617cf4f7065f861ed568a84f9182d0"
+      "sha256": "e35ae3840d6a1033f87c4ed5ad6e3ff48a85603b6259655949fd2149102b9097"
     },
     {
       "path": "workflow_designs/cellbench.json",
@@ -8554,7 +8554,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-bace1-binding-affinity",
-      "scientific_question": "Can scaffold-held-out molecules be ranked by measured BACE1 affinity after reconciling assay units and censored measurements?",
+      "scientific_question": "Can scaffold-held-out molecules predict measured BACE1 log10(IC50 in nM) after assay eligibility and censoring checks?",
       "question_card_ids": [
         "biox-design-chemical-biology-bace1-binding-affinity"
       ],
@@ -8569,7 +8569,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-cell-painting-perturbation",
-      "scientific_question": "Which measured cellular morphology signatures identify perturbations across held-out plates and biological batches?",
+      "scientific_question": "Which compound perturbations can be identified from observed well-level Cell Painting profiles across held-out plates?",
       "question_card_ids": [
         "biox-design-chemical-biology-cell-painting-perturbation"
       ],
@@ -8584,7 +8584,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-cyp-inhibition-multi-label",
-      "scientific_question": "Can measured inhibition labels for multiple CYP assays be predicted without scaffold or assay-batch leakage?",
+      "scientific_question": "Can molecular structures predict five measured CYP inhibition endpoints while retaining untested assay pairs as missing?",
       "question_card_ids": [
         "biox-design-chemical-biology-cyp-inhibition-multi-label"
       ],
@@ -8599,7 +8599,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-egfr-binding-affinity",
-      "scientific_question": "Can a bounded molecular model rank independently measured EGFR affinities across held-out chemical scaffolds?",
+      "scientific_question": "Can molecular structures predict measured EGFR pChEMBL values under explicit assay-type and scaffold boundaries?",
       "question_card_ids": [
         "biox-design-chemical-biology-egfr-binding-affinity"
       ],
@@ -8614,7 +8614,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-gpcr-binding-multi-class",
-      "scientific_question": "Which measured receptor-binding classes can be distinguished after resolving multi-target compounds and scaffold overlap?",
+      "scientific_question": "Which GPCR receptor class is associated with an observed binding record, using molecular structure, potency and assay type?",
       "question_card_ids": [
         "biox-design-chemical-biology-gpcr-binding-multi-class"
       ],
@@ -8629,7 +8629,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-herg-binding-affinity",
-      "scientific_question": "How well do molecular features predict measured hERG binding across scaffold-held-out compounds with consistent units?",
+      "scientific_question": "Can molecular structures predict observed hERG pChEMBL values across held-out scaffolds with controlled assay semantics?",
       "question_card_ids": [
         "biox-design-chemical-biology-herg-binding-affinity"
       ],
@@ -8644,7 +8644,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-kinase-selectivity-multi-label",
-      "scientific_question": "Which measured kinase activity labels generalize across held-out compounds when missing assays remain unobserved rather than negative?",
+      "scientific_question": "Can structures predict an eight-kinase measured inhibition panel with assay-specific eligibility and untested pairs preserved?",
       "question_card_ids": [
         "biox-design-chemical-biology-kinase-selectivity-multi-label"
       ],
@@ -8659,7 +8659,7 @@
     },
     {
       "proposed_task_id": "biox-design-chemical-biology-tox21-sr-are",
-      "scientific_question": "Can an observed cellular assay response be predicted across held-out chemical scaffolds with explicit assay eligibility and uncertainty?",
+      "scientific_question": "Can molecular structures predict observed SR-ARE assay activation across held-out chemical scaffolds?",
       "question_card_ids": [
         "biox-design-chemical-biology-tox21-sr-are"
       ],
@@ -8764,7 +8764,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-gene-disease-association",
-      "scientific_question": "Which gene-disease association scores can be predicted from a frozen evidence network without leaking held-out association records?",
+      "scientific_question": "Can gene and disease features predict independently curated gene-disease evidence scores without using held-out associations to construct features?",
       "question_card_ids": [
         "biox-design-network-biology-gene-disease-association"
       ],
@@ -8779,7 +8779,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-go-function-multi-label",
-      "scientific_question": "Which measured or curated protein-function labels can be predicted under a held-out protein-family and annotation-release boundary?",
+      "scientific_question": "Which of 15 GO biological-process labels can be predicted from protein sequences under protein-family and annotation-release separation?",
       "question_card_ids": [
         "biox-design-network-biology-go-function-multi-label"
       ],
@@ -8794,7 +8794,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-metabolic-network-kegg",
-      "scientific_question": "Which metabolic relationships are supported by predictions from independent measured or curated networks under explicit candidate-edge negatives?",
+      "scientific_question": "Which enzyme-reaction pairs can be predicted as catalytic relationships from sequences, EC hierarchy and training-only network context?",
       "question_card_ids": [
         "biox-design-network-biology-metabolic-network-kegg"
       ],
@@ -8809,7 +8809,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-pathway-membership-reactome",
-      "scientific_question": "Can pathway membership be predicted for held-out genes without exposing the membership labels through graph features?",
+      "scientific_question": "Can sequence and observed tissue-expression features predict a documented eight-category Reactome assignment for held-out proteins?",
       "question_card_ids": [
         "biox-design-network-biology-pathway-membership-reactome"
       ],
@@ -8824,7 +8824,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-ppi-prediction-string",
-      "scientific_question": "Which protein interaction candidates generalize to independent observed interaction records after protein and evidence-source leakage checks?",
+      "scientific_question": "Can sequences and training-only graph features predict withheld high-confidence STRING association pairs under a defined protein holdout?",
       "question_card_ids": [
         "biox-design-network-biology-ppi-prediction-string"
       ],
@@ -8839,7 +8839,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-protein-complex-corum",
-      "scientific_question": "Can curated complex membership be predicted across held-out proteins without treating unannotated membership as confirmed absence?",
+      "scientific_question": "Can protein sequences predict a documented ten-category CORUM assignment under protein-family separation?",
       "question_card_ids": [
         "biox-design-network-biology-protein-complex-corum"
       ],
@@ -8854,7 +8854,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-synthetic-lethality-prediction",
-      "scientific_question": "Which gene-pair interactions predict measured viability dependencies across held-out cell contexts and gene pairs?",
+      "scientific_question": "Can gene-pair features predict independently measured double-perturbation lethality under matched single-perturbation controls?",
       "question_card_ids": [
         "biox-design-network-biology-synthetic-lethality-prediction"
       ],
@@ -8869,7 +8869,7 @@
     },
     {
       "proposed_task_id": "biox-design-network-biology-tf-regulatory-prediction",
-      "scientific_question": "Which directed regulatory edges predict independently measured regulator-target evidence under a fixed candidate universe?",
+      "scientific_question": "Can TF sequence and binding features predict a precisely defined TF-target evidence endpoint without using held-out edges in network features?",
       "question_card_ids": [
         "biox-design-network-biology-tf-regulatory-prediction"
       ],
@@ -10794,6 +10794,14 @@
       "partial_model_structures_parsed": 350,
       "design_file": "workflow_designs/scigym.json",
       "finding": "Every supplied model has anonymized species and no reactions, kinetic laws or parameters. Replace two-model comparison with full model reconstruction as the connected adaptation; biological endpoints and observed interventions remain unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "source": "BioXArena chemical/network biology",
+      "design_file": "workflow_designs/bioxarena.json",
+      "full_descriptions_and_csv_schemas_reviewed": 16,
+      "remaining_full_prompts_uninspected": 60,
+      "finding": "Freeze potency orientation, masked-label denominators and category semantics; record prose/header conflicts and missing measured synthetic-lethality provenance. No row values or answers reused. Independent inputs and runnable contracts remain unresolved.",
       "validated_new_mappings": 0
     }
   ]

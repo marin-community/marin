@@ -318,7 +318,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 full prompts and 131 output artifacts assessed, one objective excluded | — |
 | [BAISBench](../../experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json) | 193 discovery questions across 41 studies; 15 annotation dataset identities | — |
 | [PromptBio-Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/promptbio-bench.json) | All 244 task definitions; 27 workflow families and 316 required-output declarations | — |
-| [BioXArena](../../experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json) | All 76 task IDs, catalog objectives and scorers; full per-task prompts and data uninspected | — |
+| [BioXArena](../../experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json) | All 76 IDs and scorers; 16 chemical/network descriptions and CSV schemas reviewed; 60 full prompts and all biological row values uninspected | — |
 | [TxBench-PP](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-pp.json) | All 12 public prompts; input schemas and grader behavior uninspected | 100 |
 | [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
@@ -421,10 +421,11 @@ need complete artifact contracts and independent observed inputs. Source prompts
 answers, trajectories and biological fixtures remain outside training authoring.
 
 BioXArena's 76 task identities agree across source graders, four launch lists
-and the data-release manifest. Catalog objectives and executable scorer endpoints
-are assessed; full prompts, input schemas and sample submissions remain
-uninspected. The inventory distinguishes prediction metrics from broader workflow
-names, records correlation masking and row-order requirements, and flags the
+and the data-release manifest. All catalog objectives and executable scorers are
+assessed. Sixteen chemical/network descriptions and CSV headers are inspected from
+two official archives; 60 full prompts and all biological row values remain
+uninspected. The inventory records description/header conflicts, potency direction,
+missing-label masks and row-order requirements. It also flags the
 mitochondria-counting metric conflict: the catalog says MAE, while the pinned
 grade function computes Spearman correlation. All 76 remain unmapped. The public
 scorers use deterministic numerical metrics or exact labels, with no LLM judge.

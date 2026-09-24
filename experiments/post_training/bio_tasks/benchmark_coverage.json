@@ -334,8 +334,10 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/bioxarena.json",
       "source_inventory_name": "BioXArena",
-      "task_inventory_status": "all-76-identities-catalog-objectives-and-scorers-assessed-full-prompts-uninspected",
-      "data_revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3"
+      "task_inventory_status": "76-identities-and-scorers-reviewed; 16-full-descriptions-and-csv-headers-reviewed; 60-full-prompts-uninspected",
+      "data_revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3",
+      "full_prompts_inspected": 16,
+      "full_prompts_uninspected": 60
     },
     "TxBench-PP": {
       "revision": "a4e0913d76c3dbc433ecf39903afbe7711a6a807",

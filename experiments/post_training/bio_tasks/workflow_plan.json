@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:07:52.900463+00:00",
+  "updated_at": "2026-09-24T18:52:02.997737+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "e536ef7d9ee2247b6cc64f4a0b747e7ff78a1bfd5cfdb26929e3fb712ca6857a"
+      "sha256": "dcb367aa386ba158fcda6e98f844e491b988a58a5955ccba534a2a2e1b8b01f4"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "a1bb3400e5528486420975c85322b21d4a35d68bfc922d428360e282dc26b17c"
+      "sha256": "025956065e0fa0093ef5cbf9bc2122672d4433d1ca32535d1de08e4c5fff8378"
     }
   ],
   "question_inspection_evidence": {
@@ -58,14 +58,15 @@
       "candidate-design-provisional": 1430,
       "dataset-schema-and-endpoint-review": 15,
       "excluded-objective": 1,
-      "full-prompt-input-and-held-out-data-review": 76,
+      "full-prompt-input-and-held-out-data-review": 60,
       "instance-endpoint-and-evidence-review": 333,
       "observed-data-and-system-endpoint-review": 350,
       "plan-artifact-and-verifier-review": 50,
       "literature-endpoint-and-deterministic-contract-review": 1451,
       "individual-retrieval-endpoint-and-candidate-review": 223,
       "supplement-question-stem-reviewed-provisional-design": 58,
-      "database-query-schema-reviewed-shared-design": 520
+      "database-query-schema-reviewed-shared-design": 520,
+      "input-lineage-and-held-out-data-review": 16
     },
     "scientific_workstreams": 52,
     "proposed_task_questions": 147,
@@ -11126,7 +11127,7 @@
       "inspection_tier": "excluded"
     },
     {
-      "planning_disposition": "full-prompt-input-and-held-out-data-review",
+      "planning_disposition": "input-lineage-and-held-out-data-review",
       "benchmark": "BioXArena",
       "workflow_family": "chemical-biology",
       "task_ids": [
@@ -11141,10 +11142,11 @@
       ],
       "id": "group-0535",
       "proposed_workstreams": [
-        "molecular-property"
+        "molecular-property",
+        "biological-imaging"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "shared-pattern-only"
+      "inspection_tier": "description-and-csv-schema-reviewed"
     },
     {
       "planning_disposition": "full-prompt-input-and-held-out-data-review",
@@ -11168,7 +11170,7 @@
       "inspection_tier": "shared-pattern-only"
     },
     {
-      "planning_disposition": "full-prompt-input-and-held-out-data-review",
+      "planning_disposition": "input-lineage-and-held-out-data-review",
       "benchmark": "BioXArena",
       "workflow_family": "network-biology",
       "task_ids": [
@@ -11186,7 +11188,7 @@
         "network-model-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "shared-pattern-only"
+      "inspection_tier": "description-and-csv-schema-reviewed"
     },
     {
       "planning_disposition": "full-prompt-input-and-held-out-data-review",
@@ -12765,19 +12767,21 @@
     },
     "BioXArena": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json",
-      "source_inventory_sha256": "64662961415375a64cf826e631e8feac44eab961c9ec1e92f957102a82517032",
+      "source_inventory_sha256": "7be57efd440fc0f637f8f9162b629b5df380263777ae8192603db3c66d390f54",
       "source_revision": "29f88d4d573001405abf0694aee72d91c3f47e6c",
-      "task_inventory_status": "all-76-identities-catalog-objectives-and-scorers-assessed-full-prompts-uninspected",
+      "task_inventory_status": "76-identities-and-scorers-reviewed; 16-full-descriptions-and-csv-headers-reviewed; 60-full-prompts-uninspected",
       "record_count": 76,
       "unique_count_after_known_bix_aliases": 76,
       "provisional_design_record_count": 0,
       "endpoint_or_access_review_record_count": 76,
       "excluded_record_count": 0,
       "planning_disposition_counts": {
-        "full-prompt-input-and-held-out-data-review": 76
+        "full-prompt-input-and-held-out-data-review": 60,
+        "input-lineage-and-held-out-data-review": 16
       },
       "reconciled_inspection_tier_counts": {
-        "shared-pattern-only": 76
+        "description-and-csv-schema-reviewed": 16,
+        "shared-pattern-only": 60
       },
       "initial_group_referenced_record_count": 0,
       "new_expansion_card_record_count": 76
@@ -13452,11 +13456,11 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "140332394376532e1300f45a9e9acf9043617cf4f7065f861ed568a84f9182d0",
+      "sha256": "e35ae3840d6a1033f87c4ed5ad6e3ff48a85603b6259655949fd2149102b9097",
       "benchmark_id": "BioXArena",
       "inventory_records_assigned": 76,
       "proposed_question_cards": 76,
-      "inspection_basis": "Catalog and scorers only; full prompts and schemas unresolved. Question proposals are conditional, not endpoint-equivalent coverage."
+      "inspection_basis": "All scorers plus 16 full chemical/network descriptions and CSV headers reviewed; 60 full prompts uninspected. Independent biological lineage, observed labels and executable acceptance remain unresolved."
     },
     {
       "path": "workflow_designs/cellbench.json",
@@ -13511,7 +13515,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "fd482deab98e41c7c00209f6d1f2ba834f96d07725c1680b80cac858baca0780",
+    "sha256": "b6200b023e7d58b53eb6a0d36c7a9385253969e15b4c954363cfc2f03919d032",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

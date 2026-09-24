@@ -2,15 +2,36 @@
   "benchmark": "BioXArena",
   "source_revision": "29f88d4d573001405abf0694aee72d91c3f47e6c",
   "scope": "All 76 source task identities, all public grader functions, shared metrics, launch lists, public data catalog and archive manifest inspected. Nine biomedical domains. Provisional ID from the agentic tab.",
-  "assessment_scope": "Catalog objectives and executable scoring endpoints assessed. Authoritative per-task descriptions, sample submissions and input data remain inside separate archives and have not been inspected. Patterns are endpoint summaries, not claims of full prompt review or execution.",
+  "assessment_scope": "All 76 catalog objectives and executable scorers assessed. Full descriptions and CSV headers inspected for 16 chemical/network tasks from two checksum-verified official archives; remaining 60 full prompts uninspected. No biological row values or private answers inspected or reused. Description counts and biological provenance are claims, not independently validated observations.",
   "identity_policy": "Task IDs agree between all four 19-task launch lists, the 76 grader paths and the public data manifest. Shared datasets, model targets and train/test cohorts are not independent studies.",
   "data_release": {
     "revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3",
     "url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/",
-    "access": "public; metadata only inspected",
+    "access": "public; 16 task descriptions and CSV headers inspected",
     "manifest_sha256": "30f867d6314c20cace4ebde4c3546137e3ab747e9290150ffd37b3442fb62194",
     "catalog_sha256": "1ad1306f5d88ba263e626d44af29486ccc8c9d875c43b382d67bf190281f3d2b",
-    "archives_downloaded": false
+    "archives_downloaded": true,
+    "archive_inspection": [
+      {
+        "path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/resolve/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "bytes": 23652316,
+        "sha256": "5c5ccf44349e1293f034335b1ae867985506a263bc53bd3cb61f58ce1ce62365",
+        "provider_sha256_verified": true,
+        "task_count": 8
+      },
+      {
+        "path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/resolve/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "bytes": 9924872,
+        "sha256": "ae9f71554fafefa9efa0285ef18d3c17f9d54e85a5270ed1d3cd4cb8652547d6",
+        "provider_sha256_verified": true,
+        "task_count": 8
+      }
+    ],
+    "inspection_boundary": "Only public descriptions, member paths/sizes and first-line CSV headers were interpreted; compressed archives also contain benchmark data, which are not authored training inputs. Other 15 domain archives were not downloaded.",
+    "full_prompts_inspected": 16,
+    "full_prompts_remaining": 60
   },
   "source_files": {
     "tree": {
@@ -50,7 +71,7 @@
         "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
       ],
       "remaining_gaps": [
-        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Reconcile recorded prompt/header conflicts and establish independent observed input/label provenance; descriptions and CSV headers are inspected, row values and private outcomes are not.",
         "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
         "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
       ]
@@ -72,7 +93,7 @@
         "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
       ],
       "remaining_gaps": [
-        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Reconcile recorded prompt/header conflicts and establish independent observed input/label provenance; descriptions and CSV headers are inspected, row values and private outcomes are not.",
         "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
         "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
       ]
@@ -249,7 +270,7 @@
       "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
       "source_metadata_bytes": 1153,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -258,8 +279,8 @@
         "Compute Pearson against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -276,6 +297,68 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/bace1-binding-affinity/public/description.md",
+          "bytes": 1746,
+          "sha256": "58b55518fc41f8d23037316091501212a230dfba112357d38f4c742c394da1de"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 576234
+          },
+          {
+            "path": "description.md",
+            "bytes": 1746
+          },
+          {
+            "path": "test.csv",
+            "bytes": 114720
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 13500
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "aaf88e10a8e54a7c88f6c1839a1d9b91b783a150ea10c2155c45f42a3d11398d",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "smiles",
+              "affinity"
+            ]
+          },
+          "test.csv": {
+            "sha256": "3964e048aae25c3cb26505fd0b61d02b458bb958cb2e8723ca9294300e4e3903",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "smiles"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "affinity"
+        ],
+        "submission_header_sha256": "9cae1686b2194fb695cebbb26bfb588839a05e908f8313ed5ceb0860aa21d991",
+        "endpoint": "Continuous log10(IC50 in nM); lower values indicate greater potency. Pearson compares predictions with outcomes in this same orientation.",
+        "source_claimed_training_rows": 6487,
+        "source_claimed_test_rows": 1622,
+        "source_claims_and_schema_limits": [
+          "The public schema contains only id, smiles and training affinity; assay metadata and unit provenance must come from an independent source."
+        ],
+        "source_lineage_leads": [
+          "BindingDB BACE1 / UniProt P56817"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -286,7 +369,7 @@
       "source_metadata_sha256": "26d88d229380d6da86ecf686687671332a74b19e59904403ba2cfe7308504068",
       "source_metadata_bytes": 1149,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -295,8 +378,8 @@
         "Compute accuracy against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,perturbation"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -313,6 +396,86 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/cell-painting-perturbation/public/description.md",
+          "bytes": 3519,
+          "sha256": "a259d5de30d01d2d50b67a85463664750cecf14a73114824453d0f8bf15b5d58"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 43750564
+          },
+          {
+            "path": "description.md",
+            "bytes": 3519
+          },
+          {
+            "path": "test.csv",
+            "bytes": 10957759
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 30456
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "bf00c82181cdda6794dcdd629001b1d741f04a74f1c6b78f88fbde74dcbffe19",
+            "column_count": 908,
+            "metadata_columns": [
+              "id",
+              "perturbation",
+              "plate",
+              "well"
+            ],
+            "feature_prefix_counts": {
+              "AGP": 109,
+              "DNA": 169,
+              "ER": 120,
+              "Mito": 86,
+              "RNA": 118,
+              "Shape": 302
+            }
+          },
+          "test.csv": {
+            "sha256": "99665d262365e830e57250ea799f3c8df1f3c1c1d8971f27783042b3a5401f04",
+            "column_count": 907,
+            "metadata_columns": [
+              "id",
+              "plate",
+              "well"
+            ],
+            "feature_prefix_counts": {
+              "AGP": 109,
+              "DNA": 169,
+              "ER": 120,
+              "Mito": 86,
+              "RNA": 118,
+              "Shape": 302
+            }
+          }
+        },
+        "submission_header": [
+          "id",
+          "perturbation"
+        ],
+        "submission_header_sha256": "7d1d348e39481aadeef7026d51f5982696dd0d5b12c7a0c349679c073553df96",
+        "endpoint": "Top-1 compound-identity classification from 904 processed features, with compound names and DMSO as output labels; accuracy.",
+        "source_claimed_training_rows": 6087,
+        "source_claimed_test_rows": 1522,
+        "source_claims_and_schema_limits": [
+          "Description claims U2OS and A549 but headers provide plate and well, not cell-line metadata. Neither the claimed cell lines, 24 plates, nor 302 compounds plus DMSO were verified from row values."
+        ],
+        "source_lineage_leads": [
+          "JUMP Cell Painting cpg0000 pilot"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -323,7 +486,7 @@
       "source_metadata_sha256": "a041386ef71bed5f2c0c5ab98e1a16615ec4567562373e1dc9c2ebef606dee36",
       "source_metadata_bytes": 1188,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -332,26 +495,106 @@
         "Compute macro ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,CYP3A4_inhibits,CYP2D6_inhibits,CYP2C9_inhibits,CYP2C19_inhibits,CYP1A2_inhibits"
       ],
       "required_tools": [],
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "LABEL_COLS"
-          },
+          "label_cols": [
+            "CYP3A4_inhibits",
+            "CYP2D6_inhibits",
+            "CYP2C9_inhibits",
+            "CYP2C19_inhibits",
+            "CYP1A2_inhibits"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'LABEL_COLS'}"
+          "CYP3A4_inhibits",
+          "CYP2D6_inhibits",
+          "CYP2C9_inhibits",
+          "CYP2C19_inhibits",
+          "CYP1A2_inhibits"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/cyp-inhibition-multi-label/public/description.md",
+          "bytes": 2252,
+          "sha256": "f6ef45b4eb7c1bfb9054d8b52643e29f00021de1e1b3ede599c66db0c401f7cf"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 125400
+          },
+          {
+            "path": "description.md",
+            "bytes": 2252
+          },
+          {
+            "path": "test.csv",
+            "bytes": 25333
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 9094
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "8b70ec965f611cee7cec09ccf9e6327ed492fb1a6bef86b25f5d1cbf4acd8586",
+            "column_count": 7,
+            "columns": [
+              "id",
+              "smiles",
+              "CYP3A4_inhibits",
+              "CYP2D6_inhibits",
+              "CYP2C9_inhibits",
+              "CYP2C19_inhibits",
+              "CYP1A2_inhibits"
+            ]
+          },
+          "test.csv": {
+            "sha256": "3964e048aae25c3cb26505fd0b61d02b458bb958cb2e8723ca9294300e4e3903",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "smiles"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "CYP3A4_inhibits",
+          "CYP2D6_inhibits",
+          "CYP2C9_inhibits",
+          "CYP2C19_inhibits",
+          "CYP1A2_inhibits"
+        ],
+        "submission_header_sha256": "6f39e299f908e3ffa96567d241421416f9d3b885d3b2fdc8d5544d40465dc063",
+        "endpoint": "Five probability columns in the inspected submission order; masked macro ROC-AUC, with -1 indicating untested outcomes.",
+        "source_claimed_training_rows": 1476,
+        "source_claimed_test_rows": 380,
+        "source_claims_and_schema_limits": [
+          "Description reports 1476 training plus 380 test compounds but separately says 611 compounds; counts were not verified.",
+          "Description lists pChEMBL and inhibition-count features, but actual train/test headers contain only id, smiles and training labels. No target-derived feature leakage is established by this inspection."
+        ],
+        "source_lineage_leads": [
+          "PubChem BioAssay and ChEMBL CYP assays; Veith et al. 2009"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -362,7 +605,7 @@
       "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
       "source_metadata_bytes": 1153,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -371,8 +614,8 @@
         "Compute Pearson against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -389,6 +632,68 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/egfr-binding-affinity/public/description.md",
+          "bytes": 1723,
+          "sha256": "21e573a6889c36cd7341e5513c0d957ceed8fd530d8999ff7c9f617abd253dcc"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 604183
+          },
+          {
+            "path": "description.md",
+            "bytes": 1723
+          },
+          {
+            "path": "test.csv",
+            "bytes": 137928
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 19973
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "aaf88e10a8e54a7c88f6c1839a1d9b91b783a150ea10c2155c45f42a3d11398d",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "smiles",
+              "affinity"
+            ]
+          },
+          "test.csv": {
+            "sha256": "3964e048aae25c3cb26505fd0b61d02b458bb958cb2e8723ca9294300e4e3903",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "smiles"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "affinity"
+        ],
+        "submission_header_sha256": "9cae1686b2194fb695cebbb26bfb588839a05e908f8313ed5ceb0860aa21d991",
+        "endpoint": "Continuous pChEMBL, described as -log10(IC50/Ki/Kd in M); higher values indicate greater potency. Pearson.",
+        "source_claimed_training_rows": 8691,
+        "source_claimed_test_rows": 2127,
+        "source_claims_and_schema_limits": [
+          "Released input headers omit assay-type and provenance fields; these must be supplied from independent records. The source description does not verify a scaffold-held-out split."
+        ],
+        "source_lineage_leads": [
+          "BindingDB / ChEMBL EGFR / UniProt P00533"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -399,7 +704,7 @@
       "source_metadata_sha256": "6aacc173775176c8ae4a3b2e0fceee1864100cd86804db75405a9f183e23881b",
       "source_metadata_bytes": 1065,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -408,8 +713,8 @@
         "Compute macro F1 against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -426,6 +731,78 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/gpcr-binding-multi-class/public/description.md",
+          "bytes": 2049,
+          "sha256": "ccb9cc84e8cd1ee849243a6563625b0b51873ab04e3e0daec9ae86ca8662b748"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 350756
+          },
+          {
+            "path": "description.md",
+            "bytes": 2049
+          },
+          {
+            "path": "test.csv",
+            "bytes": 76939
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 13602
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "8ee745f77432b4b8d3e1c84b41e511a6bf91d1e097e023408affa431bd225359",
+            "column_count": 5,
+            "columns": [
+              "id",
+              "smiles",
+              "label",
+              "pchembl_value",
+              "assay_type"
+            ]
+          },
+          "test.csv": {
+            "sha256": "a0f03c6ecb5c54c5707baf7fb3d43b0aca1b99e8a07220f70f58799a5b52cbb7",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "smiles",
+              "pchembl_value",
+              "assay_type"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Predict Class_A, Class_B or Class_C per binding record; macro F1. This is not a multi-target affinity or potency endpoint.",
+        "source_claimed_training_rows": 4520,
+        "source_claimed_test_rows": 1131,
+        "source_claims_and_schema_limits": [
+          "Description claims target ChEMBL ID and active status are inputs, but neither is present in the inspected train/test headers. Target-ID leakage is not established.",
+          "The description calls 5651 rows both binding records and compounds; unique compound counts are unverified."
+        ],
+        "source_lineage_leads": [
+          "IUPHAR/BPS Guide to Pharmacology and ChEMBL"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false,
+        "description_class_dictionary": [
+          "Class_A",
+          "Class_B",
+          "Class_C"
+        ]
       }
     },
     {
@@ -436,7 +813,7 @@
       "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
       "source_metadata_bytes": 1153,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -445,8 +822,8 @@
         "Compute Pearson against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -463,6 +840,68 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/herg-binding-affinity/public/description.md",
+          "bytes": 1783,
+          "sha256": "9db8922668116fe06690be9198b4e56a7fa234706e20cce7f6ba297ca3cedc6d"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 514243
+          },
+          {
+            "path": "description.md",
+            "bytes": 1783
+          },
+          {
+            "path": "test.csv",
+            "bytes": 117417
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 16986
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "aaf88e10a8e54a7c88f6c1839a1d9b91b783a150ea10c2155c45f42a3d11398d",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "smiles",
+              "affinity"
+            ]
+          },
+          "test.csv": {
+            "sha256": "3964e048aae25c3cb26505fd0b61d02b458bb958cb2e8723ca9294300e4e3903",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "smiles"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "affinity"
+        ],
+        "submission_header_sha256": "9cae1686b2194fb695cebbb26bfb588839a05e908f8313ed5ceb0860aa21d991",
+        "endpoint": "Continuous pChEMBL, described as -log10(IC50/Ki/Kd in M); higher values indicate greater potency. Pearson.",
+        "source_claimed_training_rows": 7689,
+        "source_claimed_test_rows": 1886,
+        "source_claims_and_schema_limits": [
+          "Headers contain no assay provenance. Independent assay metadata and held-out grouping are required."
+        ],
+        "source_lineage_leads": [
+          "BindingDB / ChEMBL hERG / UniProt P22460"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -473,7 +912,7 @@
       "source_metadata_sha256": "ac7f65d2e72590f7a014345f6cc6c0482f18546c776d5991eb645df0041c82e3",
       "source_metadata_bytes": 1155,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -482,26 +921,118 @@
         "Compute macro ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,EGFR,ABL1,SRC,CDK2,VEGFR2,MET,ALK,BRAF"
       ],
       "required_tools": [],
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "LABEL_COLS"
-          },
+          "label_cols": [
+            "EGFR",
+            "ABL1",
+            "SRC",
+            "CDK2",
+            "VEGFR2",
+            "MET",
+            "ALK",
+            "BRAF"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'LABEL_COLS'}"
+          "EGFR",
+          "ABL1",
+          "SRC",
+          "CDK2",
+          "VEGFR2",
+          "MET",
+          "ALK",
+          "BRAF"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/kinase-selectivity-multi-label/public/description.md",
+          "bytes": 2276,
+          "sha256": "3fb85296f58e7674c5ba2a1b731c4e53293d805d9f2e7bb38077c962a185aee0"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 2663195
+          },
+          {
+            "path": "description.md",
+            "bytes": 2276
+          },
+          {
+            "path": "test.csv",
+            "bytes": 481961
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 275766
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "60b4e7c0af0efd239114d1285e8b5d62308acdb9ca9776c28266afed05e6d6cd",
+            "column_count": 10,
+            "columns": [
+              "id",
+              "SMILES",
+              "EGFR",
+              "ABL1",
+              "SRC",
+              "CDK2",
+              "VEGFR2",
+              "MET",
+              "ALK",
+              "BRAF"
+            ]
+          },
+          "test.csv": {
+            "sha256": "c2332c99bb4c445913ded2ddf3ec66444a222a965189085128dc48992a1fcb1c",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "SMILES"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "EGFR",
+          "ABL1",
+          "SRC",
+          "CDK2",
+          "VEGFR2",
+          "MET",
+          "ALK",
+          "BRAF"
+        ],
+        "submission_header_sha256": "315cc93e4a03f76ffa6c3e9bb677bf2cc7de01fcf7b4e05832ae2e4ea1d908bc",
+        "endpoint": "Eight probabilities in the inspected submission order; masked macro ROC-AUC with -1 for untested pairs.",
+        "source_claimed_training_rows": 30158,
+        "source_claimed_test_rows": 7482,
+        "source_claims_and_schema_limits": [
+          "Description reports 30158 training plus 7482 test compounds but separately says 1052 compounds; counts are unverified.",
+          "Description uses the ambiguous phrase pChEMBL confidence score >=5. The exact potency versus assay-confidence filter remains unresolved."
+        ],
+        "source_lineage_leads": [
+          "ChEMBL v34; description reports acquisition January 2026"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -512,7 +1043,7 @@
       "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
       "source_metadata_bytes": 1049,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -521,8 +1052,8 @@
         "Compute ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -539,6 +1070,69 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/chemical-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "chemical-biology/tox21-sr-are/public/description.md",
+          "bytes": 2130,
+          "sha256": "7777b8b55b27e575055371d12955edd3e19c86b16ed4676121e63a65f6fde6de"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 177548
+          },
+          {
+            "path": "description.md",
+            "bytes": 2130
+          },
+          {
+            "path": "test.csv",
+            "bytes": 40879
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 9384
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "ccd32d80bcc0a3ba411d52620438d74717db06cf18393329b265aa615a4bf9d0",
+            "column_count": 3,
+            "columns": [
+              "id",
+              "smiles",
+              "label"
+            ]
+          },
+          "test.csv": {
+            "sha256": "3964e048aae25c3cb26505fd0b61d02b458bb958cb2e8723ca9294300e4e3903",
+            "column_count": 2,
+            "columns": [
+              "id",
+              "smiles"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Probability of SR-ARE activation, exported as label; ROC-AUC.",
+        "source_claimed_training_rows": 4660,
+        "source_claimed_test_rows": 1165,
+        "source_claims_and_schema_limits": [
+          "Overview calls this an Nrf2/ARE oxidative-stress endpoint, but the data-source paragraph says steroid receptor activation; resolve against primary assay documentation.",
+          "Description lists PubChem/ChEMBL and assay IDs, but the actual files contain only id, smiles and training label; source assay identity cannot be reconstructed from the header."
+        ],
+        "source_lineage_leads": [
+          "Tox21 Challenge / MoleculeNet SR-ARE"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -839,7 +1433,7 @@
       "source_metadata_sha256": "596e931727b43cfd9e5db5800ddde3f0689f435fc7dc89b69139bf9d9fb3c98c",
       "source_metadata_bytes": 1170,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -848,8 +1442,8 @@
         "Compute Pearson against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,disgenet_score"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -866,6 +1460,110 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/gene-disease-association/public/description.md",
+          "bytes": 2287,
+          "sha256": "df6d9ca4807b9deae621283126072b18dee338a134d752dafa798ca5e8387c39"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 941944
+          },
+          {
+            "path": "description.md",
+            "bytes": 2287
+          },
+          {
+            "path": "test.csv",
+            "bytes": 226296
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 12399
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "ec26c086f2f4c89ee8f7aeae4410b47da5a7bf5893e250ffbaa67a28527907d7",
+            "column_count": 24,
+            "columns": [
+              "id",
+              "gene_symbol",
+              "disease_name",
+              "disgenet_score",
+              "gene_length_kb",
+              "gc_content",
+              "n_exons",
+              "n_transcripts",
+              "conservation_score",
+              "constraint_loeuf",
+              "pLI",
+              "expr_tissue_0",
+              "expr_tissue_1",
+              "expr_tissue_2",
+              "expr_tissue_3",
+              "expr_tissue_4",
+              "expr_tissue_5",
+              "expr_tissue_6",
+              "expr_tissue_7",
+              "expr_tissue_8",
+              "expr_tissue_9",
+              "disease_n_genes",
+              "disease_prevalence_log",
+              "disease_inheritance_score"
+            ]
+          },
+          "test.csv": {
+            "sha256": "fd00df453b2fecbf914bb9c442f61b55e53f7e120de7af26622ad7ce7766a05e",
+            "column_count": 23,
+            "columns": [
+              "id",
+              "gene_symbol",
+              "disease_name",
+              "gene_length_kb",
+              "gc_content",
+              "n_exons",
+              "n_transcripts",
+              "conservation_score",
+              "constraint_loeuf",
+              "pLI",
+              "expr_tissue_0",
+              "expr_tissue_1",
+              "expr_tissue_2",
+              "expr_tissue_3",
+              "expr_tissue_4",
+              "expr_tissue_5",
+              "expr_tissue_6",
+              "expr_tissue_7",
+              "expr_tissue_8",
+              "expr_tissue_9",
+              "disease_n_genes",
+              "disease_prevalence_log",
+              "disease_inheritance_score"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "disgenet_score"
+        ],
+        "submission_header_sha256": "27a176e0e6b97d492604e66e9ec5e50b8ecfbbf7657e26c19055bf452a237eaa",
+        "endpoint": "Continuous disgenet_score in [0,1] from gene genomic/constraint/expression features and disease metadata; Pearson.",
+        "source_claimed_training_rows": 6001,
+        "source_claimed_test_rows": 1499,
+        "source_claims_and_schema_limits": [
+          "Description names DisGeNET, HPO, OMIM and Orphanet but supplies no per-feature accessions, score construction or tissue-name mapping. Real observed feature provenance and redistribution rights remain unverified."
+        ],
+        "source_lineage_leads": [
+          "DisGeNET, HPO, OMIM, Orphanet"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -876,7 +1574,7 @@
       "source_metadata_sha256": "87c4f1f743e0ba6ef866ac5d183f0407fde461f9fe878e0baa977b50c6c79b88",
       "source_metadata_bytes": 1297,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -885,26 +1583,149 @@
         "Compute macro ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,GO_0006915,GO_0006281,GO_0007049,GO_0006412,GO_0006468,GO_0008150,GO_0016310,GO_0006355,GO_0006950,GO_0006259,GO_0006351,GO_0006260,GO_0006629,GO_0006810,GO_0006886"
       ],
       "required_tools": [],
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "GO_COLS"
-          },
+          "label_cols": [
+            "GO_0006915",
+            "GO_0006281",
+            "GO_0007049",
+            "GO_0006412",
+            "GO_0006468",
+            "GO_0008150",
+            "GO_0016310",
+            "GO_0006355",
+            "GO_0006950",
+            "GO_0006259",
+            "GO_0006351",
+            "GO_0006260",
+            "GO_0006629",
+            "GO_0006810",
+            "GO_0006886"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'GO_COLS'}"
+          "GO_0006915",
+          "GO_0006281",
+          "GO_0007049",
+          "GO_0006412",
+          "GO_0006468",
+          "GO_0008150",
+          "GO_0016310",
+          "GO_0006355",
+          "GO_0006950",
+          "GO_0006259",
+          "GO_0006351",
+          "GO_0006260",
+          "GO_0006629",
+          "GO_0006810",
+          "GO_0006886"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/go-function-multi-label/public/description.md",
+          "bytes": 1914,
+          "sha256": "9bde7aea681e962e22d5c608030c3616030341d51200cd27081abe3a80b2889a"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 939970
+          },
+          {
+            "path": "description.md",
+            "bytes": 1914
+          },
+          {
+            "path": "test.csv",
+            "bytes": 191739
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 23926
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "60ecbd563568d3f9ddd5459f3f6fa7e1aa7f78baea0972d4c5d1cd420be0add6",
+            "column_count": 19,
+            "columns": [
+              "id",
+              "protein_id",
+              "gene_symbol",
+              "GO_0006915",
+              "GO_0006281",
+              "GO_0007049",
+              "GO_0006412",
+              "GO_0006468",
+              "GO_0008150",
+              "GO_0016310",
+              "GO_0006355",
+              "GO_0006950",
+              "GO_0006259",
+              "GO_0006351",
+              "GO_0006260",
+              "GO_0006629",
+              "GO_0006810",
+              "GO_0006886",
+              "protein_sequence"
+            ]
+          },
+          "test.csv": {
+            "sha256": "7148e6d60f1d35267f34d74a6fa6e044821d937eedc1c4ed46c53fb6aba91b6d",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "protein_id",
+              "gene_symbol",
+              "protein_sequence"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "GO_0006915",
+          "GO_0006281",
+          "GO_0007049",
+          "GO_0006412",
+          "GO_0006468",
+          "GO_0008150",
+          "GO_0016310",
+          "GO_0006355",
+          "GO_0006950",
+          "GO_0006259",
+          "GO_0006351",
+          "GO_0006260",
+          "GO_0006629",
+          "GO_0006810",
+          "GO_0006886"
+        ],
+        "submission_header_sha256": "ea9b0384f8b496f66f1d7945164eae56450e67287f34ec1162d0f5c195c4fd8e",
+        "endpoint": "Fifteen probability columns in the inspected submission order; masked macro ROC-AUC.",
+        "source_claimed_training_rows": 2806,
+        "source_claimed_test_rows": 702,
+        "source_claims_and_schema_limits": [
+          "The source scorer masks -1 and skips constant-label columns, but row values and annotation provenance have not been inspected. The number of evaluable labels is therefore unverified."
+        ],
+        "source_lineage_leads": [
+          "Gene Ontology biological-process annotations"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -915,7 +1736,7 @@
       "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
       "source_metadata_bytes": 1049,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -924,8 +1745,8 @@
         "Compute ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -942,6 +1763,86 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/metabolic-network-kegg/public/description.md",
+          "bytes": 2019,
+          "sha256": "b755b3e6d969d59b0cb9100be20693c558324309f0ca25cdb27b637053a1c1d0"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 1475042
+          },
+          {
+            "path": "description.md",
+            "bytes": 2019
+          },
+          {
+            "path": "test.csv",
+            "bytes": 379826
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 7891
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "48d2558fe80fcc277c397b3656383c74c049db6fecf81fe81602e5fd1d42a31b",
+            "column_count": 12,
+            "columns": [
+              "id",
+              "enzyme_id",
+              "ec_number",
+              "reaction_id",
+              "pathway_id",
+              "label",
+              "enzyme_sequence",
+              "ec_class",
+              "ec_subclass",
+              "ec_sub_subclass",
+              "pathway_size",
+              "enzyme_n_reactions"
+            ]
+          },
+          "test.csv": {
+            "sha256": "703744acda0b3479e057f9bb240319079dba62708470a1c1764c8bd2d9058bcd",
+            "column_count": 11,
+            "columns": [
+              "id",
+              "enzyme_id",
+              "ec_number",
+              "reaction_id",
+              "pathway_id",
+              "enzyme_sequence",
+              "ec_class",
+              "ec_subclass",
+              "ec_sub_subclass",
+              "pathway_size",
+              "enzyme_n_reactions"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Probability that an enzyme catalyzes a reaction; ROC-AUC. Reaction/pathway identifiers are inputs, not flux or growth predictions.",
+        "source_claimed_training_rows": 4001,
+        "source_claimed_test_rows": 999,
+        "source_claims_and_schema_limits": [
+          "No negative-construction, evidence or per-record provenance is provided in the description. KEGG redistribution permission must be established or an independently licensed reaction source used with an explicit adaptation."
+        ],
+        "source_lineage_leads": [
+          "KEGG enzyme-reaction and pathway records"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -952,7 +1853,7 @@
       "source_metadata_sha256": "bc57d86a8a00310f3e2de0f352941759fb966e9828de1cd825ce54656bd953f6",
       "source_metadata_bytes": 1051,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -961,8 +1862,8 @@
         "Compute accuracy against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -979,6 +1880,104 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/pathway-membership-reactome/public/description.md",
+          "bytes": 1523,
+          "sha256": "a93decfb37de75650329d27c7f2ad8e260eb57d47d3871262b940c817d7f60c2"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 2201725
+          },
+          {
+            "path": "description.md",
+            "bytes": 1523
+          },
+          {
+            "path": "test.csv",
+            "bytes": 538121
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 18083
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "e8f2788158c827d8278808c30ee480b05a3fefec167453a321c9a4c1bc198083",
+            "column_count": 16,
+            "columns": [
+              "id",
+              "gene_id",
+              "gene_symbol",
+              "protein_id",
+              "label",
+              "protein_sequence",
+              "expr_tissue_0",
+              "expr_tissue_1",
+              "expr_tissue_2",
+              "expr_tissue_3",
+              "expr_tissue_4",
+              "expr_tissue_5",
+              "expr_tissue_6",
+              "expr_tissue_7",
+              "expr_tissue_8",
+              "expr_tissue_9"
+            ]
+          },
+          "test.csv": {
+            "sha256": "a1ce2f37399f2d89b0c2701436528e6d0e7b21c4ba8fa385e554b377ba054526",
+            "column_count": 15,
+            "columns": [
+              "id",
+              "gene_id",
+              "gene_symbol",
+              "protein_id",
+              "protein_sequence",
+              "expr_tissue_0",
+              "expr_tissue_1",
+              "expr_tissue_2",
+              "expr_tissue_3",
+              "expr_tissue_4",
+              "expr_tissue_5",
+              "expr_tissue_6",
+              "expr_tissue_7",
+              "expr_tissue_8",
+              "expr_tissue_9"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "One of eight pathway-category strings per protein; accuracy, not multilabel membership recovery.",
+        "source_claimed_training_rows": 4801,
+        "source_claimed_test_rows": 1199,
+        "source_claims_and_schema_limits": [
+          "Description does not explain how eight mutually exclusive classes are derived, or identify the ten tissue measurements. Do not invent a dominant pathway label."
+        ],
+        "source_lineage_leads": [
+          "Reactome pathway database"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false,
+        "description_class_dictionary": [
+          "Cell Cycle",
+          "Developmental Biology",
+          "DNA Repair",
+          "Gene Expression",
+          "Immune System",
+          "Metabolism",
+          "Signal Transduction",
+          "Transport"
+        ]
       }
     },
     {
@@ -989,7 +1988,7 @@
       "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
       "source_metadata_bytes": 1049,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -998,8 +1997,8 @@
         "Compute ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -1016,6 +2015,96 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/ppi-prediction-string/public/description.md",
+          "bytes": 1887,
+          "sha256": "5952f14e1ac58082374bf0fd981b2f22ca3793c7cefe37f0f5875fc3806ba43b"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 3840502
+          },
+          {
+            "path": "description.md",
+            "bytes": 1887
+          },
+          {
+            "path": "test.csv",
+            "bytes": 909499
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 14847
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "acb438f4b69e135b5cac2e89404dadfc411e0f0ab6f05c97c7859a258becf3a1",
+            "column_count": 17,
+            "columns": [
+              "id",
+              "protein_a_id",
+              "protein_b_id",
+              "protein_a_name",
+              "protein_b_name",
+              "label",
+              "sequence_a",
+              "sequence_b",
+              "degree_a",
+              "degree_b",
+              "clustering_a",
+              "clustering_b",
+              "betweenness_a",
+              "betweenness_b",
+              "pagerank_a",
+              "pagerank_b",
+              "common_neighbors"
+            ]
+          },
+          "test.csv": {
+            "sha256": "e65bfc61fdedbc0d5a52cd0b95cfb4159181ba4e659fc4aed3c1caab43fc845c",
+            "column_count": 16,
+            "columns": [
+              "id",
+              "protein_a_id",
+              "protein_b_id",
+              "protein_a_name",
+              "protein_b_name",
+              "sequence_a",
+              "sequence_b",
+              "degree_a",
+              "degree_b",
+              "clustering_a",
+              "clustering_b",
+              "betweenness_a",
+              "betweenness_b",
+              "pagerank_a",
+              "pagerank_b",
+              "common_neighbors"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Pair-association probability; ROC-AUC. Description defines positives by STRING v12 combined_score >=700 and negatives as random pairs with no known association.",
+        "source_claimed_training_rows": 7228,
+        "source_claimed_test_rows": 1772,
+        "source_claims_and_schema_limits": [
+          "The prompt does not establish how graph features were split or generated. Leakage is a risk requiring provenance, not a finding proved by column names."
+        ],
+        "source_lineage_leads": [
+          "STRING v12.0 combined-score network"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -1026,7 +2115,7 @@
       "source_metadata_sha256": "bc57d86a8a00310f3e2de0f352941759fb966e9828de1cd825ce54656bd953f6",
       "source_metadata_bytes": 1051,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -1035,8 +2124,8 @@
         "Compute accuracy against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -1053,6 +2142,84 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/protein-complex-corum/public/description.md",
+          "bytes": 1632,
+          "sha256": "503d262112ff7c4259942d8f10c94532b68178d719ded9057334f5a76489f3f3"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 566297
+          },
+          {
+            "path": "description.md",
+            "bytes": 1632
+          },
+          {
+            "path": "test.csv",
+            "bytes": 129255
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 9893
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "20abde0486fb05fc473405c976fd06d9799e4afe5b2ed5d57d201ebc6146e11c",
+            "column_count": 5,
+            "columns": [
+              "id",
+              "protein_id",
+              "gene_symbol",
+              "label",
+              "protein_sequence"
+            ]
+          },
+          "test.csv": {
+            "sha256": "7148e6d60f1d35267f34d74a6fa6e044821d937eedc1c4ed46c53fb6aba91b6d",
+            "column_count": 4,
+            "columns": [
+              "id",
+              "protein_id",
+              "gene_symbol",
+              "protein_sequence"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "One of ten broad complex-category strings per protein; accuracy. This is not exact complex membership or physical-contact reconstruction.",
+        "source_claimed_training_rows": 2103,
+        "source_claimed_test_rows": 526,
+        "source_claims_and_schema_limits": [
+          "The description names ten categories but does not provide the rule deriving one category per protein from CORUM. Category provenance remains a blocking input requirement."
+        ],
+        "source_lineage_leads": [
+          "CORUM mammalian protein complexes"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false,
+        "description_class_dictionary": [
+          "Cell Cycle Control",
+          "Chromatin Remodeling",
+          "DNA Repair",
+          "Membrane Transport",
+          "Metabolic Enzymes",
+          "Protein Degradation",
+          "RNA Processing",
+          "Signal Transduction",
+          "Transcription Regulation",
+          "Translation"
+        ]
       }
     },
     {
@@ -1063,7 +2230,7 @@
       "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
       "source_metadata_bytes": 1049,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -1072,8 +2239,8 @@
         "Compute ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -1090,6 +2257,130 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/synthetic-lethality-prediction/public/description.md",
+          "bytes": 2208,
+          "sha256": "0842d21f89bf002b4ba7ac32b46fb41f55e773fec651ddecb948571e8f2a0f50"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 3483381
+          },
+          {
+            "path": "description.md",
+            "bytes": 2208
+          },
+          {
+            "path": "test.csv",
+            "bytes": 867406
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 9690
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "7186756a897f3604e3712e1c0dda51ba2bf186959642d8d3fcefb24f98540339",
+            "column_count": 34,
+            "columns": [
+              "id",
+              "gene_a_id",
+              "gene_b_id",
+              "sequence_a",
+              "sequence_b",
+              "a_degree",
+              "a_clustering",
+              "a_essentiality",
+              "a_expr_0",
+              "a_expr_1",
+              "a_expr_2",
+              "a_expr_3",
+              "a_expr_4",
+              "a_expr_5",
+              "a_expr_6",
+              "a_expr_7",
+              "a_expr_8",
+              "a_expr_9",
+              "b_degree",
+              "b_clustering",
+              "b_essentiality",
+              "b_expr_0",
+              "b_expr_1",
+              "b_expr_2",
+              "b_expr_3",
+              "b_expr_4",
+              "b_expr_5",
+              "b_expr_6",
+              "b_expr_7",
+              "b_expr_8",
+              "b_expr_9",
+              "ppi_score",
+              "common_neighbors",
+              "label"
+            ]
+          },
+          "test.csv": {
+            "sha256": "2c1555c091838930a385f809a1bd38eba350eff9564c840dc95c897ed46feebd",
+            "column_count": 33,
+            "columns": [
+              "id",
+              "gene_a_id",
+              "gene_b_id",
+              "sequence_a",
+              "sequence_b",
+              "a_degree",
+              "a_clustering",
+              "a_essentiality",
+              "a_expr_0",
+              "a_expr_1",
+              "a_expr_2",
+              "a_expr_3",
+              "a_expr_4",
+              "a_expr_5",
+              "a_expr_6",
+              "a_expr_7",
+              "a_expr_8",
+              "a_expr_9",
+              "b_degree",
+              "b_clustering",
+              "b_essentiality",
+              "b_expr_0",
+              "b_expr_1",
+              "b_expr_2",
+              "b_expr_3",
+              "b_expr_4",
+              "b_expr_5",
+              "b_expr_6",
+              "b_expr_7",
+              "b_expr_8",
+              "b_expr_9",
+              "ppi_score",
+              "common_neighbors"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Gene-pair synthetic-lethality probability; ROC-AUC. A measured-outcome adaptation requires actual double-perturbation evidence.",
+        "source_claimed_training_rows": 4801,
+        "source_claimed_test_rows": 1199,
+        "source_claims_and_schema_limits": [
+          "Description says data are constructed from STRING and UniProt with DepMap-style essentiality, but names no double-perturbation assay or label-generation rule. It does not establish measured synthetic-lethality outcomes. Keep this proposal unassignable until independent assay provenance is verified."
+        ],
+        "source_lineage_leads": [
+          "STRING v12, UniProt, DepMap; measured pair-label source unspecified"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {
@@ -1100,7 +2391,7 @@
       "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
       "source_metadata_bytes": 1049,
       "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
-      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "authoritative_prompt_status": "description-and-input/submission-headers-inspected; row values and private answers uninspected",
       "required_stages": [
         "Inspect modality-specific public inputs and sample identities",
         "Establish training/tuning and held-out biological units",
@@ -1109,8 +2400,8 @@
         "Compute ROC AUC against independently held-out outcomes"
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "required_tools": [],
       "source_scorer": {
@@ -1127,6 +2418,86 @@
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      },
+      "assessment": "Full description, public CSV headers and executable scorer assessed; source claims and independent observed inputs remain to be verified.",
+      "prompt_review": {
+        "archive_path": "Data-Public-by-Domain/network-biology-8tasks-all.tar.gz",
+        "description": {
+          "archive_member": "network-biology/tf-regulatory-prediction/public/description.md",
+          "bytes": 2351,
+          "sha256": "2fb1ab2c0d542a03dc25b190cbab75dd6172e61d0f2b79464de81879c8342f68"
+        },
+        "public_files": [
+          {
+            "path": "train.csv",
+            "bytes": 1442275
+          },
+          {
+            "path": "description.md",
+            "bytes": 2351
+          },
+          {
+            "path": "test.csv",
+            "bytes": 353682
+          },
+          {
+            "path": "sample_submission.csv",
+            "bytes": 10572
+          }
+        ],
+        "input_headers": {
+          "train.csv": {
+            "sha256": "513703168a5f9dc7c2a6fefcb6e826af2e2627ed9c5eb6746a79353576168eb5",
+            "column_count": 12,
+            "columns": [
+              "id",
+              "tf_id",
+              "tf_symbol",
+              "target_id",
+              "target_symbol",
+              "chipseq_peak_count",
+              "motif_score",
+              "distance_to_tss",
+              "label",
+              "tf_sequence",
+              "tf_n_targets",
+              "target_n_tfs"
+            ]
+          },
+          "test.csv": {
+            "sha256": "fdbb8999e78293d4918632e47fae813593f20ddd3019d5d153179b2b579cd80d",
+            "column_count": 11,
+            "columns": [
+              "id",
+              "tf_id",
+              "tf_symbol",
+              "target_id",
+              "target_symbol",
+              "chipseq_peak_count",
+              "motif_score",
+              "distance_to_tss",
+              "tf_sequence",
+              "tf_n_targets",
+              "target_n_tfs"
+            ]
+          }
+        },
+        "submission_header": [
+          "id",
+          "label"
+        ],
+        "submission_header_sha256": "cd163fbf956ef329a9fb3155ccf2359722a9ab06273b4e954cc459abcbdcfa34",
+        "endpoint": "Directed TF-target label probability; ROC-AUC. Source input includes ChIP-seq peak counts, motif scores, TSS distance and network degrees.",
+        "source_claimed_training_rows": 5203,
+        "source_claimed_test_rows": 1297,
+        "source_claims_and_schema_limits": [
+          "Description gives no accessions, genome assembly, label-construction rule or negative evidence. ChIP-seq and motif covariates do not resolve the scientific label."
+        ],
+        "source_lineage_leads": [
+          "ENCODE TF ChIP-seq"
+        ],
+        "row_values_inspected": false,
+        "private_answers_inspected": false
       }
     },
     {

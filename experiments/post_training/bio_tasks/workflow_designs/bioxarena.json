@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:12:07.445384+00:00",
+  "updated_at": "2026-09-24T18:52:02.997737+00:00",
   "scope": "Benchmark-wide question planning only; no implementation, source biological fixture reuse, or validated coverage added.",
   "source": {
     "benchmark": "BioXArena",
     "inventory_path": "benchmark_tasks/bioxarena.json",
-    "inventory_sha256": "64662961415375a64cf826e631e8feac44eab961c9ec1e92f957102a82517032",
+    "inventory_sha256": "7be57efd440fc0f637f8f9162b629b5df380263777ae8192603db3c66d390f54",
     "source_revision": "29f88d4d573001405abf0694aee72d91c3f47e6c",
     "archive_constraint": {
       "manifest_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/Data-Public-by-Domain/MANIFEST.txt",
       "local_manifest_sha256": "30f867d6314c20cace4ebde4c3546137e3ab747e9290150ffd37b3442fb62194",
       "manifest_reported_archive_size": "56G across 17 gzip tar archives",
-      "action": "No archives fetched for planning. Full descriptions and schemas are a declared prerequisite before implementation; titles are not treated as complete prompts."
+      "action": "Two official chemical/network archives (33,577,188 bytes compressed) verified against provider SHA256 values; 16 full descriptions and input/submission headers reviewed. Remaining 60 descriptions stay uninspected. Evidence is in the inventory data_release.archive_inspection and per-task prompt_review."
     }
   },
   "defaults": {
@@ -24,15 +24,15 @@
   "questions": [
     {
       "proposed_id": "biox-design-chemical-biology-bace1-binding-affinity",
-      "scientific_question": "Can scaffold-held-out molecules be ranked by measured BACE1 affinity after reconciling assay units and censored measurements?",
+      "scientific_question": "Can scaffold-held-out molecules predict measured BACE1 log10(IC50 in nM) after assay eligibility and censoring checks?",
       "target_ids": [
         "chemical-biology/bace1-binding-affinity"
       ],
-      "source_task_record_sha256": "ced45c4bc7df4bc8ed269fb91494d03a07eccc88fcc708a0f66639ed474e0bd0",
+      "source_task_record_sha256": "6175762ad631ccb7b87fdec4ab2a50be7ab88045be66093c65a4bbfe9776a7db",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "Pearson",
         "helper_arguments": {
@@ -49,42 +49,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute Pearson against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out Pearson endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent measured BACE1 IC50 assays, molecular structures, units, censoring, assay identifiers and compound/scaffold lineage; target P56817."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,affinity; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Keep the log-nM endpoint distinct from negative-log molar pChEMBL. Record assay conditions and replicate aggregation; do not silently pool IC50, Ki and Kd.",
+        "Scaffold or assay-series holdout is a proposed adaptation; the source description does not establish its split construction.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-cell-painting-perturbation",
-      "scientific_question": "Which measured cellular morphology signatures identify perturbations across held-out plates and biological batches?",
+      "scientific_question": "Which compound perturbations can be identified from observed well-level Cell Painting profiles across held-out plates?",
       "target_ids": [
         "chemical-biology/cell-painting-perturbation"
       ],
-      "source_task_record_sha256": "8ab2f35eab8ce2a234d2cea11592275074bce06738f00ea9d90e59ff57125ba3",
+      "source_task_record_sha256": "b4b7452558acc511d8dd4fdef83f2d35912a1e34798d2b295020ba2a0d8ba816",
       "matching_workstreams": [
         "biological-imaging"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -101,96 +102,108 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out accuracy endpoint."
       ],
       "observed_input_requirements": [
-        "Observed microscopy/histology images with pixel size, section/subject identifiers and measured annotations; temporal images for dynamics."
+        "Independent observed well-level profiles with plate, well, cell line, compound/dose and control metadata, preprocessing provenance and replicates; use a study independent of cpg0000."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,perturbation"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,perturbation; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Start from processed profiles; do not credit raw-image segmentation or CellProfiler execution unless those stages are separately authored and graded.",
+        "Source declares perturbation-stratified splitting. Plate/batch holdout is an explicit adaptation; retain each eligible class in training and separate cell-line effects. Fit normalization and feature selection on training/control data only.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-cyp-inhibition-multi-label",
-      "scientific_question": "Can measured inhibition labels for multiple CYP assays be predicted without scaffold or assay-batch leakage?",
+      "scientific_question": "Can molecular structures predict five measured CYP inhibition endpoints while retaining untested assay pairs as missing?",
       "target_ids": [
         "chemical-biology/cyp-inhibition-multi-label"
       ],
-      "source_task_record_sha256": "82d8f2f0574782388a487f0e2b72277b002db6cf4137e6b96261f60ad4b9b45e",
+      "source_task_record_sha256": "75703023177af4dd492d79cd2bd2a3c8f9081016cbccfb0a01f7565bcd8acc9c",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "LABEL_COLS"
-          },
+          "label_cols": [
+            "CYP3A4_inhibits",
+            "CYP2D6_inhibits",
+            "CYP2C9_inhibits",
+            "CYP2C19_inhibits",
+            "CYP1A2_inhibits"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'LABEL_COLS'}"
+          "CYP3A4_inhibits",
+          "CYP2D6_inhibits",
+          "CYP2C9_inhibits",
+          "CYP2C19_inhibits",
+          "CYP1A2_inhibits"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute macro ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out macro ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent observed CYP3A4, CYP2D6, CYP2C9, CYP2C19 and CYP1A2 assay records with structures, assay definitions, tested masks and compound/scaffold identities."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,CYP3A4_inhibits,CYP2D6_inhibits,CYP2C9_inhibits,CYP2C19_inhibits,CYP1A2_inhibits"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "Complete predictions with columns id,CYP3A4_inhibits,CYP2D6_inhibits,CYP2C9_inhibits,CYP2C19_inhibits,CYP1A2_inhibits; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
+        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics.",
+        "Per-label observed, positive and negative counts, tested masks, eligible-label flags and AUCs; verifier recomputes the macro denominator and fails when no label is evaluable."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Keep untested pairs distinct from measured negatives. Derive each label from its documented assay threshold and retain its validity mask.",
+        "Use structure-derived features only for this endpoint; do not add number-inhibited or inhibition-ratio features computed from withheld outcomes. Use grouped compound/scaffold evaluation as a declared adaptation.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-egfr-binding-affinity",
-      "scientific_question": "Can a bounded molecular model rank independently measured EGFR affinities across held-out chemical scaffolds?",
+      "scientific_question": "Can molecular structures predict measured EGFR pChEMBL values under explicit assay-type and scaffold boundaries?",
       "target_ids": [
         "chemical-biology/egfr-binding-affinity"
       ],
-      "source_task_record_sha256": "d792ee3852ba4dbf7da1c2f6cf733fa5fffb67a66fe3cccda4784fedcc233bbe",
+      "source_task_record_sha256": "2c101ae5cbe4c99173dd4e132a152fdabcb0f77446616b52aa5e3c6734986a49",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "Pearson",
         "helper_arguments": {
@@ -207,42 +220,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute Pearson against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out Pearson endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent observed EGFR activity records with structures, assay type, units, censoring, target construct and compound/scaffold lineage; target P00533."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,affinity; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Do not pool IC50, Ki and Kd solely because they share log units. Freeze compatible assay strata or declare a specific assay-type restriction and its adaptation limit.",
+        "Use an explicit compound/scaffold holdout; assay records from the same molecule or series must not leak across fitting and evaluation.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-gpcr-binding-multi-class",
-      "scientific_question": "Which measured receptor-binding classes can be distinguished after resolving multi-target compounds and scaffold overlap?",
+      "scientific_question": "Which GPCR receptor class is associated with an observed binding record, using molecular structure, potency and assay type?",
       "target_ids": [
         "chemical-biology/gpcr-binding-multi-class"
       ],
-      "source_task_record_sha256": "18a1721f9d4e54448a4ba3f04996be2e47d171834769165084dc64d3b9785966",
+      "source_task_record_sha256": "39f507a8b76e4cd18d450808e66aa4bc006c225cf6460e715b7e986f84e69dc3",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "macro F1",
         "helper_arguments": {
@@ -259,42 +273,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute macro F1 against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out macro F1 endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent observed compound-receptor binding records with receptor-class provenance, pChEMBL, assay type and compound/target lineage; do not expose target identity as a predictive feature."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Keep record identity distinct from unique compound identity; a compound can have different receptor-class records. Define exclusions or a record-conditioned endpoint before resolving conflicting labels.",
+        "Use smiles, pchembl_value and assay_type as available source inputs. Removing measured potency would be a structure-only adaptation, not the same source endpoint.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-herg-binding-affinity",
-      "scientific_question": "How well do molecular features predict measured hERG binding across scaffold-held-out compounds with consistent units?",
+      "scientific_question": "Can molecular structures predict observed hERG pChEMBL values across held-out scaffolds with controlled assay semantics?",
       "target_ids": [
         "chemical-biology/herg-binding-affinity"
       ],
-      "source_task_record_sha256": "317589f2e020c5c4be387e45a11f4c269846a4cf639df057793f3c0e862ca9af",
+      "source_task_record_sha256": "7d0517027f853e838425ebe0389ddc99cf3b6877d18c70a7d3a8cf146115fb2b",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "Pearson",
         "helper_arguments": {
@@ -311,96 +326,114 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute Pearson against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out Pearson endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent measured hERG activity records with assay modality, construct, units, censoring and scaffold lineage; target P22460."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,affinity"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,affinity; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Reconcile binding versus channel-inhibition assays and IC50/Ki/Kd before setting the regression target. Preserve any assay restriction as an explicit adaptation.",
+        "Grade measured assay potency only; a passing model does not establish clinical QT prolongation or arrhythmia risk.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-kinase-selectivity-multi-label",
-      "scientific_question": "Which measured kinase activity labels generalize across held-out compounds when missing assays remain unobserved rather than negative?",
+      "scientific_question": "Can structures predict an eight-kinase measured inhibition panel with assay-specific eligibility and untested pairs preserved?",
       "target_ids": [
         "chemical-biology/kinase-selectivity-multi-label"
       ],
-      "source_task_record_sha256": "15fd2c53b7f7f85725a251de5fd3cee086ed2d7a410718aaed87c204dff66929",
+      "source_task_record_sha256": "e28d3b94cc0eada303e2a591dc618e2f653569286c79426b94aba6df1efd7603",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "LABEL_COLS"
-          },
+          "label_cols": [
+            "EGFR",
+            "ABL1",
+            "SRC",
+            "CDK2",
+            "VEGFR2",
+            "MET",
+            "ALK",
+            "BRAF"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'LABEL_COLS'}"
+          "EGFR",
+          "ABL1",
+          "SRC",
+          "CDK2",
+          "VEGFR2",
+          "MET",
+          "ALK",
+          "BRAF"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute macro ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out macro ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent observed EGFR, ABL1, SRC, CDK2, VEGFR2, MET, ALK and BRAF assay records, units, target constructs, censoring and compound/scaffold identities."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,EGFR,ABL1,SRC,CDK2,VEGFR2,MET,ALK,BRAF"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "Complete predictions with columns id,EGFR,ABL1,SRC,CDK2,VEGFR2,MET,ALK,BRAF; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
+        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics.",
+        "Per-label observed, positive and negative counts, tested masks, eligible-label flags and AUCs; verifier recomputes the macro denominator and fails when no label is evaluable."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze assay eligibility and activity thresholds from source fields. Do not infer a confidence score from potency; preserve missing-label masks and per-label positive/negative counts.",
+        "The prompt claims an IC50 threshold of 10 uM. Confirm the measurement type and boundary before using that threshold on independent observations.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-chemical-biology-tox21-sr-are",
-      "scientific_question": "Can an observed cellular assay response be predicted across held-out chemical scaffolds with explicit assay eligibility and uncertainty?",
+      "scientific_question": "Can molecular structures predict observed SR-ARE assay activation across held-out chemical scaffolds?",
       "target_ids": [
         "chemical-biology/tox21-sr-are"
       ],
-      "source_task_record_sha256": "e2ba2b8167e287a475193decd353a5a3042a4d77f0eebab599b22067bfee093f",
+      "source_task_record_sha256": "f489d47effbcd1e94b4eb11f361caabe14d542309b9c1dc4511910c725eae1c2",
       "matching_workstreams": [
         "molecular-property"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "ROC AUC",
         "helper_arguments": {
@@ -417,29 +450,30 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+        "Independent observed SR-ARE assay measurements with structures, assay IDs, validity/cytotoxicity flags and compound lineage; lineage comparison with Tox21/MoleculeNet is required."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze the actual assay endpoint and eligible measurements using primary assay documentation. Do not infer clinical toxicity from this reporter assay.",
+        "Keep source label alias tox21_sr_are_active separate from the released CSV target label; author an explicit mapping and missing-value policy.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
@@ -855,15 +889,15 @@
     },
     {
       "proposed_id": "biox-design-network-biology-gene-disease-association",
-      "scientific_question": "Which gene-disease association scores can be predicted from a frozen evidence network without leaking held-out association records?",
+      "scientific_question": "Can gene and disease features predict independently curated gene-disease evidence scores without using held-out associations to construct features?",
       "target_ids": [
         "network-biology/gene-disease-association"
       ],
-      "source_task_record_sha256": "0a0cc5f4c50d03b79ce3d0e8c85a7101e408995631f216f501c91a410ff93e52",
+      "source_task_record_sha256": "6500b9a7a7e64750c6b173b26ecc265c7139a7c90b4b52675f6568b11026d513",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "Pearson",
         "helper_arguments": {
@@ -880,96 +914,128 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute Pearson against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out Pearson endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independently sourced, licensed gene-disease evidence with stable gene/disease IDs, score-definition release, named tissue measurements and feature lineage."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,disgenet_score"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,disgenet_score; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Treat the score as database evidence strength, not causal disease probability. Resolve disease names to stable identifiers.",
+        "Compute disease_n_genes and any label-derived evidence features using training evidence only. Declare whether the evaluation concerns new pairs, genes, diseases or a later release.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-go-function-multi-label",
-      "scientific_question": "Which measured or curated protein-function labels can be predicted under a held-out protein-family and annotation-release boundary?",
+      "scientific_question": "Which of 15 GO biological-process labels can be predicted from protein sequences under protein-family and annotation-release separation?",
       "target_ids": [
         "network-biology/go-function-multi-label"
       ],
-      "source_task_record_sha256": "b2d4d3692ff64b66de6de609f68e359204a184e92369d713e881b834757e3e83",
+      "source_task_record_sha256": "ac57799acbd9b73485ff270834b10823b8d4cbf97881754d902d164442804a92",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "macro ROC AUC",
         "helper_arguments": {
           "id_col": "id",
-          "label_cols": {
-            "source_expression": "GO_COLS"
-          },
+          "label_cols": [
+            "GO_0006915",
+            "GO_0006281",
+            "GO_0007049",
+            "GO_0006412",
+            "GO_0006468",
+            "GO_0008150",
+            "GO_0016310",
+            "GO_0006355",
+            "GO_0006950",
+            "GO_0006259",
+            "GO_0006351",
+            "GO_0006260",
+            "GO_0006629",
+            "GO_0006810",
+            "GO_0006886"
+          ],
           "missing_val": -1
         },
         "columns": [
-          "{'source_expression': 'GO_COLS'}"
+          "GO_0006915",
+          "GO_0006281",
+          "GO_0007049",
+          "GO_0006412",
+          "GO_0006468",
+          "GO_0008150",
+          "GO_0016310",
+          "GO_0006355",
+          "GO_0006950",
+          "GO_0006259",
+          "GO_0006351",
+          "GO_0006260",
+          "GO_0006629",
+          "GO_0006810",
+          "GO_0006886"
         ],
         "uses_llm_judge": false,
         "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
         "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
-        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages.",
+        "missing_and_degenerate_policy": "Mask answers equal to -1 per label; omit labels with fewer than two observed outcome classes; average remaining AUCs equally; fail if no label is evaluable."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute macro ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out macro ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent protein sequences and dated GO annotations with stable accessions, evidence codes, qualifiers and a pinned ontology graph; family clusters for task-internal evaluation."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,GO_0006915,GO_0006281,GO_0007049,GO_0006412,GO_0006468,GO_0008150,GO_0016310,GO_0006355,GO_0006950,GO_0006259,GO_0006351,GO_0006260,GO_0006629,GO_0006810,GO_0006886"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
-        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
+        "Complete predictions with columns id,GO_0006915,GO_0006281,GO_0007049,GO_0006412,GO_0006468,GO_0008150,GO_0016310,GO_0006355,GO_0006950,GO_0006259,GO_0006351,GO_0006260,GO_0006629,GO_0006810,GO_0006886; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
+        "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics.",
+        "Per-label observed, positive and negative counts, tested masks, eligible-label flags and AUCs; verifier recomputes the macro denominator and fails when no label is evaluable."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze direct versus ancestor-propagated annotation policy and permitted evidence codes. Preserve NOT qualifiers and do not convert unknown annotations to measured negatives.",
+        "Keep protein/gene IDs for traceability without exposing held-out annotation lookups. Audit the GO_0008150 root label and all other labels for degenerate outcomes under the chosen annotation policy.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-metabolic-network-kegg",
-      "scientific_question": "Which metabolic relationships are supported by predictions from independent measured or curated networks under explicit candidate-edge negatives?",
+      "scientific_question": "Which enzyme-reaction pairs can be predicted as catalytic relationships from sequences, EC hierarchy and training-only network context?",
       "target_ids": [
         "network-biology/metabolic-network-kegg"
       ],
-      "source_task_record_sha256": "88f132bd57241267f436a83d77fdf3f72e4d723092e87d7fa7d07197be46f2aa",
+      "source_task_record_sha256": "ddf37a599829b6de286ff57a72a677e6d3a095d963a5b2d3ccf43ac3a6e99dd2",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "ROC AUC",
         "helper_arguments": {
@@ -986,42 +1052,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent licensed enzyme-reaction curation with sequences, EC mappings, reaction identities, evidence and documented candidate-negative construction."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Do not count uncurated pairs as experimentally disproved catalysis. Declare sampled unknown controls separately from measured negatives.",
+        "Compute enzyme_n_reactions and pathway_size without held-out edges. Audit EC/reaction identifiers for direct label lookup and state the intended generalization boundary.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-pathway-membership-reactome",
-      "scientific_question": "Can pathway membership be predicted for held-out genes without exposing the membership labels through graph features?",
+      "scientific_question": "Can sequence and observed tissue-expression features predict a documented eight-category Reactome assignment for held-out proteins?",
       "target_ids": [
         "network-biology/pathway-membership-reactome"
       ],
-      "source_task_record_sha256": "25436817c430503357f0d5386ada6fd1d1a4b77e6d5d474028c9b4966123736a",
+      "source_task_record_sha256": "57dfd04736cb5be37c63afac627827393a64343f3e7f333379a0b56eb9ed5a3b",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -1038,42 +1105,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out accuracy endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent Reactome curation and protein sequences with observed tissue expression, named tissues, release IDs and an explicit category-assignment rule."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze the mapping from potentially multiple pathway memberships to one class; reject ambiguity or explicitly adapt to multilabel outputs without claiming source equivalence.",
+        "Group homologous proteins for evaluation and keep annotation lookup features private. Fit expression preprocessing on training units only.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-ppi-prediction-string",
-      "scientific_question": "Which protein interaction candidates generalize to independent observed interaction records after protein and evidence-source leakage checks?",
+      "scientific_question": "Can sequences and training-only graph features predict withheld high-confidence STRING association pairs under a defined protein holdout?",
       "target_ids": [
         "network-biology/ppi-prediction-string"
       ],
-      "source_task_record_sha256": "cf95d346c9b311cd5e43b90d67c5308e7bc6f0d7509871c082c9fa777585cc11",
+      "source_task_record_sha256": "13da1fb5b31ab4f864172f2745bf93c299c1d2dea4d9f3cff1681b97b1beeccc",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "ROC AUC",
         "helper_arguments": {
@@ -1090,42 +1158,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent versioned association records with evidence channels, protein sequences, stable pair identities and a documented sampled-unknown control universe."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Keep functional association distinct from physical binding and unknown controls distinct from measured noninteraction. An experimentally verified physical-binding task is a different endpoint.",
+        "Remove held-out edges before computing degrees, clustering, betweenness, PageRank or common-neighbor features. Canonicalize unordered pairs and audit reciprocal and sequence-family overlap.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-protein-complex-corum",
-      "scientific_question": "Can curated complex membership be predicted across held-out proteins without treating unannotated membership as confirmed absence?",
+      "scientific_question": "Can protein sequences predict a documented ten-category CORUM assignment under protein-family separation?",
       "target_ids": [
         "network-biology/protein-complex-corum"
       ],
-      "source_task_record_sha256": "f49bf1e982b74b7f76bd9793eafa661d0ead66fceeec37104c0a5c4a7c96e389",
+      "source_task_record_sha256": "0c9e57baa30780c5eb994e693ea494c107fecdf2d1fb50927133abee537c1d82",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "accuracy",
         "helper_arguments": {
@@ -1142,42 +1211,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute accuracy against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out accuracy endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent observed/curated mammalian complex records, protein sequences, experimental evidence, release IDs and a reproducible category-assignment rule."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze the broad category mapping and treatment of proteins participating in multiple complexes; do not invent a single label from conflicting memberships.",
+        "Keep accession-based annotation lookups out of held-out prediction features and group homologous proteins during evaluation.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-synthetic-lethality-prediction",
-      "scientific_question": "Which gene-pair interactions predict measured viability dependencies across held-out cell contexts and gene pairs?",
+      "scientific_question": "Can gene-pair features predict independently measured double-perturbation lethality under matched single-perturbation controls?",
       "target_ids": [
         "network-biology/synthetic-lethality-prediction"
       ],
-      "source_task_record_sha256": "149181383b3844102d3883bcbc4da754928ef4bd7ec4840e7c9afbe379e4a21a",
+      "source_task_record_sha256": "5abe4bb7ae6b702e6adf8f444b33352b479f7470bd3cd857d6e7fea4700e4314",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "ROC AUC",
         "helper_arguments": {
@@ -1194,42 +1264,43 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent observed paired perturbations and matched single-perturbation/control viability measurements with cell context, doses, replicate identities and assay thresholds."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Require evidence of viability loss for the double perturbation relative to the declared single-perturbation interaction model; single-gene essentiality or STRING association cannot supply this label.",
+        "Separate assay replicates and gene pairs across evaluation; compute network features without withheld labels and identify the release, tissue mapping and provenance of expression/essentiality covariates.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
       "proposed_id": "biox-design-network-biology-tf-regulatory-prediction",
-      "scientific_question": "Which directed regulatory edges predict independently measured regulator-target evidence under a fixed candidate universe?",
+      "scientific_question": "Can TF sequence and binding features predict a precisely defined TF-target evidence endpoint without using held-out edges in network features?",
       "target_ids": [
         "network-biology/tf-regulatory-prediction"
       ],
-      "source_task_record_sha256": "9bdbeaec4c5f3a8b43ee210b4c7f88be783ec50c860886561ebe32497f1a0124",
+      "source_task_record_sha256": "8c4d9a6e74aaedee33050e390ea2fbc0033f7245e7494494c656d5bd13d2df47",
       "matching_workstreams": [
         "network-model-evidence"
       ],
-      "inspection_tier": "catalog-and-executable-scorer-reviewed-full-prompt-uninspected",
+      "inspection_tier": "full-description-input-and-submission-headers-and-scorer-reviewed; biological-values-uninspected",
       "source_scorer": {
         "metric": "ROC AUC",
         "helper_arguments": {
@@ -1246,29 +1317,30 @@
         "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
       },
       "required_endpoint_stages": [
-        "Inspect modality-specific public inputs and sample identities",
-        "Establish training/tuning and held-out biological units",
-        "Fit or apply the task-specific predictive analysis",
-        "Export the required predictions in source identifier order",
-        "Compute ROC AUC against independently held-out outcomes"
+        "Resolve independent observed input provenance, biological identities and eligibility.",
+        "Freeze the target definition, measurement/class mapping and feature allowlist.",
+        "Create task-internal fitting/tuning/evaluation groups before preprocessing or graph-feature construction.",
+        "Fit a bounded native reference and export complete predictions with the inspected output columns.",
+        "Independently verify prediction identities, target semantics, group separation and the private held-out ROC AUC endpoint."
       ],
       "observed_input_requirements": [
-        "Frozen observed interaction/perturbation data and a versioned network or model with edge types, direction, context and identifiers."
+        "Independent ENCODE-compatible TF-binding observations with genome assembly, peaks, motif model, transcript/TSS definitions, biosample and TF identity; regulatory-effect claims additionally require perturbation evidence."
       ],
       "required_formats": [
-        "CSV predictions",
-        "task-specific native inputs: schema uninspected"
+        "CSV train/test tables with the inspected headers",
+        "CSV predictions: id,label"
       ],
       "proposed_artifact_requirements": [
         "Input and eligibility manifest with biological grouping, exact identities and independent source lineage.",
-        "Complete predictions in the specified source identity order; named scalar, class, multilabel, matrix or coordinate outputs according to the pinned scorer.",
+        "Complete predictions with columns id,label; exact declared ID order, unique IDs, finite numerical values and valid class/probability domains.",
         "Training/tuning/evaluation group assignments, leakage audit, model/feature parameters and metric sufficient statistics."
       ],
       "scientific_decisions": [
-        "Freeze the actual target, units, class/column dictionary, missing-label policy, grouping and metric orientation after inspecting the authoritative prompt.",
-        "Select a bounded baseline on independent observed inputs; establish an acceptance criterion against private observed labels before solver runs. Retain finite-output, complete-ID and constant-prediction checks."
+        "Freeze peak-to-gene assignment, transcript/TSS policy and the edge-label source. Binding near a promoter alone does not prove regulation or its sign.",
+        "Recompute tf_n_targets and target_n_tfs on training edges only; distinguish a ChIP-derived binding-label endpoint from an independently measured regulatory-effect adaptation.",
+        "Pin a native reference and a metric acceptance rule on independent observed inputs before solver runs. Report every label/group denominator, reject nonfinite or incomplete outputs, and audit a null baseline; establish feasibility within 30 minutes."
       ],
-      "endpoint_limit": "A title and scorer do not establish the full workflow. The source scalar/class score alone does not prove that intermediate masks, contacts, networks or model interpretation are correct. Any added intermediate artifacts need independent acceptance rules.",
+      "endpoint_limit": "Source descriptions, headers and scorer define a prediction endpoint, not verified biological lineage or executed upstream analysis. Resolve the inventory prompt_review conflicts, select independent real inputs and document any grouping/measurement adaptation before assigning this card. No source row values or answers were reused.",
       "validated_new_mappings": 0
     },
     {
@@ -3868,7 +3940,8 @@
   "counts": {
     "records": 76,
     "question_cards": 76,
-    "full_prompts_inspected": 0,
-    "validated_new_mappings": 0
+    "full_prompts_inspected": 16,
+    "validated_new_mappings": 0,
+    "full_prompts_remaining": 60
   }
 }
