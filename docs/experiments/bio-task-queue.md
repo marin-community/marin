@@ -221,24 +221,28 @@ The expanded portfolio also includes the following source-specific plans:
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
-| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | First 400 stems reviewed; 1,051 remain unreviewed; all complete synthesis contracts unresolved |
+| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | First 800 stems reviewed; 651 remain unreviewed; all complete synthesis contracts unresolved |
 | [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 + 7 shared | 520 database schemas reuse existing cards; 58 supplementary targets; all 199 literature stems reviewed across 14 patterns, with source evidence and acceptance unresolved |
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature
 syntheses with citations; the inspected citation scorer uses a learned attribution
 model. All 1,451 trimmed question texts are distinct, which does not establish
-independent scientific workflows. The first 400 stems (`bio_0` through `bio_399`)
-have been read individually. Of these, 130 suggest possible quantitative components:
-release/exposure/stability (26), assay calibration (37), outcome comparisons (32),
-biomarker evaluation (23), model validation (6), image registration (1) and
-protein/library accounting (5). The other 270 retain open synthesis or strategy
-dispositions. Related existing cards are component references, not assignments.
+independent scientific workflows. The first 800 stems (`bio_0` through `bio_799`)
+have been read individually. Of these, 257 suggest possible quantitative components;
+543 retain open synthesis or strategy dispositions. The component routes include
+assay calibration, outcome comparisons, biomarker evaluation, release/exposure,
+microbial community analysis, observed editing outcomes, proteomics, bioprocess
+accounting and material measurements. Exact per-ID routes and counts are in the
+linked design file. Related existing cards are component references, not assignments.
 
 The review retains real-input requirements, complete artifacts, incorrect-output
 checks and each component's limits. For example, kinetic fitting does not answer
 which delivery strategy is best, and comparing animal outcomes does not establish
-human efficacy. All 1,451 synthesis endpoints remain gaps; the remaining 1,051 stems
+human efficacy. Relative microbial abundance is not absolute biomass, unassayed
+editing sites are not measured negatives, and dye color loss alone does not prove
+biodegradation. The new component contracts preserve those distinctions.
+All 1,451 synthesis endpoints remain gaps; the remaining 651 stems
 still need individual review. No source evidence, inspiring papers or answers were
 read, and no deterministic citation check substitutes for scientific entailment.
 
