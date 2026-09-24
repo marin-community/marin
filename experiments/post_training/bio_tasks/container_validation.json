@@ -3789,6 +3789,1040 @@
         }
       ],
       "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
+    },
+    {
+      "job_id": "/exedev/bio-harbor-assembly-20260924-115342",
+      "source_revision": "e2f95ea89d128e351eea6ae1b030548fd4ea989b",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 3,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "f29da1c6c82c9c91fc7ba5be1054397ab264e971af419c1620d2cb35a31f89e0",
+      "canonical_corpus_manifest_sha256": "8740cbe729bd6a74a4db186d7ffc051d85a5e646b372c5cff8ee127dd4a0dff0",
+      "canonical_corpus_archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/00bca89f456d6ed8239285daf8d14d1d5986e92dc0719a0470abe03702cdcd04/outputs.tar.zst",
+        "sha256": "00bca89f456d6ed8239285daf8d14d1d5986e92dc0719a0470abe03702cdcd04",
+        "size_bytes": 4857504
+      },
+      "archive": {
+        "state": "preserved",
+        "uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/8868a6f17c28b145f357c33746fd70dff5c71f7ae682d1f3af686ff08f0374d8/outputs.tar.zst",
+        "size_bytes": 324331,
+        "sha256": "8868a6f17c28b145f357c33746fd70dff5c71f7ae682d1f3af686ff08f0374d8",
+        "provider_md5": "/Yyb+sZWYRsMAnuBYoApSg==",
+        "generation": "1790251602014697",
+        "temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-assembly-20260924-115342/0/8203ce0320d43972/outputs.tar.zst"
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-assembly-20260924-115342",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T12:05:38.506197+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-24T11:56:23.078145+00:00",
+        "trials": [
+          "real-phix-assembly-v1-20260923-0__8B8cjVK",
+          "real-phix-assembly-v1-20260923-0__UG5ThfF",
+          "real-phix-assembly-v1-20260923-0__V5iPZiG",
+          "real-phix-assembly-v1-20260923-0__aesNMAc"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-24T11:56:23.774370+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-24T11:56:23.815967+00:00"
+      },
+      "summary_identity_check": "Every negative answer.json has the same SHA-256 as the passing positive. Summary checks pass wherever reached; the changed-residue FASTA exits before summary and remaining artifact checks. Each control identifies the intended corrupted artifact.",
+      "cases": [
+        {
+          "task_id": "real-phix-assembly-v1-20260923-00000",
+          "recipe": "real-phix-assembly",
+          "repository_indices": [
+            27,
+            13
+          ],
+          "task_sha256": "2aadc40d4f1feda3dc73c69f246eed789df09b00d0a1ae161bdda70a73398929",
+          "contract_sha256": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+          "expected_reward": 1,
+          "control": "positive",
+          "source_ledger_validation": {
+            "missing_artifact:contigs.fa": 0.0,
+            "changed_residue:contigs.fa": 0.0,
+            "duplicate_sequence:contigs.fa": 0.0,
+            "missing_sequence:contigs.fa": 0.0,
+            "missing_artifact:read_qc.tsv": 0.0,
+            "missing_table_row:read_qc.tsv": 0.0,
+            "duplicate_table_row:read_qc.tsv": 0.0,
+            "changed_table_value:read_qc.tsv": 0.0,
+            "missing_artifact:contig_metrics.tsv": 0.0,
+            "missing_table_row:contig_metrics.tsv": 0.0,
+            "duplicate_table_row:contig_metrics.tsv": 0.0,
+            "changed_table_value:contig_metrics.tsv": 0.0,
+            "missing_artifact:alignments.tsv": 0.0,
+            "missing_table_row:alignments.tsv": 0.0,
+            "duplicate_table_row:alignments.tsv": 0.0,
+            "changed_table_value:alignments.tsv": 0.0,
+            "missing_artifact:reference_coverage.tsv": 0.0,
+            "missing_table_row:reference_coverage.tsv": 0.0,
+            "duplicate_table_row:reference_coverage.tsv": 0.0,
+            "changed_table_value:reference_coverage.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "count_assembled_length_as_covered": 0.0,
+            "malformed": 0.0
+          },
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "assembly",
+                  "field": "read_pairs",
+                  "passed": true,
+                  "expected": 12000,
+                  "actual": 12000
+                },
+                {
+                  "id": "assembly",
+                  "field": "input_bases",
+                  "passed": true,
+                  "expected": 2400000,
+                  "actual": 2400000
+                },
+                {
+                  "id": "assembly",
+                  "field": "contigs",
+                  "passed": true,
+                  "expected": 4,
+                  "actual": 4
+                },
+                {
+                  "id": "assembly",
+                  "field": "assembled_bases",
+                  "passed": true,
+                  "expected": 6364,
+                  "actual": 6364
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_length",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "n50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "l50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "ng50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "lg50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_contigs",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_covered_bases",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_uncovered_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "multiply_covered_reference_bases",
+                  "passed": true,
+                  "expected": 55,
+                  "actual": 55
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_query_bases",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "matches",
+                  "passed": true,
+                  "expected": 5436,
+                  "actual": 5436
+                },
+                {
+                  "id": "assembly",
+                  "field": "substitutions",
+                  "passed": true,
+                  "expected": 5,
+                  "actual": 5
+                },
+                {
+                  "id": "assembly",
+                  "field": "inserted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "deleted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                }
+              ],
+              "artifact_checks": {
+                "contigs.fa": {
+                  "passed": true,
+                  "records": 4,
+                  "residues": 6364
+                },
+                "read_qc.tsv": {
+                  "passed": true,
+                  "rows": 2,
+                  "missing": [],
+                  "failures": []
+                },
+                "contig_metrics.tsv": {
+                  "passed": true,
+                  "rows": 4,
+                  "missing": [],
+                  "failures": []
+                },
+                "alignments.tsv": {
+                  "passed": true,
+                  "rows": 2,
+                  "missing": [],
+                  "failures": []
+                },
+                "reference_coverage.tsv": {
+                  "passed": true,
+                  "rows": 5386,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contigs.fa": {
+              "passed": true,
+              "records": 4,
+              "residues": 6364
+            },
+            "read_qc.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "contig_metrics.tsv": {
+              "passed": true,
+              "rows": 4,
+              "missing": [],
+              "failures": []
+            },
+            "alignments.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "reference_coverage.tsv": {
+              "passed": true,
+              "rows": 5386,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+            "instruction.md": "3c23e1125c3c0418e166512de17530429fbf49834209be4ce24dd213fa76307c",
+            "setup_files/inputs/query.json": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032",
+            "setup_files/inputs/reads_R1.fastq": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625",
+            "setup_files/inputs/reads_R2.fastq": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801",
+            "setup_files/inputs/reference.fa": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85",
+            "solution/oracle.pyz": "67991bb414e1ab03031d2d9740d689da77c7ab1c54a1fcf756a5fe98e449132a",
+            "solution/solve.sh": "87a2376e43978c43f6df4716f276714473dffe41c0fc929ee6a28634f7bf7994",
+            "task.toml": "91b8078c33ca98fa6ca4d7b897b84839dd6e6eccd75d269926bd0a7a6c520e49",
+            "tests/Dockerfile": "9e2c34c02df7e327ad9af9ca14ee8e171106f17a2a52180dd67f79a632427e20",
+            "tests/reference.json": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "reference_coverage.tsv": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce",
+            "contigs.fa": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab",
+            "alignments.tsv": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53",
+            "contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "manifest.json": "6b766d662381842a6cd0adb58f38d2c44e9a7a85102b3a75c8d8fe70ca24fb6d"
+          },
+          "seconds": {
+            "environment_setup": 1.223634,
+            "agent_setup": 8.1e-05,
+            "agent_execution": 3.216399,
+            "verifier": 3.620604
+          },
+          "started_at": "2026-09-24T11:56:09.471803Z",
+          "finished_at": "2026-09-24T11:56:19.548944Z"
+        },
+        {
+          "task_id": "real-phix-assembly-v1-20260923-00000-wrong-contig-residue",
+          "recipe": "real-phix-assembly",
+          "repository_indices": [
+            27,
+            13
+          ],
+          "task_sha256": "2aadc40d4f1feda3dc73c69f246eed789df09b00d0a1ae161bdda70a73398929",
+          "contract_sha256": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+          "expected_reward": 0,
+          "control": "wrong-contig-residue-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:contigs.fa": 0.0,
+            "changed_residue:contigs.fa": 0.0,
+            "duplicate_sequence:contigs.fa": 0.0,
+            "missing_sequence:contigs.fa": 0.0,
+            "missing_artifact:read_qc.tsv": 0.0,
+            "missing_table_row:read_qc.tsv": 0.0,
+            "duplicate_table_row:read_qc.tsv": 0.0,
+            "changed_table_value:read_qc.tsv": 0.0,
+            "missing_artifact:contig_metrics.tsv": 0.0,
+            "missing_table_row:contig_metrics.tsv": 0.0,
+            "duplicate_table_row:contig_metrics.tsv": 0.0,
+            "changed_table_value:contig_metrics.tsv": 0.0,
+            "missing_artifact:alignments.tsv": 0.0,
+            "missing_table_row:alignments.tsv": 0.0,
+            "duplicate_table_row:alignments.tsv": 0.0,
+            "changed_table_value:alignments.tsv": 0.0,
+            "missing_artifact:reference_coverage.tsv": 0.0,
+            "missing_table_row:reference_coverage.tsv": 0.0,
+            "duplicate_table_row:reference_coverage.tsv": 0.0,
+            "changed_table_value:reference_coverage.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "count_assembled_length_as_covered": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-phix-assembly-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": null,
+          "summary_check_status": "artifact rejected before summary checks",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "fasta_changed_residues",
+              "artifact": "contigs.fa"
+            }
+          },
+          "artifact_checks": {
+            "contigs.fa": {
+              "passed": false,
+              "reason": "fasta_changed_residues"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+            "instruction.md": "3c23e1125c3c0418e166512de17530429fbf49834209be4ce24dd213fa76307c",
+            "setup_files/inputs/query.json": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032",
+            "setup_files/inputs/reads_R1.fastq": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625",
+            "setup_files/inputs/reads_R2.fastq": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801",
+            "setup_files/inputs/reference.fa": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85",
+            "solution/control/alignments.tsv": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53",
+            "solution/control/answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "solution/control/contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "solution/control/contigs.fa": "bcbd1ef54a6bfdda2eddb072952465e46e132673790aa7b2612aed8ad6a700c9",
+            "solution/control/read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "solution/control/reference_coverage.tsv": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce",
+            "solution/oracle.pyz": "67991bb414e1ab03031d2d9740d689da77c7ab1c54a1fcf756a5fe98e449132a",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "91b8078c33ca98fa6ca4d7b897b84839dd6e6eccd75d269926bd0a7a6c520e49",
+            "tests/Dockerfile": "9e2c34c02df7e327ad9af9ca14ee8e171106f17a2a52180dd67f79a632427e20",
+            "tests/reference.json": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "reference_coverage.tsv": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce",
+            "contigs.fa": "bcbd1ef54a6bfdda2eddb072952465e46e132673790aa7b2612aed8ad6a700c9",
+            "alignments.tsv": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53",
+            "contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "manifest.json": "6b766d662381842a6cd0adb58f38d2c44e9a7a85102b3a75c8d8fe70ca24fb6d"
+          },
+          "seconds": {
+            "environment_setup": 1.202874,
+            "agent_setup": 8.2e-05,
+            "agent_execution": 0.546009,
+            "verifier": 3.632256
+          },
+          "started_at": "2026-09-24T11:56:02.032165Z",
+          "finished_at": "2026-09-24T11:56:09.464572Z"
+        },
+        {
+          "task_id": "real-phix-assembly-v1-20260923-00000-wrong-reference-depth",
+          "recipe": "real-phix-assembly",
+          "repository_indices": [
+            27,
+            13
+          ],
+          "task_sha256": "2aadc40d4f1feda3dc73c69f246eed789df09b00d0a1ae161bdda70a73398929",
+          "contract_sha256": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+          "expected_reward": 0,
+          "control": "wrong-reference-depth-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:contigs.fa": 0.0,
+            "changed_residue:contigs.fa": 0.0,
+            "duplicate_sequence:contigs.fa": 0.0,
+            "missing_sequence:contigs.fa": 0.0,
+            "missing_artifact:read_qc.tsv": 0.0,
+            "missing_table_row:read_qc.tsv": 0.0,
+            "duplicate_table_row:read_qc.tsv": 0.0,
+            "changed_table_value:read_qc.tsv": 0.0,
+            "missing_artifact:contig_metrics.tsv": 0.0,
+            "missing_table_row:contig_metrics.tsv": 0.0,
+            "duplicate_table_row:contig_metrics.tsv": 0.0,
+            "changed_table_value:contig_metrics.tsv": 0.0,
+            "missing_artifact:alignments.tsv": 0.0,
+            "missing_table_row:alignments.tsv": 0.0,
+            "duplicate_table_row:alignments.tsv": 0.0,
+            "changed_table_value:alignments.tsv": 0.0,
+            "missing_artifact:reference_coverage.tsv": 0.0,
+            "missing_table_row:reference_coverage.tsv": 0.0,
+            "duplicate_table_row:reference_coverage.tsv": 0.0,
+            "changed_table_value:reference_coverage.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "count_assembled_length_as_covered": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-phix-assembly-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "assembly",
+                  "field": "read_pairs",
+                  "passed": true,
+                  "expected": 12000,
+                  "actual": 12000
+                },
+                {
+                  "id": "assembly",
+                  "field": "input_bases",
+                  "passed": true,
+                  "expected": 2400000,
+                  "actual": 2400000
+                },
+                {
+                  "id": "assembly",
+                  "field": "contigs",
+                  "passed": true,
+                  "expected": 4,
+                  "actual": 4
+                },
+                {
+                  "id": "assembly",
+                  "field": "assembled_bases",
+                  "passed": true,
+                  "expected": 6364,
+                  "actual": 6364
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_length",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "n50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "l50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "ng50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "lg50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_contigs",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_covered_bases",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_uncovered_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "multiply_covered_reference_bases",
+                  "passed": true,
+                  "expected": 55,
+                  "actual": 55
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_query_bases",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "matches",
+                  "passed": true,
+                  "expected": 5436,
+                  "actual": 5436
+                },
+                {
+                  "id": "assembly",
+                  "field": "substitutions",
+                  "passed": true,
+                  "expected": 5,
+                  "actual": 5
+                },
+                {
+                  "id": "assembly",
+                  "field": "inserted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "deleted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                }
+              ],
+              "artifact_checks": {
+                "contigs.fa": {
+                  "passed": true,
+                  "records": 4,
+                  "residues": 6364
+                },
+                "read_qc.tsv": {
+                  "passed": true,
+                  "rows": 2,
+                  "missing": [],
+                  "failures": []
+                },
+                "contig_metrics.tsv": {
+                  "passed": true,
+                  "rows": 4,
+                  "missing": [],
+                  "failures": []
+                },
+                "alignments.tsv": {
+                  "passed": true,
+                  "rows": 2,
+                  "missing": [],
+                  "failures": []
+                },
+                "reference_coverage.tsv": {
+                  "passed": false,
+                  "rows": 5386,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "NC_001422.1:0",
+                      "field": "contig_depth"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contigs.fa": {
+              "passed": true,
+              "records": 4,
+              "residues": 6364
+            },
+            "read_qc.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "contig_metrics.tsv": {
+              "passed": true,
+              "rows": 4,
+              "missing": [],
+              "failures": []
+            },
+            "alignments.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "reference_coverage.tsv": {
+              "passed": false,
+              "rows": 5386,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "NC_001422.1:0",
+                  "field": "contig_depth"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+            "instruction.md": "3c23e1125c3c0418e166512de17530429fbf49834209be4ce24dd213fa76307c",
+            "setup_files/inputs/query.json": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032",
+            "setup_files/inputs/reads_R1.fastq": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625",
+            "setup_files/inputs/reads_R2.fastq": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801",
+            "setup_files/inputs/reference.fa": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85",
+            "solution/control/alignments.tsv": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53",
+            "solution/control/answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "solution/control/contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "solution/control/contigs.fa": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab",
+            "solution/control/read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "solution/control/reference_coverage.tsv": "c522ddc04a42e886a770274f87baddf160281a6e582c603aefb610d6409e715f",
+            "solution/oracle.pyz": "67991bb414e1ab03031d2d9740d689da77c7ab1c54a1fcf756a5fe98e449132a",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "91b8078c33ca98fa6ca4d7b897b84839dd6e6eccd75d269926bd0a7a6c520e49",
+            "tests/Dockerfile": "9e2c34c02df7e327ad9af9ca14ee8e171106f17a2a52180dd67f79a632427e20",
+            "tests/reference.json": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "reference_coverage.tsv": "c522ddc04a42e886a770274f87baddf160281a6e582c603aefb610d6409e715f",
+            "contigs.fa": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab",
+            "alignments.tsv": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53",
+            "contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "manifest.json": "6b766d662381842a6cd0adb58f38d2c44e9a7a85102b3a75c8d8fe70ca24fb6d"
+          },
+          "seconds": {
+            "environment_setup": 1.26725,
+            "agent_setup": 8e-05,
+            "agent_execution": 0.561892,
+            "verifier": 3.700551
+          },
+          "started_at": "2026-09-24T11:55:54.451990Z",
+          "finished_at": "2026-09-24T11:56:02.025179Z"
+        },
+        {
+          "task_id": "real-phix-assembly-v1-20260923-00000-missing-alignment",
+          "recipe": "real-phix-assembly",
+          "repository_indices": [
+            27,
+            13
+          ],
+          "task_sha256": "2aadc40d4f1feda3dc73c69f246eed789df09b00d0a1ae161bdda70a73398929",
+          "contract_sha256": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+          "expected_reward": 0,
+          "control": "missing-alignment-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:contigs.fa": 0.0,
+            "changed_residue:contigs.fa": 0.0,
+            "duplicate_sequence:contigs.fa": 0.0,
+            "missing_sequence:contigs.fa": 0.0,
+            "missing_artifact:read_qc.tsv": 0.0,
+            "missing_table_row:read_qc.tsv": 0.0,
+            "duplicate_table_row:read_qc.tsv": 0.0,
+            "changed_table_value:read_qc.tsv": 0.0,
+            "missing_artifact:contig_metrics.tsv": 0.0,
+            "missing_table_row:contig_metrics.tsv": 0.0,
+            "duplicate_table_row:contig_metrics.tsv": 0.0,
+            "changed_table_value:contig_metrics.tsv": 0.0,
+            "missing_artifact:alignments.tsv": 0.0,
+            "missing_table_row:alignments.tsv": 0.0,
+            "duplicate_table_row:alignments.tsv": 0.0,
+            "changed_table_value:alignments.tsv": 0.0,
+            "missing_artifact:reference_coverage.tsv": 0.0,
+            "missing_table_row:reference_coverage.tsv": 0.0,
+            "duplicate_table_row:reference_coverage.tsv": 0.0,
+            "changed_table_value:reference_coverage.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "count_assembled_length_as_covered": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-phix-assembly-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "assembly",
+                  "field": "read_pairs",
+                  "passed": true,
+                  "expected": 12000,
+                  "actual": 12000
+                },
+                {
+                  "id": "assembly",
+                  "field": "input_bases",
+                  "passed": true,
+                  "expected": 2400000,
+                  "actual": 2400000
+                },
+                {
+                  "id": "assembly",
+                  "field": "contigs",
+                  "passed": true,
+                  "expected": 4,
+                  "actual": 4
+                },
+                {
+                  "id": "assembly",
+                  "field": "assembled_bases",
+                  "passed": true,
+                  "expected": 6364,
+                  "actual": 6364
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_length",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "n50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "l50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "ng50",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "lg50",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_contigs",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_covered_bases",
+                  "passed": true,
+                  "expected": 5386,
+                  "actual": 5386
+                },
+                {
+                  "id": "assembly",
+                  "field": "reference_uncovered_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "multiply_covered_reference_bases",
+                  "passed": true,
+                  "expected": 55,
+                  "actual": 55
+                },
+                {
+                  "id": "assembly",
+                  "field": "aligned_query_bases",
+                  "passed": true,
+                  "expected": 5441,
+                  "actual": 5441
+                },
+                {
+                  "id": "assembly",
+                  "field": "matches",
+                  "passed": true,
+                  "expected": 5436,
+                  "actual": 5436
+                },
+                {
+                  "id": "assembly",
+                  "field": "substitutions",
+                  "passed": true,
+                  "expected": 5,
+                  "actual": 5
+                },
+                {
+                  "id": "assembly",
+                  "field": "inserted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                },
+                {
+                  "id": "assembly",
+                  "field": "deleted_bases",
+                  "passed": true,
+                  "expected": 0,
+                  "actual": 0
+                }
+              ],
+              "artifact_checks": {
+                "contigs.fa": {
+                  "passed": true,
+                  "records": 4,
+                  "residues": 6364
+                },
+                "read_qc.tsv": {
+                  "passed": true,
+                  "rows": 2,
+                  "missing": [],
+                  "failures": []
+                },
+                "contig_metrics.tsv": {
+                  "passed": true,
+                  "rows": 4,
+                  "missing": [],
+                  "failures": []
+                },
+                "alignments.tsv": {
+                  "passed": false,
+                  "rows": 1,
+                  "missing": [
+                    "NODE_1_length_5441_cov_184.598032:-:1911:5441:1856:5386"
+                  ],
+                  "failures": []
+                },
+                "reference_coverage.tsv": {
+                  "passed": true,
+                  "rows": 5386,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contigs.fa": {
+              "passed": true,
+              "records": 4,
+              "residues": 6364
+            },
+            "read_qc.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "contig_metrics.tsv": {
+              "passed": true,
+              "rows": 4,
+              "missing": [],
+              "failures": []
+            },
+            "alignments.tsv": {
+              "passed": false,
+              "rows": 1,
+              "missing": [
+                "NODE_1_length_5441_cov_184.598032:-:1911:5441:1856:5386"
+              ],
+              "failures": []
+            },
+            "reference_coverage.tsv": {
+              "passed": true,
+              "rows": 5386,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+            "instruction.md": "3c23e1125c3c0418e166512de17530429fbf49834209be4ce24dd213fa76307c",
+            "setup_files/inputs/query.json": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032",
+            "setup_files/inputs/reads_R1.fastq": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625",
+            "setup_files/inputs/reads_R2.fastq": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801",
+            "setup_files/inputs/reference.fa": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85",
+            "solution/control/alignments.tsv": "0bdf8a16de714c6c7b85607f5cf47416284ad4cb2d249bbb478995dc451b0f5f",
+            "solution/control/answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "solution/control/contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "solution/control/contigs.fa": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab",
+            "solution/control/read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "solution/control/reference_coverage.tsv": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce",
+            "solution/oracle.pyz": "67991bb414e1ab03031d2d9740d689da77c7ab1c54a1fcf756a5fe98e449132a",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "91b8078c33ca98fa6ca4d7b897b84839dd6e6eccd75d269926bd0a7a6c520e49",
+            "tests/Dockerfile": "9e2c34c02df7e327ad9af9ca14ee8e171106f17a2a52180dd67f79a632427e20",
+            "tests/reference.json": "f2adee560d9305f45fd7dbfb4dda7ab0a2cc60a5e6b616680636d5317886c219",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142",
+            "reference_coverage.tsv": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce",
+            "contigs.fa": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab",
+            "alignments.tsv": "0bdf8a16de714c6c7b85607f5cf47416284ad4cb2d249bbb478995dc451b0f5f",
+            "contig_metrics.tsv": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397",
+            "read_qc.tsv": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3",
+            "manifest.json": "6b766d662381842a6cd0adb58f38d2c44e9a7a85102b3a75c8d8fe70ca24fb6d"
+          },
+          "seconds": {
+            "environment_setup": 30.861806,
+            "agent_setup": 0.000127,
+            "agent_execution": 0.581497,
+            "verifier": 29.188357
+          },
+          "started_at": "2026-09-24T11:54:51.309566Z",
+          "finished_at": "2026-09-24T11:55:54.444724Z"
+        }
+      ],
+      "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
     }
   ]
 }

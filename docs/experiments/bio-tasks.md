@@ -10,6 +10,12 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 [task catalog](bio-task-catalog.md) contains all source assessments, skills, and
 format coverage, with the original adoption inventory preserved as a separate file.
 
+Complete eligible-ID benchmark workflows take priority over repository coverage.
+Use the versioned task inventories to select missing stages and scientific decisions;
+track packages and formats as supporting coverage. The issue's opening ledger
+separates real-data task candidates, validated and partial ID mappings, and native
+repository checks.
+
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
 format profile, and repository mapping. The 145 recipes span 13 domains:
 
@@ -41,7 +47,14 @@ every result for 18,418 genes. The native reference and fresh oracle passed two
 positive and 33 negative controls; the seven output tables include sample QC,
 design, contrasts, all gene effects and decisions. The committed package passed
 the same two positive and 33 negative checks in 55.3 seconds. Its 13.8 MB archive
-is preserved in regional GCS. Harbor validation remains pending for this addition.
+is preserved in regional GCS. A fresh Harbor oracle passed in 11.2 seconds, and three
+corrupted-artifact controls received zero with correct summaries; cleanup completed.
+
+The observed PhiX assembly task passed packaged validation and a fresh Harbor oracle
+in 3.2 seconds. Three artifact-corruption controls received zero with byte-identical
+correct summaries, and no owned sandboxes remained. The CompBioBench N50 endpoint
+has one validated workflow mapping on independent observations; scientific release
+review and broader benchmark-lineage screening remain open.
 
 The full 142-task snapshot at `5c5b253bde` passed 284 positive checks and 796 negative
 controls in 28.5 minutes on one reserved TRC CPU, with 1.13 GiB peak RSS. Every

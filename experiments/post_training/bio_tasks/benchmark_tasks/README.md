@@ -13,6 +13,13 @@ also describe output artifacts, scientific decisions and overlap with other
 releases. A workflow-family pattern can include more stages than one question
 requires; inspect the endpoint before assigning coverage.
 
+Use missing ID task stages and scientific decisions to prioritize new recipes.
+Complete benchmark workflows take priority over increasing repository coverage.
+Record the native packages and formats required by each workflow as supporting
+coverage, and retain the separate all-50-repository execution objective. Update
+the issue's opening ledger when task, validated mapping or native execution
+counts change.
+
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol
 does not mean every instance was reviewed. Release records state whether the

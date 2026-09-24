@@ -1649,8 +1649,8 @@
         "Genomics",
         "Coding"
       ],
-      "status": "composed-unvalidated",
-      "assessment": "All four N50 workflow stages are authored on independently observed PhiX read-derived contigs. The permitted ID prompt names a Drosophila reference FASTA (GCF_000001215.4), which is not used as a training input or answer source. Native reference and independent oracle checks passed; packaged-task and Harbor checks remain pending.",
+      "status": "workflow-validated",
+      "assessment": "The N50 workflow reads every native contig, includes all sequence records, derives complete lengths and computes length-weighted N50 on independently observed PhiX data. The original ID prompt names Drosophila GCF_000001215.4; its fixtures and answers are not used. The native reference, independent input-reading oracle, packaged task and fresh Harbor oracle pass, with complete artifact controls. Global training-release scientific and lineage review remain separate.",
       "recipes": [
         "real-phix-assembly"
       ],
@@ -1661,8 +1661,7 @@
         "compute length-weighted N50"
       ],
       "remaining_gaps": [
-        "Run the exact packaged task and fresh Harbor oracle with artifact corruption controls before marking the workflow adaptation validated.",
-        "Broad release-level benchmark-lineage screening remains pending; this mapping is to the assembly-contiguity pattern, not a score on the original benchmark."
+        "Broad release-level benchmark-lineage screening remains pending. This is a validated assembly-contiguity workflow adaptation on independent PhiX observations, not a score on the original Drosophila benchmark task."
       ],
       "required_formats": [
         "FASTA"
@@ -1673,7 +1672,9 @@
         "RefSeq:NC_001422.1"
       ],
       "validation_evidence": [
-        "native_validation_runs/cd4c5520958b.json"
+        "native_validation_runs/cd4c5520958b.json",
+        "container_validation.json: /exedev/bio-harbor-assembly-20260924-115342",
+        "data_sources.json: ENA:ERR266411.assembly_package_validation"
       ],
       "runtime_seconds": 4.663212667001062,
       "workflow_family": "assembly-contiguity",

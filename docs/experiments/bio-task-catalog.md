@@ -6,6 +6,14 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
+Prioritize complete tasks and connected workflows from eligible ID benchmarks.
+Choose new recipes from the missing stages and scientific decisions recorded in
+the [task inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md).
+Repository and format coverage support those workflows; they are secondary to
+benchmark-task coverage. Continue tracking actual execution of all 50 repositories.
+The issue's opening ledger records real-data task candidates, fully validated and
+partial ID mappings, and repositories with passing native execution evidence.
+
 The implementation has **145 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
@@ -308,8 +316,8 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 
 Of these 2,881 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,832 are unmapped, one assembly workflow is composed but awaits packaged validation,
-and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+2,832 are unmapped, one assembly-contiguity workflow is validated on independent
+observed PhiX reads, and one is excluded from authoring. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -533,7 +541,13 @@ Thirty recipes supply unchanged biological observations or declared observed sub
   The fresh native oracle and all 19 artifact negatives passed in 4.7 seconds. This is
   reference agreement, not proof of assembly truth. The initial 6,000-pair prefix
   covered only 236 reference positions and remains recorded as a diagnostic run.
-  Packaged-task and Harbor validation of the assembly task remain pending.
+  Packaged validation passed two positive checks and 25 artifact controls. A fresh
+  Harbor oracle passed in 3.2 seconds; changed-contig, changed-depth and missing-alignment
+  controls received zero with byte-identical correct summaries. Cleanup confirmed no
+  owned sandboxes remained, and the 324 kB evidence archive is preserved in regional
+  GCS. This validates the CompBioBench assembly-contiguity/N50 workflow adaptation;
+  the original Drosophila fixture and answer were not used. Broader biological-lineage
+  screening and scientific release review remain open.
 
 - **UniProt globins:** six full-length proteins per task selected from ten reviewed
   alpha/beta globin entries, with species and sequence versions retained. Produce
