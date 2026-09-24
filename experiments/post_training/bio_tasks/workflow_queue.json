@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:18:27.216670+00:00",
+  "updated_at": "2026-09-24T17:26:31.651957+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1226,14 +1226,14 @@
     "question_cards": 692,
     "proposed_task_groups": 651,
     "conditional_consolidations": 25,
-    "non_alias_records_linked_to_questions": 2538,
+    "non_alias_records_linked_to_questions": 3058,
     "known_cross_release_alias_records": 50,
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "0534d302f898a711a8f9f190492693a4cdc388a00b4d7b58b4c65f927b8fe0a4",
+    "portfolio_sha256": "ed8699b86b61048ae0360b2221599a2ff3e26366ee1bd78da0d0cf6e67eaeb27",
     "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
-    "question_records_with_gap_dispositions": 2194,
+    "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
   }
 }

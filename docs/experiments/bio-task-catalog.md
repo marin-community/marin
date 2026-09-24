@@ -326,7 +326,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 supplied model structures audited; biological endpoints and observed-data adaptations unresolved | — |
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 public question IDs/hashes; shared literature protocol and citation scorer inspected, individual endpoints unreviewed | — |
-| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json) | 801 public IDs/hashes; 82 supplementary stems/citations reviewed, 58 provisional targets in 16 designs and 24 context gaps; source evidence uninspected | Private subset not enumerated |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json) | 801 public IDs/hashes; 520 database schemas link to 7 existing cards, 58 supplementary targets to 16 cards; 223 endpoints and all source evidence remain open | Private subset not enumerated |
 
 Of these 5,133 ID task/protocol/definition records, 47 have manually assessed component mappings,
 5,084 are unmapped, one assembly-contiguity workflow is validated on independent

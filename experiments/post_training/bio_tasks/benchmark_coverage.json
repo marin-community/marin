@@ -445,7 +445,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/labbench-literature-database.json",
       "source_inventory_name": "LAB-Bench \u2014 tool-enabled literature / database",
-      "task_inventory_status": "all scoped IDs/hashes; 82 SuppQA stems/citations reviewed, 58 provisional targets in 16 cards and 24 explicit context gaps; source evidence uninspected"
+      "task_inventory_status": "all scoped IDs/hashes; 520 database schemas routed to seven existing cards; 82 supplementary stems/citations yield 58 targets and 24 gaps; 199 literature endpoints and all source evidence remain unreviewed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

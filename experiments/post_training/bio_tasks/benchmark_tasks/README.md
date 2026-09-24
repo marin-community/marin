@@ -93,3 +93,10 @@ question stems and citation records now have an explicit disposition: 58 provisi
 targets in sixteen observed-study audit designs and 24 context/interpretation gaps.
 Source supplements, answer choices and expected answers remain uninspected.
 Independent inputs and acceptance contracts remain open; authored tasks use Harbor.
+
+The full 520-question DbQA schema audit reuses seven existing
+[Biomni database contracts](../workflow_designs/biomni-eval1.json). Their target lists
+carry explicit benchmark identities and per-record hashes; these are prospective
+operation mappings, not aliases or validated coverage. The 160 clinical queries
+retain both sequence-input modes and 61 benign/99 pathogenic requested classes.
+Candidate choices and biological records remain uninspected.

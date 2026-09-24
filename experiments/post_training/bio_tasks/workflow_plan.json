@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:18:27.216670+00:00",
+  "updated_at": "2026-09-24T17:26:31.651957+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "22b3a2d4a2752e48b977898fe5a1631eb5cf14e4a5d31d791b3f4443121bfcbc"
+      "sha256": "da0cefa1b90f3c0f0554ec65effcfcd86bac238c3e6e670cd3a25a8682512b87"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "b949169663e648140decd83b6c5592a803f52aacf638657ce15f84319391bfce"
+      "sha256": "7d854d0bd159473133395e78c5d5d2909aaa61eef3844afad0f013d277de070f"
     }
   ],
   "question_inspection_evidence": {
@@ -63,8 +63,9 @@
       "observed-data-and-system-endpoint-review": 350,
       "plan-artifact-and-verifier-review": 50,
       "literature-endpoint-and-deterministic-contract-review": 1451,
-      "individual-retrieval-endpoint-and-candidate-review": 743,
-      "supplement-question-stem-reviewed-provisional-design": 58
+      "individual-retrieval-endpoint-and-candidate-review": 223,
+      "supplement-question-stem-reviewed-provisional-design": 58,
+      "database-query-schema-reviewed-shared-design": 520
     },
     "scientific_workstreams": 52,
     "proposed_task_questions": 147,
@@ -12175,15 +12176,15 @@
       "id": "group-0553",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "disease-database-difference",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.disease-database-difference",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 40
       }
     },
@@ -12191,15 +12192,15 @@
       "id": "group-0554",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "cytoband-gene-query",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.cytoband-gene-query",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 40
       }
     },
@@ -12207,15 +12208,15 @@
       "id": "group-0555",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "mirna-target-query",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.mirna-target-query",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 40
       }
     },
@@ -12223,15 +12224,15 @@
       "id": "group-0556",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "gene-set-membership",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.gene-set-membership",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 160
       }
     },
@@ -12239,15 +12240,15 @@
       "id": "group-0557",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "promoter-binding-query",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.promoter-binding-query",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 40
       }
     },
@@ -12255,15 +12256,15 @@
       "id": "group-0558",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "clinical-variant-evidence",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.clinical-variant-evidence",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 160
       }
     },
@@ -12271,15 +12272,15 @@
       "id": "group-0559",
       "benchmark": "LAB-Bench tool-enabled literature/database",
       "workflow_family": "interaction-database-query",
-      "planning_disposition": "individual-retrieval-endpoint-and-candidate-review",
+      "planning_disposition": "database-query-schema-reviewed-shared-design",
       "proposed_workstreams": [
         "database-identity-evidence"
       ],
-      "inspection_tier": "family-schema-only-individual-endpoint-unreviewed",
+      "inspection_tier": "query-schema-audited-source-candidates-and-evidence-uninspected",
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.interaction-database-query",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 40
       }
     },
@@ -12295,7 +12296,7 @@
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.literature-specific-evidence",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 199
       }
     },
@@ -12311,7 +12312,7 @@
       "task_ids_reference": {
         "path": "benchmark_tasks/labbench-literature-database.json",
         "field": "workflow_patterns.supplement-specific-evidence",
-        "sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+        "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
         "record_count": 82
       },
       "record_disposition_counts": {
@@ -13223,25 +13224,27 @@
     },
     "LAB-Bench tool-enabled literature/database": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json",
-      "source_inventory_sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731",
+      "source_inventory_sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
       "source_revision": "5c77cec648430f30611808808861eb86f81d5eaa",
-      "task_inventory_status": "all scoped IDs/hashes; 82 SuppQA stems/citations reviewed, 58 provisional targets in 16 cards and 24 explicit context gaps; source evidence uninspected",
+      "task_inventory_status": "all scoped IDs/hashes; 520 database schemas routed to seven existing cards; 82 supplementary stems/citations yield 58 targets and 24 gaps; 199 literature endpoints and all source evidence remain unreviewed",
       "record_count": 801,
       "unique_count_after_known_bix_aliases": 801,
-      "provisional_design_record_count": 58,
-      "endpoint_or_access_review_record_count": 743,
+      "provisional_design_record_count": 578,
+      "endpoint_or_access_review_record_count": 223,
       "excluded_record_count": 0,
       "planning_disposition_counts": {
-        "individual-retrieval-endpoint-and-candidate-review": 743,
-        "supplement-question-stem-reviewed-provisional-design": 58
+        "individual-retrieval-endpoint-and-candidate-review": 223,
+        "supplement-question-stem-reviewed-provisional-design": 58,
+        "database-query-schema-reviewed-shared-design": 520
       },
       "reconciled_inspection_tier_counts": {
-        "family-schema-only-individual-endpoint-unreviewed": 719,
-        "question-stem-and-source-citation-reviewed": 82
+        "query-schema-audited-source-candidates-and-evidence-uninspected": 520,
+        "question-stem-and-source-citation-reviewed": 82,
+        "individual-endpoint-unreviewed": 199
       },
       "initial_group_referenced_record_count": 0,
-      "new_expansion_card_record_count": 58,
-      "unassigned_endpoint_record_count": 743
+      "new_expansion_card_record_count": 578,
+      "unassigned_endpoint_record_count": 223
     }
   },
   "id_source_rows_without_inventory": [
@@ -13414,7 +13417,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "7f8b41d2dfae49cb233c15292afb625232c290221f3e0baf05af30eb3ffcd27b",
+      "sha256": "75defa6f7382139f66347459c60a14e0422c4f456683de634f2e6f20ecf1204e",
       "benchmark_id": "Biomni-Eval1 tool-enabled",
       "inventory_records_assigned": 433,
       "proposed_question_cards": 20,
@@ -13529,28 +13532,29 @@
     },
     {
       "path": "workflow_designs/labbench-literature-database.json",
-      "sha256": "1f4fe0840080e9fbb4c403db1ba3759c0ef0fdc951c978b69ae1f8c05e82bef0",
+      "sha256": "5d5d10b0abbbbd297db4c53b68b8131bfb59c92f3a053c6dc23ab14a68d1bdc5",
       "benchmark_id": "LAB-Bench tool-enabled literature/database",
-      "inventory_records_with_gap_dispositions": 743,
+      "inventory_records_with_gap_dispositions": 223,
       "proposed_question_cards": 16,
-      "inspection_basis": "All 82 supplementary stems/citations reviewed; 58 provisional target records in sixteen study-audit designs and 24 explicit gaps. Database/literature source evidence remains unreviewed."
+      "inspection_basis": "520 database query schemas share seven existing cards; supplementary stems/citations yield 58 targets in sixteen cards and 24 gaps. Source candidates/evidence and 199 literature endpoints remain open.",
+      "shared_external_question_cards": 7
     }
   ],
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "0534d302f898a711a8f9f190492693a4cdc388a00b4d7b58b4c65f927b8fe0a4",
+    "sha256": "ed8699b86b61048ae0360b2221599a2ff3e26366ee1bd78da0d0cf6e67eaeb27",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,
       "question_cards": 692,
       "proposed_task_groups": 651,
       "conditional_consolidations": 25,
-      "non_alias_records_linked_to_questions": 2538,
+      "non_alias_records_linked_to_questions": 3058,
       "known_cross_release_alias_records": 50,
       "excluded_records": 1,
       "validated_new_mappings": 0,
-      "question_records_with_gap_dispositions": 2194,
+      "question_records_with_gap_dispositions": 1674,
       "system_records_with_endpoint_gap_dispositions": 350
     },
     "status": "question-portfolio-with-conditional-consolidation-input-and-acceptance-designs-pending"

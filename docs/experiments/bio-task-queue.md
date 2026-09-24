@@ -2,9 +2,9 @@
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
 accounts for all **5,133 inventoried task, protocol or dataset-definition records
-across 32 ID releases**. It links 2,538 records to scientific question proposals,
+across 32 ID releases**. It links 3,058 records to scientific question proposals,
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
-SciGym systems, 1,451 ScholarQA-Bio questions and 743 LAB-Bench questions as
+SciGym systems, 1,451 ScholarQA-Bio questions and 223 LAB-Bench questions as
 individual-endpoint review gaps, and retains one excluded objective. Nine provisional-ID
 source leads still lack task inventories.
 
@@ -222,7 +222,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
-| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 | All 82 supplementary stems/citations reviewed: 58 provisional targets and 24 explicit gaps; source evidence remains uninspected |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 + 7 shared | 520 database schemas reuse existing cards; 58 supplementary targets and 24 gaps; 199 literature endpoints and source evidence remain open |
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature
@@ -248,9 +248,16 @@ results, proteomic evidence, assay measurements, structure/imaging metadata and
 reported reagent/sequence provenance. They preserve original units, sample hierarchy,
 reported-versus-recomputed values and exact evidence locations. Inputs must retain
 complete relevant observed study records; answer-only tables are insufficient.
-The 719 database/literature questions still need individual review. Source supplements,
-ideal answers, distractors and key passages were not read; independent input packages
-and complete acceptance contracts remain open, with no validated coverage added.
+All 520 database question schemas now link to the existing seven Biomni database
+contracts, adding no new card. The audit preserves 160 gene-set queries, 160 clinical
+variant queries and forty each for promoters, predicted interactions, cytobands, miRNA
+targets and disease-resource differences. Clinical queries request 61 benign and 99
+pathogenic recorded classifications; eighty provide a reference protein and eighty
+depend on full-sequence choices. No source choices or database records were inspected.
+The 199 literature endpoints and 24 supplementary context gaps remain unassigned.
+Independent input packages and complete acceptance contracts remain open; source
+supplements, ideal answers, distractors and key passages were not read. No validated
+coverage is added.
 All fifty Biomni-Eval1 DbQA stems occur in this release; twenty match multiple source
 IDs. DbQA has 328 distinct trimmed stems across 520 records. Candidate choices can
 change the task even when the stem matches, so these relations add no alias credit.

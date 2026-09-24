@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:18:27.216670+00:00",
+  "updated_at": "2026-09-24T17:26:31.651957+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -8,11 +8,11 @@
     "question_cards": 692,
     "proposed_task_groups": 651,
     "conditional_consolidations": 25,
-    "non_alias_records_linked_to_questions": 2538,
+    "non_alias_records_linked_to_questions": 3058,
     "known_cross_release_alias_records": 50,
     "excluded_records": 1,
     "validated_new_mappings": 0,
-    "question_records_with_gap_dispositions": 2194,
+    "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
   },
   "interpretation": [
@@ -22,7 +22,7 @@
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
     "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
     "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
-    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 719 other questions retain endpoint-review gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
+    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 520 database schemas share seven existing question cards, while 199 literature questions retain endpoint-review gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
   ],
   "source_question_files": [
     {
@@ -47,7 +47,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "7f8b41d2dfae49cb233c15292afb625232c290221f3e0baf05af30eb3ffcd27b"
+      "sha256": "75defa6f7382139f66347459c60a14e0422c4f456683de634f2e6f20ecf1204e"
     },
     {
       "path": "workflow_designs/biokgbench.json",
@@ -99,7 +99,7 @@
     },
     {
       "path": "workflow_designs/labbench-literature-database.json",
-      "sha256": "1f4fe0840080e9fbb4c403db1ba3759c0ef0fdc951c978b69ae1f8c05e82bef0"
+      "sha256": "5d5d10b0abbbbd297db4c53b68b8131bfb59c92f3a053c6dc23ab14a68d1bdc5"
     }
   ],
   "question_groups": [
@@ -550,9 +550,10 @@
       "condition_for_one_task": "Verify full typed directed edges and source evidence under a prespecified rule, including unresolved claims. Structural citation matching alone cannot satisfy literature entailment or biological absence claims. Biomni DBQA asks for prediction-resource membership. Keep a separate prediction-membership table and acceptance predicate; experimental support or graph direction cannot replace that endpoint. If one independent resource bundle cannot support both questions, split the group.",
       "benchmark_record_scope": {
         "BioKGBench KGCheck": 125,
-        "Biomni-Eval1 tool-enabled": 5
+        "Biomni-Eval1 tool-enabled": 5,
+        "LAB-Bench tool-enabled literature/database": 40
       },
-      "scope_record_count": 130,
+      "scope_record_count": 170,
       "workstreams": [
         "database-identity-evidence"
       ],
@@ -5757,9 +5758,10 @@
         "portfolio-biomni-eval1-gene-set-membership"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 12,
+      "scope_record_count": 172,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 12
+        "Biomni-Eval1 tool-enabled": 12,
+        "LAB-Bench tool-enabled literature/database": 160
       },
       "workstreams": [
         "gene-program-factorization"
@@ -5772,9 +5774,10 @@
         "portfolio-biomni-eval1-clinical-variant-evidence"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 15,
+      "scope_record_count": 175,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 15
+        "Biomni-Eval1 tool-enabled": 15,
+        "LAB-Bench tool-enabled literature/database": 160
       },
       "workstreams": [
         "variant-evidence"
@@ -5787,9 +5790,10 @@
         "portfolio-biomni-eval1-promoter-binding-query"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 7,
+      "scope_record_count": 47,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 7
+        "Biomni-Eval1 tool-enabled": 7,
+        "LAB-Bench tool-enabled literature/database": 40
       },
       "workstreams": [
         "database-identity-evidence"
@@ -5802,9 +5806,10 @@
         "portfolio-biomni-eval1-cytoband-gene-query"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 4,
+      "scope_record_count": 44,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 4
+        "Biomni-Eval1 tool-enabled": 4,
+        "LAB-Bench tool-enabled literature/database": 40
       },
       "workstreams": [
         "transcript-reference-audit"
@@ -5817,9 +5822,10 @@
         "portfolio-biomni-eval1-mirna-target-query"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 4,
+      "scope_record_count": 44,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 4
+        "Biomni-Eval1 tool-enabled": 4,
+        "LAB-Bench tool-enabled literature/database": 40
       },
       "workstreams": [
         "small-rna-sequence-structure"
@@ -5832,9 +5838,10 @@
         "portfolio-biomni-eval1-disease-database-difference"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 3,
+      "scope_record_count": 43,
       "benchmark_record_scope": {
-        "Biomni-Eval1 tool-enabled": 3
+        "Biomni-Eval1 tool-enabled": 3,
+        "LAB-Bench tool-enabled literature/database": 40
       },
       "workstreams": [
         "database-identity-evidence"
@@ -10349,7 +10356,7 @@
     "sc-HeurekaBench": 130,
     "scBench": 6,
     "scBench-Long": 4,
-    "LAB-Bench tool-enabled literature/database": 58
+    "LAB-Bench tool-enabled literature/database": 578
   },
   "consolidation_review": {
     "reviewed_at": "2026-09-24",
