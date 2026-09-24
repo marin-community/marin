@@ -53,7 +53,7 @@ def scale_by_adamh(
             p_norm = jnp.linalg.norm(p)
             u_norm = jnp.linalg.norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-            return new_p / jnp.linalg.norm(new_p) * p_norm - p
+            return new_p / jnp.maximum(jnp.linalg.norm(new_p), 1e-10) * p_norm - p
 
         def scale_invariant_update(p, u):
             if p is None:
