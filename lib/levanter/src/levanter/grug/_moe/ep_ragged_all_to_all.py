@@ -28,10 +28,10 @@ from typing import Protocol
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
+from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -39,7 +39,6 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
-from levanter.grug.sharding import _batch_axes
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +62,8 @@ class _ExpertMlp(Protocol):
 
     Implementations take both views of the buffer's group sizes: the physical sizes, which charge
     trailing padding to the last expert, and the active sizes, which count only received rows.
-    Which one a kernel reads depends on whether it covers the whole buffer or works from segment
-    boundaries, so both are always passed and a kernel discards the one it does not use.
+    Portable kernels must cover the whole static buffer because their unwritten output rows are
+    unspecified, while segment-driven kernels can omit inactive rows.
     """
 
     def __call__(
@@ -86,7 +85,7 @@ def _ragged_dot_expert_mlp(
     active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
-    """Portable expert MLP over XLA's `ragged_dot`, which covers the whole receiver buffer."""
+    """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows."""
     del active_group_sizes
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
@@ -308,13 +307,15 @@ def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+    token_sharding_axes: tuple[str, ...],
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -326,8 +327,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     tokens_per_shard = x_local.shape[0]
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
-    local_capacity = max(local_experts, local_capacity)
+    physical_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
+    physical_capacity = max(local_experts, physical_capacity)
 
     # Local experts are processed in sequential chunks so only one chunk's transport buffers
     # are live at a time. The a2a outputs cannot be rematerialized (XLA never recomputes
@@ -336,15 +337,28 @@ def _moe_mlp_ep_ragged_a2a_local(
     # which also makes drop clipping per-chunk.
     chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
     chunk_experts = local_experts // chunks
-    chunk_capacity = max(chunk_experts, int(math.ceil(local_capacity / chunks)))
+    chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
     hidden_dim = x_local.shape[1]
 
     with jax.named_scope("dispatch"):
-        flat_selected = selected_experts_local.reshape(-1)  # [TK]
+        assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
+        flat_selected = jnp.where(assignment_valid, selected_experts_local.reshape(-1), num_experts)  # [TK]
         sorted_indices = jnp.argsort(flat_selected)  # [TK]
         group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
+        valid_assignments = jnp.sum(all_group_sizes, dtype=jnp.int32)
+        logical_capacity = _scaled_capacity(
+            valid_assignments,
+            capacity_factor=capacity_factor,
+            divisor=ep_size,
+            minimum=local_experts,
+            maximum=physical_capacity,
+        )
+        logical_chunk_capacity = jnp.maximum(
+            (logical_capacity + chunks - 1) // chunks,
+            chunk_experts,
+        )
 
     expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
@@ -359,7 +373,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             clipped_group_sizes = _clip_receiver_group_sizes(
                 chunk_all_group_sizes,
                 local_expert_size=local_experts,
-                receiver_capacity=chunk_capacity,
+                receiver_capacity=logical_chunk_capacity,
             )
             # Sender starts come from the full (unmasked) sizes, so each chunk reads its
             # groups' accepted prefixes in place in the shared sorted buffer.
@@ -413,10 +427,10 @@ def _moe_mlp_ep_ragged_a2a_local(
         out_local = _unpermute_from_global_expert(
             returned,
             sorted_indices,
-            combine_weights_local,
+            jnp.where(token_valid_local[:, None], combine_weights_local, 0),
             tokens_per_shard=tokens_per_shard,
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))
+        dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
+    return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))

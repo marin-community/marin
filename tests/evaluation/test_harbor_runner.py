@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-from finestore.reader import ReadView
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.agent_context import (
@@ -13,7 +12,7 @@ from marin.evaluation.harbor.agent_context import (
     reconciled_model_info,
     served_model_info,
 )
-from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborDatasetKind,
@@ -23,12 +22,10 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
-    HarborTrial,
     _read_trial,
     _read_trials,
-    _write_archive,
 )
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -72,6 +69,8 @@ def _validated_config(
     dataset_revision: str | None = "1.0",
     workspace_dataset_path: Path | None = None,
     agent: str = "terminus-2",
+    n_benchmark: int = 1,
+    trials_per_task: int = 1,
 ) -> ValidatedHarborConfig:
     return ValidatedHarborConfig(
         stable_policy_json='{"opaque":"policy"}',
@@ -85,6 +84,23 @@ def _validated_config(
         error_taxonomy=_ERROR_TAXONOMY,
         max_input_tokens=32768,
         max_output_tokens=8192,
+        benchmark=BenchmarkMetadataRef(
+            schema_version=1,
+            task=f"hf://{dataset_selector}" if dataset_kind == HarborDatasetKind.HUGGING_FACE else dataset_selector,
+            primary_metric="reward",
+            metric_kind=MetricKind.CONTINUOUS,
+            metrics=(
+                BenchmarkMetricRef(
+                    name="reward",
+                    source_name="reward",
+                    kind=MetricKind.CONTINUOUS,
+                    higher_is_better=True,
+                ),
+            ),
+            n_benchmark=n_benchmark,
+            n_attempted=n_benchmark,
+        ),
+        trials_per_task=trials_per_task,
     )
 
 
@@ -131,51 +147,20 @@ def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(po
         reconciled_model_info(served, policy)
 
 
-def _write_job_record(job_dir: Path, n_total_trials: int) -> None:
+def _write_job_record(job_dir: Path, n_total_trials: int, config: ValidatedHarborConfig) -> None:
     """Harbor's own job-level bookkeeping: the count the coverage denominator comes from."""
     job_dir.mkdir(parents=True, exist_ok=True)
-    job_dir.joinpath("result.json").write_text(json.dumps({"n_total_trials": n_total_trials}))
-
-
-def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    snapshot = tmp_path / "snapshot"
-    snapshot.mkdir()
-    (snapshot / ".gitattributes").write_text("*.gz filter=lfs")
-    (snapshot / "task-one").mkdir()
-    calls: list[dict] = []
-
-    def download(**kwargs):
-        calls.append(kwargs)
-        return str(snapshot)
-
-    monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
-
-    path = materialize_harbor_dataset(
-        _validated_config(
-            dataset_kind=HarborDatasetKind.HUGGING_FACE,
-            dataset_selector="DCAgent2/terminal_bench_2",
-            dataset_revision="main",
-        ),
-        tmp_path / "workdir",
-        hf_token=None,
+    job_dir.joinpath("result.json").write_text(
+        json.dumps(
+            {
+                "n_total_trials": n_total_trials,
+                "benchmark_metadata": [config.benchmark.model_dump(mode="json")],
+            }
+        )
     )
 
-    assert path == Path(snapshot)
-    assert calls == [
-        {
-            "repo_id": "DCAgent2/terminal_bench_2",
-            "repo_type": "dataset",
-            "revision": "main",
-            "local_dir": str(tmp_path / "workdir" / "hf_dataset"),
-            "cache_dir": str(tmp_path / "workdir" / "hf_cache"),
-            "token": False,
-        }
-    ]
-    assert not (snapshot / ".gitattributes").exists()
 
-
-def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp_path, monkeypatch):
+def test_local_harbor_dataset_path_rebases_onto_worker_workspace(tmp_path, monkeypatch):
     worker_workspace = tmp_path / "worker"
     dataset = worker_workspace / "policies" / "tasks"
     dataset.mkdir(parents=True)
@@ -190,68 +175,23 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
         lambda: worker_workspace,
     )
 
-    assert (
-        materialize_harbor_dataset(
-            config,
-            tmp_path / "workdir",
-            hf_token=None,
-        )
-        == dataset
-    )
+    assert local_harbor_dataset_path(config) == dataset
 
 
-def test_write_archive_writes_agentic_samples(tmp_path):
-    trial = HarborTrial(
-        task_id="task-one",
-        trial_id="trial-1",
-        reward=0.0,
-        scored=True,
-        status="completed",
-        trajectory_path=None,
-        error=None,
-    )
-
-    root = _write_archive([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
-
-    assert root == str(tmp_path)
-    rows = ReadView(str(tmp_path)).scan("samples").to_pylist()
-    assert len(rows) == 1
-    assert rows[0]["doc_id"] == "task-one"
-    assert rows[0]["trial_id"] == "trial-1"
-    assert rows[0]["kind"] == "agentic"
-
-
-def test_read_trials_and_archive_captures_trajectory(tmp_path):
-    """A trial's trajectory is archived once, referenced by a finestore:// URI, and its steps flattened."""
+def test_read_trials_reads_every_result(tmp_path):
     job_dir = tmp_path / "harbor_jobs" / "job"
-    with_trajectory = job_dir / "trial-one"
-    (with_trajectory / "agent").mkdir(parents=True)
-    (with_trajectory / "result.json").write_text(
+    first_trial = job_dir / "trial-one"
+    first_trial.mkdir(parents=True)
+    (first_trial / "result.json").write_text(
         json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
     )
-    (with_trajectory / "agent" / "trajectory.json").write_text(
-        json.dumps({"steps": [{"step_id": 1, "source": "agent", "message": "hi"}]})
-    )
-    without_trajectory = job_dir / "trial-two"
-    without_trajectory.mkdir(parents=True)
-    (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
+    second_trial = job_dir / "trial-two"
+    second_trial.mkdir(parents=True)
+    (second_trial / "result.json").write_text(json.dumps({"task_name": "task-two"}))
 
     trials = _read_trials(StoragePath(str(job_dir)), _ERROR_TAXONOMY)
 
-    by_task = {trial.task_id: trial for trial in trials}
-    assert by_task["task-one"].trajectory_path == str(with_trajectory / "agent" / "trajectory.json")
-    assert by_task["task-one"].trial_id == "trial-one"
-    assert by_task["task-two"].trajectory_path is None
-
-    archive_root = str(tmp_path / "archive")
-    _write_archive(trials, "aime", archive_root)
-    reader = ReadView(archive_root)
-    samples = {row["doc_id"]: row for row in reader.scan("samples").to_pylist()}
-    # The archived sample references its trajectory by a finestore:// URI, not the job-tree path.
-    assert samples["task-one"]["trajectory_uri"].startswith("finestore://blobs/")
-    assert reader.resolve(samples["task-one"]["trajectory_uri"]) is not None
-    steps = reader.scan("steps").to_pylist()
-    assert len(steps) == 1 and steps[0]["step_id"] == 1
+    assert [(trial.reward, trial.scored) for trial in trials] == [(1.0, True), (0.0, False)]
 
 
 @pytest.mark.parametrize(
@@ -360,6 +300,10 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     def dying_driver(config, overlay, driver_env, _backend_state) -> None:
         captured["jobs_dir"] = overlay.jobs_dir
         captured["job_name"] = overlay.job_name
+        job_dir = StoragePath(overlay.jobs_dir) / overlay.job_name
+        (job_dir / "result.json").write_text(
+            json.dumps({"n_total_trials": 1, "benchmark_metadata": [config.benchmark.model_dump(mode="json")]})
+        )
         trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
         (trial / "result.json").write_text(
             json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
@@ -384,14 +328,13 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
-    assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert ReadView(output_dir).is_sealed()
+    assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
     assert (StoragePath.parse(output_dir) / "harbor_result.json").exists()
 
 
 def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
     output_dir = str(tmp_path / "run")
-    executor = _harbor_executor(f"managed-{tmp_path.name}")
+    executor = _harbor_executor(f"managed-{tmp_path.name}", n_benchmark=4)
 
     class RecoveringSession:
         model = _running_model()
@@ -414,7 +357,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 4)
+        _write_job_record(job_dir, 4, _config)
         completed_result = job_dir / "trial-one" / "result.json"
         completed_result.parent.mkdir(parents=True, exist_ok=True)
         if not completed_result.exists():
@@ -470,7 +413,6 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     assert session.recovery_waits == 1
     assert driver_starts == 2
     assert outcome.metrics[executor.config.record_dataset] == {
-        "accuracy": 0.5,
         "mean_reward": 0.5,
         "solved": 2.0,
         "total": 4.0,
@@ -504,6 +446,8 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                archive_root=str(tmp_path / "archive"),
+                archive_dataset="dataset",
             ),
             {},
             backend_state,
@@ -530,19 +474,23 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                archive_root=str(tmp_path / "archive"),
+                archive_dataset="dataset",
             ),
             {},
             backend_state,
         )
 
 
-def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
+@pytest.mark.parametrize("dataset_kind", [HarborDatasetKind.HARBOR_REGISTRY, HarborDatasetKind.HUGGING_FACE])
+def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch, dataset_kind):
     captured: dict = {}
 
     def run_driver(config, overlay, driver_env, _backend_state) -> None:
         captured["config"] = config
         captured["overlay"] = overlay
         captured["env"] = driver_env
+        _write_job_record(Path(overlay.jobs_dir) / overlay.job_name, 1, config)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
@@ -559,18 +507,25 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     session = _inference_session()
     model = session.model
 
+    selector = (
+        f"toy-{tmp_path.name}" if dataset_kind == HarborDatasetKind.HARBOR_REGISTRY else f"example/{tmp_path.name}"
+    )
     executor = HarborExecutor(
         _validated_config(
-            dataset_selector=f"toy-{tmp_path.name}",
+            dataset_kind=dataset_kind,
+            dataset_selector=selector,
         ),
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
         secret_env_keys=("DAYTONA_API_KEY",),
     )
+    env_vars = {"DAYTONA_API_KEY": "daytona-key"}
+    if dataset_kind == HarborDatasetKind.HUGGING_FACE:
+        env_vars["HF_TOKEN"] = "hf-key"
     outcome = executor(
         session,
         str(tmp_path),
-        {"DAYTONA_API_KEY": "daytona-key"},
+        env_vars,
     )
 
     assert captured["config"] is executor.config
@@ -578,14 +533,19 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].served_model == "qwen3-0.6b"
     assert captured["overlay"].task_limit == 7
     assert captured["overlay"].model_agent_kwargs == {"extra_body": "{}"}
+    assert captured["overlay"].archive_root == str(tmp_path)
+    assert captured["overlay"].archive_dataset == executor.config.record_dataset
+    assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
+    if dataset_kind == HarborDatasetKind.HUGGING_FACE:
+        assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
-    assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
+    assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
 
 
-def _harbor_executor(dataset: str) -> HarborExecutor:
+def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:
     return HarborExecutor(
-        _validated_config(dataset_selector=dataset),
+        _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark, trials_per_task=trials_per_task),
         task_limit=None,
         model_agent_kwargs={},
     )
@@ -595,7 +555,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 1)
+        _write_job_record(job_dir, 1, _config)
         trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
@@ -629,7 +589,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
 
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 20)
+        _write_job_record(job_dir, 20, _config)
         for index in range(20):
             trial_dir = job_dir / f"trial-{index}"
             trial_dir.mkdir(parents=True, exist_ok=True)
@@ -654,7 +614,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"gated-{tmp_path.name}")
+    executor = _harbor_executor(f"gated-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -662,7 +622,10 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
     metrics = outcome.metrics[dataset]
     assert metrics["total"] == 20.0
     assert metrics["attempted"] == 20.0
-    assert metrics["accuracy"] == pytest.approx(10 / 20)
+    assert outcome.canonical_metrics[dataset]["reward"] == pytest.approx(10 / 20)
+    assert outcome.canonical_metrics[dataset]["reward_stderr"] == pytest.approx(0.1147078669)
+    assert outcome.tasks is not None
+    assert outcome.tasks[0].benchmark == executor.config.benchmark
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 20)
     assert coverage.errors == {"AgentTimeoutError": 1}
@@ -673,7 +636,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
 def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path, monkeypatch):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 20)
+        _write_job_record(job_dir, 20, _config)
         for index in range(20):
             trial_dir = job_dir / f"trial-{index}"
             trial_dir.mkdir(parents=True, exist_ok=True)
@@ -687,7 +650,7 @@ def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"undecided-{tmp_path.name}")
+    executor = _harbor_executor(f"undecided-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -701,7 +664,7 @@ def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path
 def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 1)
+        _write_job_record(job_dir, 1, _config)
         trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True)
         trial_dir.joinpath("result.json").write_text(
@@ -728,7 +691,7 @@ def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
 def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exception_type):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 10)
+        _write_job_record(job_dir, 10, _config)
         for index in range(10):
             trial_dir = job_dir / f"trial-{index}"
             trial_dir.mkdir(parents=True, exist_ok=True)
@@ -741,25 +704,25 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"timeout-{tmp_path.name}")
+    executor = _harbor_executor(f"timeout-{tmp_path.name}", n_benchmark=10)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 10.0
-    assert outcome.metrics[dataset]["accuracy"] == pytest.approx(0.3)
+    assert outcome.canonical_metrics[dataset]["reward"] == pytest.approx(0.3)
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (10, 10)
     assert coverage.errors == {exception_type: 4}
+    result = json.loads((tmp_path / "harbor_result.json").read_text())
+    assert result["unscored_trials"] == 0
 
 
-def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
-    """Without Harbor's job record there is no denominator. Falling back to the number of results
-    found would certify exactly the interrupted runs as complete, so coverage stays unreported and
-    the completion gate -- which has no rate to test -- does not reject the batch either."""
+def test_preflight_benchmark_count_matches_job_metadata(tmp_path, monkeypatch):
 
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 4, _config)
         for index in range(4):
             trial_dir = job_dir / f"trial-{index}"
             trial_dir.mkdir(parents=True, exist_ok=True)
@@ -768,26 +731,58 @@ def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"unknown-{tmp_path.name}")
+    executor = _harbor_executor(f"known-{tmp_path.name}", n_benchmark=4)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
     dataset = executor.config.record_dataset
     coverage = outcome.coverage[dataset]
-    assert coverage.n_attempted is None
+    assert coverage.n_benchmark == 4
+    assert coverage.n_attempted == 4
     assert coverage.n_scored == 4
-    # No attempted count means no "attempted" metric to publish, rather than one equal to the scored
-    # count, which would read as complete.
-    assert "attempted" not in outcome.metrics[dataset]
+    assert outcome.metrics[dataset]["attempted"] == 4
 
 
-def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tmp_path, monkeypatch):
-    """A trial that dies before writing a result leaves no file. Counting result files would report
-    perfect coverage for exactly the runs that lost the most trials."""
-
+def test_harbor_attempt_count_includes_repeated_trials_per_task(tmp_path, monkeypatch):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 20)
+        _write_job_record(job_dir, 6, _config)
+        for index in range(6):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index // 3}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"repeated-{tmp_path.name}", n_benchmark=2, trials_per_task=3)
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    coverage = outcome.coverage[executor.config.record_dataset]
+    assert (coverage.n_benchmark, coverage.n_attempted, coverage.n_scored) == (6, 6, 6)
+
+
+def test_harbor_executor_rejects_job_metadata_that_differs_from_preflight(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        changed = _config.benchmark.model_copy(update={"n_benchmark": 2, "n_attempted": 2})
+        job_dir.mkdir(parents=True, exist_ok=True)
+        job_dir.joinpath("result.json").write_text(
+            json.dumps({"n_total_trials": 2, "benchmark_metadata": [changed.model_dump(mode="json")]})
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"mismatch-{tmp_path.name}")
+
+    with pytest.raises(EvaluationError, match="benchmark metadata differs from preflight"):
+        executor(_inference_session(), str(tmp_path), {})
+
+
+def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20, _config)
         for index in range(19):
             trial_dir = job_dir / f"trial-{index}"
             trial_dir.mkdir(parents=True, exist_ok=True)
@@ -796,7 +791,7 @@ def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tm
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"missing-{tmp_path.name}")
+    executor = _harbor_executor(f"missing-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -809,7 +804,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 1)
+        _write_job_record(job_dir, 1, _config)
         trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
@@ -826,6 +821,6 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
-    assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
+    assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["unscored_trials"] == 0

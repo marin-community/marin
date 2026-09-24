@@ -6,13 +6,27 @@
 import json
 from urllib.parse import unquote, urlsplit
 
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.model_cache import resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
-from transformers import AutoConfig
+from transformers import AutoConfig, PreTrainedTokenizerBase
 
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
+
+
+def _tool_template_probe() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "probe",
+                "description": "Probe the model's tool-aware chat template.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
 
 
 def _vllm_model_path(path: str) -> str:
@@ -62,6 +76,17 @@ def read_attention_heads(model: str, revision: str | None = None) -> tuple[int, 
             kv_heads = scope.get("num_key_value_heads")
             return int(heads), (int(kv_heads) if kv_heads else None)
     raise ValueError(f"Could not find num_attention_heads in the model config for {model!r}.")
+
+
+def tool_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
+    """Return the tokenizer template selected when a request contains tools."""
+    if tokenizer.chat_template is None:
+        return None
+    return tokenizer.get_chat_template(tools=_tool_template_probe())
+
+
+def read_tool_chat_template(model: str, revision: str | None = None) -> str | None:
+    return tool_chat_template(load_tokenizer(model, revision=revision))
 
 
 def _read_model_config_dict(model: str, revision: str | None = None) -> dict:

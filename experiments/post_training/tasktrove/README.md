@@ -49,7 +49,9 @@ manifest record the clean launch commit used to build the pipeline.
 | `templates` | `task_templates.py` | exemplars plus converter coverage for retained sources |
 | `converted` | `convert.py` | normalized task binaries, optional solution archives, metadata, and row status |
 | `filtered` | `verify.py` | within-source exact deduplication and fail-closed verifier checks |
-| `release` | `publish.py` | one task Parquet plus the ledger, manifest, and report |
+| `routing` | `mcqa_routing.py`, `mcqa_routing_pipeline.py` | GLM classifications and the managed routing artifact |
+| `routed` | `apply_mcqa_routing.py` | verified rows looked up by task ID in the routing artifact |
+| `release` | `publish.py` | Harbor tasks, MCQA RL/SFT splits, ledger, manifest, and report |
 
 ## Release layout
 
@@ -72,18 +74,30 @@ columns before reading the packed task payloads.
 | `task_binary` | gzip-compressed Harbor task archive |
 | `solution_binary` | optional gzip-compressed oracle solution archive |
 
-The physical path is `tasks/part-00000.parquet`. Source-specific files can be materialized from
-the `source` column when needed; the canonical release stays single-shard so it has one immutable
-object, one footer, and one row-count contract.
+The routing stage loads the complete `route-mappings.jsonl` artifact into memory and applies it as a
+map-side lookup. MCQA rows routed to RL remain in `tasks/` and are also written to `rl/`. SFT rows
+retain their task and solution archives in the separate SFT Parquet. Garbage rows and mechanically
+valid MCQA rows absent from the mapping are rejected without payloads. Non-MCQA rows remain in
+`tasks/`.
+
+`tasks/part-00000.parquet` is the complete RL-compatible corpus with the previous release schema, so
+existing Harbor, SkyRL, and Hugging Face consumers continue to read `tasks/` without configuration
+changes. `rl/part-00000.parquet` contains only the MCQA rows newly routed to RL.
+
+Each physical split is a single Parquet file. Source-specific files can be materialized from the
+`source` column when needed; the canonical release stays single-shard per split so each has one
+immutable object, one footer, and one row-count contract.
 
 The current release is under
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/`:
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3/`:
 
 | path | contents |
 |---|---|
-| `tasks/part-00000.parquet` | retained tasks and selection columns |
+| `tasks/part-00000.parquet` | compatibility view of the complete RL corpus with the previous schema |
+| `rl/part-00000.parquet` | MCQA rows routed to RL, including route provenance and task payloads |
+| `sft/part-00000.parquet` | MCQA rows routed to SFT, including route provenance and task payloads |
 | `ledger.parquet` | rejected source and row decisions |
-| `manifest.json` | counts by source, status, converter, grader, tag, and environment |
+| `manifest.json` | counts by route, source, status, converter, grader, tag, and environment |
 | `report.md` | tables generated from the manifest |
 
 The authenticated browser at <https://marina.oa.dev/tasktrove/> uses a paginated Marina API. The
@@ -99,7 +113,7 @@ Publish a built release with an `HF_TOKEN` that can write to the destination dat
 
 ```bash
 uv run python -m experiments.post_training.tasktrove.publish huggingface \
-  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3
 ```
 
 The destination defaults to `open-athena/task-trove`; pass `--repo-id organization/dataset` to
@@ -147,5 +161,54 @@ uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tes
 
 # Export one Parquet row as a Harbor task directory.
 uv run python -m experiments.post_training.tasktrove.publish export \
-  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/tasks <task-path> --dest /tmp/tasktrove-task
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.2/tasks <task-path> --dest /tmp/tasktrove-task
 ```
+
+## Route MCQA tasks
+
+`mcqa_routing.py` contains the GLM request, validation, and worker logic.
+`mcqa_routing_pipeline.py` owns the recoverable `ArtifactStep` and combines worker outputs.
+`apply_mcqa_routing.py` loads the finished mapping and applies it to the clean release.
+
+The routing step assigns mechanically valid MCQA rows to `rl`, `sft`, or `garbage` with GLM-5.3.
+Run the pipeline module in a single Iris coordinator and provide
+`GLM_BULK_TOKEN` through the job environment. The step launches a replicated CPU worker job. Each
+worker reads its assigned Parquet row groups and writes to a separate `worker-NNN` output prefix.
+
+```bash
+uv run python -m experiments.post_training.tasktrove.mcqa_routing_pipeline \
+  generate \
+  --worker-count 64 \
+  --request-batch-size 20 \
+  --run
+```
+
+The step writes to its managed artifact location. On the production prefix, version `2026.09.18.1`
+resolves to `s3://marin-us-east-02a/marin/tasktrove/mcqa-routing/2026.09.18.1`. The default routes every
+mechanical survivor. Each chat-completion request contains at most `--request-batch-size` questions. A
+worker submits all of its requests as one GLM Batch API job. Each completion forces one `submit_routes`
+tool call with a strict JSON Schema. The client also checks each returned row ID and model field. Missing
+or invalid rows are routed to SFT with an explicit fallback reason; valid rows from the same response are
+retained. A failed or expired server-side batch produces SFT fallback mappings for its missing rows.
+
+The step writes `run-config.json` before launching workers. Workers with `summary.json` return immediately;
+unfinished workers resume the batch ID in their `batch-state.json`. This permits recovery after coordinator,
+worker, or transport failure without reclassifying completed work. Change `ARTIFACT_VERSION` when the input,
+rubric, model, or batch settings change.
+
+The artifact root contains combined `decisions.jsonl`, `route-mappings.jsonl`, and `summary.json` files.
+Each worker also writes:
+
+| path | contents |
+|---|---|
+| `decisions.jsonl` | model fields, the raw model route, and the fail-closed final route |
+| `route-mappings.jsonl` | compact task-to-route records for downstream selection |
+| `summary.json` | counts, provenance, timings, and GLM batch identifiers |
+| `requests.jsonl` | submitted Batch API request bodies |
+| `raw-output.jsonl` | raw Batch API responses |
+| `batch-state.json` | persistent file and batch identifiers used for resume |
+| `degraded-requests.json` | request IDs with one or more SFT fallback rows |
+
+The final policy forces material defects, ties, answer mismatches, and key conflicts to `garbage`. An RL
+route also requires high confidence, a matching derived choice, chained or multi-constraint reasoning,
+prompt-contained evidence, and no defect. All other coherent rows go to SFT.

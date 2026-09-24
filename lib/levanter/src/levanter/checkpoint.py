@@ -901,8 +901,15 @@ def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
         "is_temporary": is_temporary,
     }
     if jax.process_index() == 0:
-        with atomic_rename(prefix_join(checkpoint_path, "metadata.json")) as temporary_path:
-            StoragePath(temporary_path).write_text(json.dumps(metadata))
+        metadata_path = StoragePath(prefix_join(checkpoint_path, "metadata.json"))
+        if metadata_path.is_remote:
+            # Object-store writers publish the completed object when they close. A sibling rename
+            # would copy and then delete its temporary source, which protected checkpoint prefixes
+            # intentionally forbid.
+            metadata_path.write_text(json.dumps(metadata))
+        else:
+            with atomic_rename(str(metadata_path)) as temporary_path:
+                StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
 def load_checkpoint(
@@ -1086,12 +1093,14 @@ def discover_checkpoint_candidates(
     *additional_paths: PathLike,
     exclude_paths: Sequence[PathLike] = (),
     max_step: int | None = None,
+    fs: AbstractFileSystem | None = None,
 ) -> list[CheckpointCandidate]:
     """Return complete checkpoint candidates across one or more roots.
 
     A complete candidate is a checkpoint directory with a readable
     ``metadata.json`` containing a parseable integer ``step`` and ISO-format
     ``timestamp``. Results are sorted by numeric step, then timestamp, then path.
+    If supplied, ``fs`` reads all roots and their metadata.
     This function is intentionally importable for operational one-liners, e.g.:
 
     ```bash
@@ -1102,7 +1111,7 @@ def discover_checkpoint_candidates(
     candidates_by_path: dict[str, CheckpointCandidate] = {}
 
     for cp_path in all_paths:
-        for candidate in _discover_checkpoint_candidates_single(cp_path):
+        for candidate in _discover_checkpoint_candidates_single(cp_path, fs=fs):
             if max_step is not None and candidate.step > max_step:
                 continue
             if _is_path_under_any(candidate.path, exclude_paths):
@@ -1167,13 +1176,15 @@ def latest_checkpoint_path(
     return latest
 
 
-def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[CheckpointCandidate]:
+def _discover_checkpoint_candidates_single(
+    checkpoint_path: str, fs: AbstractFileSystem | None = None
+) -> list[CheckpointCandidate]:
     """Discover complete checkpoint candidates in a single root path."""
     candidates: list[CheckpointCandidate] = []
 
-    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path):
+    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path, fs=fs):
         try:
-            metadata = _load_metadata(ckpt_dir)
+            metadata = _load_metadata(ckpt_dir, fs=fs)
             step = int(metadata["step"])
             timestamp = datetime.datetime.fromisoformat(metadata["timestamp"])
         except Exception:
@@ -1185,15 +1196,14 @@ def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[Checkpo
     return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
-def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
+def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSystem | None = None) -> list[str]:
     """Discover valid checkpoint directories in a single root path.
 
     Uses a single delimited listing of the root. Globbing ``<root>/*`` instead would make object
     stores enumerate every object below the root -- every tensorstore chunk of every saved step --
     only to discard all but the first level.
     """
-    fs: AbstractFileSystem
-    fs, _ = _get_fs_and_plain_path(checkpoint_path)
+    fs, _ = _get_fs_and_plain_path(checkpoint_path, fs=fs)
     base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):

@@ -21,6 +21,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
+from iris.cluster.log_highlights import extract_failure_highlights
 from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
@@ -30,7 +31,12 @@ from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.external_dependencies import (
+    CUDA_TOOLCHAIN_VERSION_BY_BACKEND,
+    TPU_INFERENCE_FORK_REQUIREMENT,
+    VLLM_FORK_REQUIREMENT,
+    VLLM_GPU_RELEASE,
+)
 from marin.inference.config import (
     STANDARD_VLLM_METRIC_FAMILIES,
     VLLM_METRIC_PREFIX,
@@ -58,20 +64,22 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
+_PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
+_NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
+_NATIVE_ERROR_SUMMARY_LINES = 40
+_NATIVE_STDOUT_LOG = "stdout.log"
+_NATIVE_STDERR_LOG = "stderr.log"
+_CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_REQUIREMENTS = (
-    "nvidia-cuda-nvcc==13.0.88",
-    "nvidia-cuda-crt==13.0.88",
-    "nvidia-nvvm==13.0.88",
-)
-_CUDA_NVCC_BOOTSTRAP = """\
+_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm")
+_CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
 from pathlib import Path
 import sys
 
-distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
+distribution = importlib.metadata.distribution({_CUDA_NVCC_DISTRIBUTION!r})
 nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
 nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
 cuda_home = nvcc.parent.parent
@@ -83,6 +91,10 @@ cudart = cuda_lib / "libcudart.so.13"
 cudart_link = cuda_lib / "libcudart.so"
 if cudart.is_file() and not cudart_link.exists():
     cudart_link.symlink_to(cudart.name)
+nvrtc = cuda_lib / "libnvrtc.so.13"
+nvrtc_link = cuda_lib / "libnvrtc.so"
+if nvrtc.is_file() and not nvrtc_link.exists():
+    nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp(sys.argv[1], sys.argv[1:])
@@ -181,6 +193,8 @@ class VllmType(StrEnum):
 class _CudaVllmInstall:
     requirement: str
     torch_backend: str
+    toolchain_version: str
+    torch_install_args: tuple[str, ...]
     executable: str
     executable_args: tuple[str, ...] = ()
 
@@ -212,6 +226,15 @@ class IsolatedCudaVllm:
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
                 torch_backend=VLLM_GPU_RELEASE.torch_backend,
+                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend],
+                torch_install_args=(
+                    "--index",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{VLLM_GPU_RELEASE.torch_backend}",
+                    "--index",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/cpu",
+                    "--index-strategy",
+                    "unsafe-best-match",
+                ),
                 executable="python",
                 executable_args=(
                     "-c",
@@ -223,6 +246,8 @@ class IsolatedCudaVllm:
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",
             torch_backend=_UPSTREAM_CUDA_TORCH_BACKEND,
+            toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[_UPSTREAM_CUDA_TORCH_BACKEND],
+            torch_install_args=("--torch-backend", _UPSTREAM_CUDA_TORCH_BACKEND),
             executable="vllm",
         )
 
@@ -235,14 +260,13 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
-        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+        for package in _CUDA_TOOLCHAIN_PACKAGES:
+            requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
+        command.extend(("--python", self.python_version))
+        command.extend(install.torch_install_args)
         command.extend(
             (
-                "--python",
-                self.python_version,
-                "--torch-backend",
-                install.torch_backend,
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
@@ -262,8 +286,8 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        toolchain_version = install.toolchain_version
+        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain_version}"
 
 
 def _write_virtual_hosted_s3_config() -> str:
@@ -571,25 +595,49 @@ def _read_file(path: str) -> str:
         return f.read()
 
 
-def _native_logs(log_dir: str | None) -> str:
+@dataclass(frozen=True)
+class _NativeLogPaths:
+    stdout: str
+    stderr: str
+
+
+def _native_log_paths(log_dir: str | None) -> _NativeLogPaths | None:
     if not log_dir:
-        return "<no log directory available for native vLLM server>"
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
-    return f"--- stdout ---\n{_read_file(stdout_path)}\n--- stderr ---\n{_read_file(stderr_path)}"
+        return None
+    return _NativeLogPaths(
+        stdout=os.path.join(log_dir, _NATIVE_STDOUT_LOG),
+        stderr=os.path.join(log_dir, _NATIVE_STDERR_LOG),
+    )
+
+
+def _native_logs(log_dir: str | None) -> str:
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
+    return f"--- stdout ---\n{_read_file(paths.stdout)}\n--- stderr ---\n{_read_file(paths.stderr)}"
 
 
 def _native_logs_tail(log_dir: str | None, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> str:
-    if not log_dir:
-        return "<no log directory available for native vLLM server>"
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
     return (
         "--- stdout (tail) ---\n"
-        f"{_tail_file(stdout_path, max_lines)}\n"
+        f"{_tail_file(paths.stdout, max_lines)}\n"
         "--- stderr (tail) ---\n"
-        f"{_tail_file(stderr_path, max_lines)}"
+        f"{_tail_file(paths.stderr, max_lines)}"
     )
+
+
+def _native_error_summary(log_dir: str | None) -> str:
+    """Return the most useful native server failure lines."""
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
+    lines = []
+    for path in (paths.stdout, paths.stderr):
+        lines.extend(_read_file(path).splitlines())
+    return "\n".join(extract_failure_highlights(lines, max_lines=_NATIVE_ERROR_SUMMARY_LINES))
 
 
 def validate_vllm_mode_env() -> None:
@@ -950,8 +998,8 @@ def _launch_vllm_process(
     log_dir: str,
     compilation_cache: VllmCompilationCache,
 ) -> VllmServerHandle:
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
+    log_paths = _native_log_paths(log_dir)
+    assert log_paths is not None
     try:
         process = subprocess.Popen(
             command,
@@ -968,7 +1016,7 @@ def _launch_vllm_process(
         compilation_cache.close()
         raise
 
-    log_pump = _LogPump(process, stdout_path, stderr_path)
+    log_pump = _LogPump(process, log_paths.stdout, log_paths.stderr)
     log_pump.start()
     try:
         process_group_id = os.getpgid(process.pid)
@@ -1016,7 +1064,9 @@ def _wait_for_vllm_server(
             f"Command: {command}\n"
             f"Exit code: {process.returncode}\n"
             f"Logs: {handle.log_dir}\n"
-            f"{_native_logs_tail(handle.log_dir)}"
+            f"{_native_logs_tail(handle.log_dir)}\n"
+            "--- exception summary ---\n"
+            f"{_native_error_summary(handle.log_dir)}"
         )
         raise RuntimeError(message)
 

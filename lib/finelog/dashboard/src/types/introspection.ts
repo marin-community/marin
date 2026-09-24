@@ -59,16 +59,35 @@ export interface ServerInfo {
   ingest: NamespaceRegistration[]
   metadataCache: MetadataCacheInfo
   indexCache: IndexCacheInfo
+  logTailCache: LogTailCacheInfo
   format: FormatInfo
 }
 
 export interface IndexCacheInfo {
   corruptBundles: number
   corruptSections: number
+  loadAttempts: number
+  headerLoadAttempts: number
+  sectionLoadAttempts: number
+  coalescedWaits: number
+  entries: number
+  bytes: number
+  budgetBytes: number
+  evictions: number
   exactAggregateFull: number
   exactAggregatePartial: number
   exactAggregateDeclined: number
   exactAggregateFallbacks: number
+}
+
+export interface LogTailCacheInfo {
+  entries: number
+  bytes: number
+  budgetBytes: number
+  hits: number
+  deltaScans: number
+  misses: number
+  evictions: number
 }
 
 export interface IndexSectionInfo {

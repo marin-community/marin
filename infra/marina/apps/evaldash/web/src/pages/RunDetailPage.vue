@@ -4,7 +4,6 @@ import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import {
-  formatCoverage,
   formatDuration,
   formatInterval,
   formatScore,
@@ -58,8 +57,12 @@ const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
-  if (!isPartialCoverage(headline)) return { label: 'all items graded', warn: false }
-  return { label: formatCoverage(headline.coverage), warn: true }
+  const attempted = `${headline.n_attempted ?? 'unknown'}${headline.n_benchmark === null ? '' : ` of ${headline.n_benchmark}`}`
+  const graded = `${headline.n_scored}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
+  return {
+    label: `attempted ${attempted} · graded ${graded}`,
+    warn: isPartialCoverage(headline) || (headline.benchmark_rate !== null && headline.benchmark_rate < 1),
+  }
 })
 
 // Properties the statistics engine flagged on this grade, spelled out. A flagged run is still a real

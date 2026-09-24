@@ -3,6 +3,8 @@
 
 """Private semantics for one deterministic, single-turn answer task."""
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -31,12 +33,21 @@ class Source:
             raise ValueError("Complete source provenance is required")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class VerifierSpec:
     """A private verifier kind and the parameters passed to its handler."""
 
     kind: str
-    parameters: dict[str, Any]
+    _parameters_json: str
+
+    def __init__(self, kind: str, parameters: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "_parameters_json", json.dumps(parameters, sort_keys=True, allow_nan=False))
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return a separate copy of the private parameter payload."""
+        return json.loads(self._parameters_json)
 
 
 @dataclass(frozen=True)

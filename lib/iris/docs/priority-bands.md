@@ -59,6 +59,10 @@ on every pod. How that band turns into actual preemption depends on the backend:
   running `batch` gangs instead of waiting behind non-binding quota.
   Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
   not a stray pod out of it.
+  CoreWeave health-check Pods bypass Kueue and run at Kubernetes priority `-1`;
+  their unconstrained-topology annotation keeps them out of TAS capacity accounting.
+  Once Kueue admits an Iris workload, kube-scheduler can preempt those Pods because
+  every Iris PriorityClass, including `iris-batch`, uses `PreemptLowerPriority`.
 - **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
   pending tasks by band and reclaims slices directly.
 
