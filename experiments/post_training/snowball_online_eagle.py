@@ -72,7 +72,7 @@ class _OnlineEaglePreset:
 
 
 # Capture at step 4, then leave three rollout steps for training and refresh without starting step 8.
-SMOKE = _OnlineEaglePreset(label="smoke", artifact_suffix="-smoke", max_steps=7, checkpoint_interval=7)
+SMOKE = _OnlineEaglePreset(label="smoke", artifact_suffix="-smoke", max_steps=7, checkpoint_interval=0)
 FULL = _OnlineEaglePreset(label="full", artifact_suffix="", max_steps=25, checkpoint_interval=5)
 PRESETS = {preset.label: preset for preset in (SMOKE, FULL)}
 
