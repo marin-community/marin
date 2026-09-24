@@ -235,6 +235,22 @@
       "tasks_file": "benchmark_tasks/spatialbench-long.json",
       "source_inventory_name": "SpatialBench-Long",
       "task_inventory_status": "public-subset-metadata-assessed"
+    },
+    "BixBench-Verified-50": {
+      "revision": "c77fc8ea4611b546947b8a4710ed36ab72ee233c",
+      "source_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/tree/c77fc8ea4611b546947b8a4710ed36ab72ee233c",
+      "inventory_count": 50,
+      "public_inventory_count": 50,
+      "metadata_access": "gated-authorized",
+      "shared_original_question_count": 50,
+      "revised_question_count": 17,
+      "unchanged_question_count": 33,
+      "capsule_count": 33,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/bixbench-verified-50.json",
+      "source_inventory_name": "BixBench-Verified-50, Harbor CLI",
+      "task_inventory_status": "released-task-metadata-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

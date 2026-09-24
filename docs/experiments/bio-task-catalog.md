@@ -214,7 +214,7 @@ task ID, workflow pattern, required stages and formats, recipe mappings, evidenc
 and remaining gaps. Source revisions and hashes identify the inspected metadata;
 benchmark answers and biological fixtures are excluded from training authoring.
 
-| Benchmark inventory | Assessed public ID tasks | Advertised full suite, when larger |
+| Benchmark inventory | Assessed ID task/protocol records | Advertised full suite, when larger |
 | --- | ---: | ---: |
 | [BixBench](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json) | 205 | — |
 | [CompBioBench](../../experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json) | 100 | — |
@@ -232,9 +232,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [sc-HeurekaBench](../../experiments/post_training/bio_tasks/benchmark_tasks/sc-heurekabench.json) | 130 (64 open-answer, 66 multiple-choice) | — |
 | [scBench-Long](../../experiments/post_training/bio_tasks/benchmark_tasks/scbench-long.json) | 4 | Unverified |
 | [SpatialBench-Long](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench-long.json) | 4 | Unverified |
+| [BixBench-Verified-50](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) | 50 (all overlap original IDs) | — |
 
-Of these 715 ID task records, 23 have manually assessed component mappings and
-692 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 765 ID task/protocol records, 23 have manually assessed component mappings and
+742 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -272,7 +273,13 @@ and section-aware spatial nulls. Published model-run counts are not task counts.
 Coherent observed subsets must preserve biological replication and comparison
 structure while fitting the solve-time limit.
 
-All 715 ID records have manually assessed workflow prerequisites. For BixBench,
+BixBench-Verified-50 metadata was read through existing authorized gated access.
+Its 50 IDs overlap original BixBench across 33 capsules; 17 question texts differ
+and 33 are unchanged. Per-record links preserve the relationship without implying
+50 additional workflows. Revisions affect model design, filtering, units and
+denominators; capsule equivalence has not been verified.
+
+All 765 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.

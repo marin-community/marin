@@ -1,0 +1,2354 @@
+{
+  "benchmark": "BixBench-Verified-50",
+  "source_revision": "c77fc8ea4611b546947b8a4710ed36ab72ee233c",
+  "scope": "All 50 accessible task metadata records across 33 capsules, retrieved through existing gated access. All 50 question IDs also occur in the original BixBench inventory; 17 question texts differ and 33 are unchanged. These are protocol records, not 50 independent workflows or training tasks. Expected answers, capsules and reference notebooks are excluded from authoring.",
+  "tasks": [
+    {
+      "task_id": "bix-12-q2",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-parsimony-informative",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute parsimony-informative site counts and fractions for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-12-q2",
+      "shared_task_group": "BixBench/bix-12-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d38392ec-84b8-485d-ab02-b8788e6f1f43",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "085e3f73ddd484f748df5c59fa5c61ffa2e228f7893b1846397406701bfb1612",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-11-q1",
+      "source_tags": [
+        "['Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-treeness",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute treeness for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-11-q1",
+      "shared_task_group": "BixBench/bix-11-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-11-q1",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "cd811ead-7887-4369-b175-05aff4223765",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "7090b016cbd816db05d2b35b139e6207bd2ed959cb4d268907f2a22157aef96b",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Return the difference between group medians as a proportion; do not subtract percentages without converting units."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Return the difference between group medians as a proportion; do not subtract percentages without converting units.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-35-q1",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-gene",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute gene evolutionary rates for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-35-q1",
+      "shared_task_group": "BixBench/bix-35-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-35-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4cb6f8ce-4d81-40b2-8d9c-85868796ee73",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "48254ebcfa94f663e75554a2bf7448962ddbc910f7b508d5f7b750fb32672c60",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-43-q2",
+      "source_tags": [
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics"
+      ],
+      "workflow_family": "combination-treatment-enrichment",
+      "required_stages": [
+        "fit the combination-treatment count contrast",
+        "apply the exact significance and effect cutoffs",
+        "map genes to fixed GO or Reactome libraries",
+        "test enrichment and summarize overlap or odds ratios"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "treatment metadata",
+        "GO/Reactome gene sets"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "GSEApy"
+      ],
+      "source_task_id": "bix-43-q2",
+      "shared_task_group": "BixBench/bix-43-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-43-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "15ff11e5-2db1-45b6-b3a3-46bc2a74b821",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "c258c8a3ca257a3560561d14e72a365b001dc9d546993b0f33af79d9af761801",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Fit all specified treatment groups for dispersion estimation, filter against all 30 samples, and retain the declared effect, abundance and adjusted-significance thresholds before Reactome ORA."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Fit all specified treatment groups for dispersion estimation, filter against all 30 samples, and retain the declared effect, abundance and adjusted-significance thresholds before Reactome ORA.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-28-q3",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-long-branch",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute long-branch scores for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-28-q3",
+      "shared_task_group": "BixBench/bix-28-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-28-q3",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "c66d3ed9-0a95-46be-a237-ed68498ea7f6",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "dc1b507a7f261ef2ac3e0c05a0d19d4973eca1bfed9a71ce656d9244f42be048",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Use the stated PhyKIT long-branch-score definition before the within-tree median; preserve branch lengths and taxon identities."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use the stated PhyKIT long-branch-score definition before the within-tree median; preserve branch lengths and taxon identities.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-34-q2",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-patristic",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute patristic distances for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-34-q2",
+      "shared_task_group": "BixBench/bix-34-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-34-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "17baa727-5eb7-4544-a466-3148a48b3cde",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "ddb16c5feb7a007c384a9afd4c6f304c8ad1dc24c44285f723bcd2a2da2b5690",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-52-q2",
+      "source_tags": [
+        "Epigenomics"
+      ],
+      "workflow_family": "chromosomal-cpg-density",
+      "required_stages": [
+        "join CpG coordinates, methylation fractions and chromosome lengths",
+        "apply extreme-methylation thresholds",
+        "deduplicate genomic sites across samples",
+        "compute chromosome-normalized densities or distribution tests"
+      ],
+      "required_formats": [
+        "methylation table or bedGraph",
+        "assembly chromosome sizes"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-52-q2",
+      "shared_task_group": "BixBench/bix-52-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4dceea58-7d66-4576-bfc6-88c026d5b7a9",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "834d809effea09d1b90f3dac2c83adb4dbeb902422e61fe83d203546f4c0e8df",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Deduplicate filtered loci and average chromosome-specific densities only over eligible chromosomes; a pooled genome-wide density has a different denominator."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Deduplicate filtered loci and average chromosome-specific densities only over eligible chromosomes; a pooled genome-wide density has a different denominator.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-52-q6",
+      "source_tags": [
+        "Epigenomics"
+      ],
+      "workflow_family": "chromosomal-cpg-density",
+      "required_stages": [
+        "join CpG coordinates, methylation fractions and chromosome lengths",
+        "apply extreme-methylation thresholds",
+        "deduplicate genomic sites across samples",
+        "compute chromosome-normalized densities or distribution tests"
+      ],
+      "required_formats": [
+        "methylation table or bedGraph",
+        "assembly chromosome sizes"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-52-q6",
+      "shared_task_group": "BixBench/bix-52-q6",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q6",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4dceea58-7d66-4576-bfc6-88c026d5b7a9",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-49-q4",
+      "source_tags": [
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics"
+      ],
+      "workflow_family": "rnaseq-shrunken-effects",
+      "required_stages": [
+        "fit the specified count-model contrast",
+        "apply apeglm coefficient shrinkage",
+        "apply count and significance thresholds",
+        "report gene-level effects or significant-gene counts"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample metadata"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "apeglm"
+      ],
+      "source_task_id": "bix-49-q4",
+      "shared_task_group": "BixBench/bix-49-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-49-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4ef3fcd8-1c35-466f-9d93-49b92f4ea760",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "454dfcbd3592c4c447c769097b2c74413e646e11073f2119503003a3ced697b8",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Include sex in the design and distinguish apeglm effect shrinkage from the adjusted-significance criterion used for the DEG count."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Include sex in the design and distinguish apeglm effect shrinkage from the adjusted-significance criterion used for the DEG count.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-6-q4",
+      "source_tags": [
+        "Functional Genomics"
+      ],
+      "workflow_family": "crispr-screen-pathway-analysis",
+      "required_stages": [
+        "join guide or gene-level screen statistics to replicate and exposure metadata",
+        "align gene identifiers across replicates",
+        "test pathway enrichment with a fixed background",
+        "compare replicate concordance or repeated-exposure pathway persistence"
+      ],
+      "required_formats": [
+        "CRISPR screen statistics",
+        "replicate metadata",
+        "gene-set library"
+      ],
+      "required_tools": [
+        "MAGeCK"
+      ],
+      "source_task_id": "bix-6-q4",
+      "shared_task_group": "BixBench/bix-6-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-6-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "f4dcda89-678d-403d-b155-1483d0071765",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "a450578a2e0f939cf328d0ea73121337defa4de54f49707ab7fae0d316b37663",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Match replicate-level MAGeCK p-values by feature before the Spearman calculation; retain ties and the declared round."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Match replicate-level MAGeCK p-values by feature before the Spearman calculation; retain ties and the declared round.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-61-q5",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'SNP Analysis'",
+        "'Genomics'",
+        "'Antimicrobial Resistance']"
+      ],
+      "workflow_family": "bacterial-read-to-variant-workflow",
+      "required_stages": [
+        "trim paired reads with the stated adapter and quality policy",
+        "map retained reads to the matching reference with read groups",
+        "sort/index alignments and measure depth",
+        "call haploid variants and classify true SNPs and indels",
+        "summarize transition/transversion or between-sample mutation burden"
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "reference FASTA",
+        "adapter FASTA",
+        "BAM/BAI",
+        "VCF"
+      ],
+      "required_tools": [
+        "Trimmomatic",
+        "BWA",
+        "SAMtools",
+        "GATK"
+      ],
+      "source_task_id": "bix-61-q5",
+      "shared_task_group": "BixBench/bix-61-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-61-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "5ddf0a38-bc41-5ebb-93af-88c62ca29be7",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "95687365a900102efd02376e04fb1a7f73f8ede849af664abc00111f4d4ef533",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-53-q2",
+      "source_tags": [
+        "Differential Expression Analysis",
+        "RNA-seq",
+        "Transcriptomics",
+        "Sequence Analysis"
+      ],
+      "workflow_family": "rnaseq-sensitivity-and-enrichment",
+      "required_stages": [
+        "fit a replicate-aware treatment count contrast",
+        "shrink fold changes and apply the stated filters",
+        "repeat the fit under the specified replicate exclusion when requested",
+        "test and rank fixed KEGG or WikiPathways gene sets"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample/batch metadata",
+        "versioned pathway libraries"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "apeglm",
+        "GSEApy"
+      ],
+      "source_task_id": "bix-53-q2",
+      "shared_task_group": "BixBench/bix-53-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-53-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "308d53bf-1513-4a09-913b-3a1112f94e7b",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "d646675d321001e0793d4416e5c24c3d04c38f5202af533bc9366b0d7d4f05cd",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-27-q5",
+      "source_tags": [
+        "RNA-seq",
+        "Transcriptomics",
+        "Machine Learning and Artificial Intelligence"
+      ],
+      "workflow_family": "expression-consensus-clustering",
+      "required_stages": [
+        "transform expression using the specified logarithm",
+        "fit the requested PCA or resampled clustering analysis",
+        "respect training and held-out sample boundaries during prediction",
+        "identify cluster-associated genes and enrich pathways when requested"
+      ],
+      "required_formats": [
+        "expression matrix",
+        "sample metadata",
+        "Reactome gene sets"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-27-q5",
+      "shared_task_group": "BixBench/bix-27-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-27-q5",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "0f14ffa7-f02a-4d20-8142-dfc404195e56",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "a02db1d74da568fc366256ec02d8819b07c7a741a2d0878dafba9365391e1514",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Apply log10(count+1), orient samples as rows, fit the stated component count and report explained variance in percent."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Apply log10(count+1), orient samples as rows, fit the stated component count and report explained variance in percent.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-54-q7",
+      "source_tags": [
+        "Imaging"
+      ],
+      "workflow_family": "colony-dose-response-modeling",
+      "required_stages": [
+        "join observed strain-frequency and colony-area measurements",
+        "fit the specified polynomial or natural-spline basis",
+        "compare model fit or evaluate overall significance",
+        "optimize predictions over the admissible frequency interval and compute uncertainty when requested"
+      ],
+      "required_formats": [
+        "colony-area table",
+        "strain-mixture proportions"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-54-q7",
+      "shared_task_group": "BixBench/bix-54-q7",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-54-q7",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "9e52daf6-ca58-43e8-e732-fbac3459d295",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "7e574faf7675858781681036b914c1b025b857beb2a4e94c2555dc297642830b",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Compare the specified polynomial and natural-spline models in R; define model selection and search the observed proportion domain including boundaries."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Compare the specified polynomial and natural-spline models in R; define model selection and search the observed proportion domain including boundaries.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-51-q2",
+      "source_tags": [
+        "Other"
+      ],
+      "workflow_family": "clinical-logistic-regression",
+      "required_stages": [
+        "join binary clinical outcome and eligible covariates",
+        "encode success and reference categories",
+        "fit the requested single- or multi-predictor binomial model",
+        "derive coefficients, Wald evidence, AIC or predicted probability"
+      ],
+      "required_formats": [
+        "clinical outcome table",
+        "patient covariates"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-51-q2",
+      "shared_task_group": "BixBench/bix-51-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-51-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "93f63fb8-b56c-4ad1-8d3b-d651e2107423",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "414c51bf9b9c3e6c3765222cc8f31bafc0118c2c1ac7ad85bfc45b2c0b176af2",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-12-q5",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-parsimony-informative",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute parsimony-informative site counts and fractions for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-12-q5",
+      "shared_task_group": "BixBench/bix-12-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d38392ec-84b8-485d-ab02-b8788e6f1f43",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "721d0bf417e7a57c8deb3f689d9e4ae97d9339690d7c4f1c7962022059ffd133",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-30-q3",
+      "source_tags": [
+        "Transcriptomics",
+        "Differential Expression Analysis"
+      ],
+      "workflow_family": "mirna-multiple-testing",
+      "required_stages": [
+        "select cell populations and matched sample columns",
+        "apply the specified log transformation",
+        "fit per-feature group tests",
+        "compare the requested multiple-testing corrections"
+      ],
+      "required_formats": [
+        "miRNA expression matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-30-q3",
+      "shared_task_group": "BixBench/bix-30-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-30-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "3d4eb7bb-4fbc-4300-b79a-3eba7a6221bc",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "c88e82a8baa3a4b78724c5776238ff33f19a705a12514fe9224b9c04e38faf95",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-31-q2",
+      "source_tags": [
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics"
+      ],
+      "workflow_family": "sex-stratified-rnaseq",
+      "required_stages": [
+        "join sex, cell-type and gene-biotype metadata",
+        "fit cell-type-specific count contrasts",
+        "apply the specified fold-change shrinkage",
+        "compare protein-coding gene effects across cell types"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample metadata",
+        "gene-biotype annotations"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "apeglm"
+      ],
+      "source_task_id": "bix-31-q2",
+      "shared_task_group": "BixBench/bix-31-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-31-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "b1dbace7-f6e9-42ec-81e1-bcc24161cc27",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "704cdc4a94320dcbd776bef074c082eb788a5139657699fc573ef2182b894b44",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Preserve the specified batch treatment and sex contrast; use the requested PyDESeq2 shrinkage convention and flag uncertainty about pre-correction versus count-model covariates."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve the specified batch treatment and sex contrast; use the requested PyDESeq2 shrinkage convention and flag uncertainty about pre-correction versus count-model covariates.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-47-q3",
+      "source_tags": [
+        "Genomics",
+        "Genomic Variant Analysis"
+      ],
+      "workflow_family": "clinical-variant-cohort-analysis",
+      "required_stages": [
+        "join sample genotypes, functional annotations and patient metadata",
+        "apply nonreference, coding-region and eligible-gene filters",
+        "retain sample-level denominators",
+        "summarize variant burden or test cohort differences"
+      ],
+      "required_formats": [
+        "VCF or annotated variant table",
+        "gene annotations",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-47-q3",
+      "shared_task_group": "BixBench/bix-47-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-47-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4a336d0c-3d6b-440a-bfb0-437b26a00af3",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "2fc7fa331349bba70edbd5fda631f6e67ddcf6e6dfd5978212280191d182478c",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-26-q3",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Transcriptomics",
+        "Differential Expression Analysis"
+      ],
+      "workflow_family": "multifactor-rnaseq-kegg-enrichment",
+      "required_stages": [
+        "fit replicate-aware strain and media contrasts",
+        "select differential genes under specified cutoffs",
+        "map identifiers to a fixed KEGG library",
+        "compare enriched pathways and their contributing genes"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "design metadata",
+        "KEGG gene sets"
+      ],
+      "required_tools": [
+        "DESeq2"
+      ],
+      "source_task_id": "bix-26-q3",
+      "shared_task_group": "BixBench/bix-26-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-26-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "0923d260-fe1b-4fb4-4398-79edf546e584",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "e51e8254441995fcd0a1d8f32351c030e6b16e447841cea298f33781d4147ea1",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-35-q2",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-gene",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute gene evolutionary rates for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-35-q2",
+      "shared_task_group": "BixBench/bix-35-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-35-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4cb6f8ce-4d81-40b2-8d9c-85868796ee73",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "e84f6f8bed540c111cd60416697ee0a4aa9b4d0a0d8f542b85610bf820dc3d4f",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-34-q5",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-patristic",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute patristic distances for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-34-q5",
+      "shared_task_group": "BixBench/bix-34-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-34-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "17baa727-5eb7-4544-a466-3148a48b3cde",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "1d030254eae14b7f694a6939a50bac8cc08106b5d1dbb8bb447efd7d79864bc3",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-16-q3",
+      "source_tags": [
+        "Transcriptomics",
+        "Functional Genomics"
+      ],
+      "workflow_family": "expression-essentiality-association",
+      "required_stages": [
+        "align sample and gene identifiers across expression and dependency matrices",
+        "apply the specified expression transformation",
+        "compute gene-wise rank associations",
+        "adjust the tested family of p-values and summarize associations"
+      ],
+      "required_formats": [
+        "TPM expression matrix",
+        "dependency-score matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-16-q3",
+      "shared_task_group": "BixBench/bix-16-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "bda54b38-9b49-4009-aad6-d5f52675438a",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "2387b2b52bf15f41b0fd22f959ee67924d0a61a91ede3bb8d385864a8a39ca16",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-14-q1",
+      "source_tags": [
+        "Genomics",
+        "Genomic Variant Analysis"
+      ],
+      "workflow_family": "clinical-variant-cohort-analysis",
+      "required_stages": [
+        "join sample genotypes, functional annotations and patient metadata",
+        "apply nonreference, coding-region and eligible-gene filters",
+        "retain sample-level denominators",
+        "summarize variant burden or test cohort differences"
+      ],
+      "required_formats": [
+        "VCF or annotated variant table",
+        "gene annotations",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-14-q1",
+      "shared_task_group": "BixBench/bix-14-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-14-q1",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "7718a922-ce2c-4e59-900b-84fe06050ce6",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "a7ba9c94388b2c7286c5ae25cf90907e4e7d3dedaa8df69526eb5ad9905533b7",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Restrict to eligible carrier coding variants and the stated VAF range before forming the synonymous-variant fraction."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Restrict to eligible carrier coding variants and the stated VAF range before forming the synonymous-variant fraction.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-20-q3",
+      "source_tags": [
+        "Genomics",
+        "Genomic Variant Analysis"
+      ],
+      "workflow_family": "clinical-variant-cohort-analysis",
+      "required_stages": [
+        "join sample genotypes, functional annotations and patient metadata",
+        "apply nonreference, coding-region and eligible-gene filters",
+        "retain sample-level denominators",
+        "summarize variant burden or test cohort differences"
+      ],
+      "required_formats": [
+        "VCF or annotated variant table",
+        "gene annotations",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-20-q3",
+      "shared_task_group": "BixBench/bix-20-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-20-q3",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "2ccdbe37-0a92-47b5-9bab-fa8a8c470799",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "160936c9bdd9a7d8956ab31105f6f3128182812a795fe90c4593217920a4844a",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Define the fraction only among eligible annotated somatic variants; exclude noncoding categories and reference calls before aggregating classifications."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Define the fraction only among eligible annotated somatic variants; exclude noncoding categories and reference calls before aggregating classifications.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-55-q1",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "ortholog-discovery",
+      "required_stages": [
+        "load real proteomes and a frozen lineage database",
+        "run BUSCO in protein mode",
+        "retain complete single-copy orthologs",
+        "intersect ortholog identifiers across proteomes"
+      ],
+      "required_formats": [
+        "protein FASTA",
+        "BUSCO lineage database",
+        "BUSCO full tables"
+      ],
+      "required_tools": [
+        "BUSCO"
+      ],
+      "source_task_id": "bix-55-q1",
+      "shared_task_group": "BixBench/bix-55-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-55-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "451a5322-db12-4026-8d8d-24647a85c4b1",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "8734df9eb29d17df07b3e7d736bdfb2e5d782eb323dd4d1088891733f112aa03",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-32-q2",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Transcriptomics",
+        "Differential Expression Analysis"
+      ],
+      "workflow_family": "multifactor-rnaseq-kegg-enrichment",
+      "required_stages": [
+        "fit replicate-aware strain and media contrasts",
+        "select differential genes under specified cutoffs",
+        "map identifiers to a fixed KEGG library",
+        "compare enriched pathways and their contributing genes"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "design metadata",
+        "KEGG gene sets"
+      ],
+      "required_tools": [
+        "DESeq2"
+      ],
+      "source_task_id": "bix-32-q2",
+      "shared_task_group": "BixBench/bix-32-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-32-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "a94b7008-bb9a-4a46-ebfb-4afdfdd299d5",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "26e7dbb0b0345d6599159145551c2dd28e72e7ef13a0a57f73003e73de247611",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Perform direction-specific KEGG ORA per mutant and intersect significant pathways with matching direction; ORA and ranked-set enrichment differ."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Perform direction-specific KEGG ORA per mutant and intersect significant pathways with matching direction; ORA and ranked-set enrichment differ.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-53-q5",
+      "source_tags": [
+        "Differential Expression Analysis",
+        "RNA-seq",
+        "Transcriptomics",
+        "Sequence Analysis"
+      ],
+      "workflow_family": "rnaseq-sensitivity-and-enrichment",
+      "required_stages": [
+        "fit a replicate-aware treatment count contrast",
+        "shrink fold changes and apply the stated filters",
+        "repeat the fit under the specified replicate exclusion when requested",
+        "test and rank fixed KEGG or WikiPathways gene sets"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample/batch metadata",
+        "versioned pathway libraries"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "apeglm",
+        "GSEApy"
+      ],
+      "source_task_id": "bix-53-q5",
+      "shared_task_group": "BixBench/bix-53-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-53-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "308d53bf-1513-4a09-913b-3a1112f94e7b",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "b6511359d1cccf7be33e51ac84ce8533d20989b777c5b79573c6ca781c795723",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-12-q4",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-parsimony-informative",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute parsimony-informative site counts and fractions for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-12-q4",
+      "shared_task_group": "BixBench/bix-12-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d38392ec-84b8-485d-ab02-b8788e6f1f43",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "9c63cfe85d3c0507d07ce63b23b0124180dc231d873137d6853dcbe312ce384b",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-16-q1",
+      "source_tags": [
+        "Transcriptomics",
+        "Functional Genomics"
+      ],
+      "workflow_family": "expression-essentiality-association",
+      "required_stages": [
+        "align sample and gene identifiers across expression and dependency matrices",
+        "apply the specified expression transformation",
+        "compute gene-wise rank associations",
+        "adjust the tested family of p-values and summarize associations"
+      ],
+      "required_formats": [
+        "TPM expression matrix",
+        "dependency-score matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-16-q1",
+      "shared_task_group": "BixBench/bix-16-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "bda54b38-9b49-4009-aad6-d5f52675438a",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "96172fa75a517be5982ae85a348c984d2f6c524a6411f55ea9260e68e47b5a6b",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-41-q5",
+      "source_tags": [
+        "Imaging"
+      ],
+      "workflow_family": "colony-control-comparisons",
+      "required_stages": [
+        "join replicate colony measurements and culture conditions",
+        "fit group means with a common control",
+        "apply simultaneous Dunnett comparisons",
+        "report adjusted evidence and condition-specific means"
+      ],
+      "required_formats": [
+        "colony-measurement table",
+        "culture metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-41-q5",
+      "shared_task_group": "BixBench/bix-41-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-41-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "8b462015-86ab-434f-29e1-04dda1588031",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "9360bb14a4cb50974e4a90149468c858a3029813ebedf543116bc6cbc1075308",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-43-q4",
+      "source_tags": [
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics"
+      ],
+      "workflow_family": "combination-treatment-enrichment",
+      "required_stages": [
+        "fit the combination-treatment count contrast",
+        "apply the exact significance and effect cutoffs",
+        "map genes to fixed GO or Reactome libraries",
+        "test enrichment and summarize overlap or odds ratios"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "treatment metadata",
+        "GO/Reactome gene sets"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "GSEApy"
+      ],
+      "source_task_id": "bix-43-q4",
+      "shared_task_group": "BixBench/bix-43-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-43-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "15ff11e5-2db1-45b6-b3a3-46bc2a74b821",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "3ce76c51b9affea0a18c6bc2f2c125f3d7ca24605eac5158827cc321a210a8af",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Distinguish pathway overlap count from the frozen pathway-set denominator; reproduce the declared contrast, thresholds and Reactome release."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish pathway overlap count from the frozen pathway-set denominator; reproduce the declared contrast, thresholds and Reactome release.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-37-q1",
+      "source_tags": [
+        "Differential Expression Analysis",
+        "RNA-seq",
+        "Proteomics"
+      ],
+      "workflow_family": "paired-proteomic-contrasts",
+      "required_stages": [
+        "join protein identifiers and tissue-group metadata",
+        "handle measurement missingness under an explicit policy",
+        "estimate tumor-versus-normal effects and multiple-testing-adjusted significance",
+        "report target proteins or differential-protein counts"
+      ],
+      "required_formats": [
+        "protein-intensity matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-37-q1",
+      "shared_task_group": "BixBench/bix-37-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-37-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "40cbef03-b5c3-4448-b00f-0ba2965dea9b",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "bc88f1264d6174df1563bd648b823816b89d04bb388cc69ea31724788640f7fd",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-52-q7",
+      "source_tags": [
+        "Epigenomics"
+      ],
+      "workflow_family": "chromosomal-cpg-density",
+      "required_stages": [
+        "join CpG coordinates, methylation fractions and chromosome lengths",
+        "apply extreme-methylation thresholds",
+        "deduplicate genomic sites across samples",
+        "compute chromosome-normalized densities or distribution tests"
+      ],
+      "required_formats": [
+        "methylation table or bedGraph",
+        "assembly chromosome sizes"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-52-q7",
+      "shared_task_group": "BixBench/bix-52-q7",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q7",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "4dceea58-7d66-4576-bfc6-88c026d5b7a9",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "d167ebfab9d62283e9fedc241a62a91a2f6ddcc3f9b705898906391c6a9c3a76",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Count removed measurement rows, not unique CpG loci, and preserve strict methylation-threshold boundaries."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Count removed measurement rows, not unique CpG loci, and preserve strict methylation-threshold boundaries.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-22-q1",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Transcriptomics"
+      ],
+      "workflow_family": "gene-length-expression-association",
+      "required_stages": [
+        "join gene lengths and biotypes by stable identifier",
+        "select protein-coding genes and cell-type expression columns",
+        "average the specified biological samples",
+        "estimate gene-length versus expression association"
+      ],
+      "required_formats": [
+        "gene-length/biotype annotations",
+        "expression matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-22-q1",
+      "shared_task_group": "BixBench/bix-22-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-22-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "34a4ea96-c800-4c11-959e-57cdc4932c52",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "d95b7f1d74b6b4aca3af321f5666cd6f91cc3155587df90902d9e4e5cb0e3ede",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-12-q6",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-parsimony-informative",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute parsimony-informative site counts and fractions for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-12-q6",
+      "shared_task_group": "BixBench/bix-12-q6",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q6",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d38392ec-84b8-485d-ab02-b8788e6f1f43",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "55d18c0b3a7551ec2e47852f0ef59e8740ad23e4b03d2e981a1559127683fee9",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-24-q2",
+      "source_tags": [
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics",
+        "Sequence Analysis"
+      ],
+      "workflow_family": "directional-rnaseq-enrichment",
+      "required_stages": [
+        "fit the stated differential-expression contrast",
+        "separate increased and decreased genes",
+        "map identifiers to a fixed GO library and background",
+        "rank enriched functional categories"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample metadata",
+        "GO gene sets"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "GSEApy"
+      ],
+      "source_task_id": "bix-24-q2",
+      "shared_task_group": "BixBench/bix-24-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-24-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "b1b0ef00-cb15-4375-9aac-e1e53a7250c5",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "10cb354b99b0f43ba02ffec58edba710158d0ca6f23b773c94c6f8c56dfb2f33",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-46-q4",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Differential Expression Analysis",
+        "Transcriptomics"
+      ],
+      "workflow_family": "rnaseq-target-effects",
+      "required_stages": [
+        "join raw counts to strain and medium metadata",
+        "fit the specified replicate-aware contrast",
+        "resolve requested gene identifiers",
+        "extract fitted log-fold-change estimates"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "sample metadata",
+        "gene-identifier map"
+      ],
+      "required_tools": [
+        "DESeq2"
+      ],
+      "source_task_id": "bix-46-q4",
+      "shared_task_group": "BixBench/bix-46-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-46-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d37acffb-d802-4ce0-8caa-66f50667367a",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "6ca10a7c484e10f9b16abe36e0d924118447b5b317ee2bf885efb455466905de",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-37-q4",
+      "source_tags": [
+        "Differential Expression Analysis",
+        "RNA-seq",
+        "Proteomics"
+      ],
+      "workflow_family": "paired-proteomic-contrasts",
+      "required_stages": [
+        "join protein identifiers and tissue-group metadata",
+        "handle measurement missingness under an explicit policy",
+        "estimate tumor-versus-normal effects and multiple-testing-adjusted significance",
+        "report target proteins or differential-protein counts"
+      ],
+      "required_formats": [
+        "protein-intensity matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-37-q4",
+      "shared_task_group": "BixBench/bix-37-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-37-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "40cbef03-b5c3-4448-b00f-0ba2965dea9b",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "1aba0c2693042713187e6d671c68ac8bfd3a3d0d299ea5b72907cc4c770e7959",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-26-q5",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Transcriptomics",
+        "Differential Expression Analysis"
+      ],
+      "workflow_family": "multifactor-rnaseq-kegg-enrichment",
+      "required_stages": [
+        "fit replicate-aware strain and media contrasts",
+        "select differential genes under specified cutoffs",
+        "map identifiers to a fixed KEGG library",
+        "compare enriched pathways and their contributing genes"
+      ],
+      "required_formats": [
+        "gene-count matrix",
+        "design metadata",
+        "KEGG gene sets"
+      ],
+      "required_tools": [
+        "DESeq2"
+      ],
+      "source_task_id": "bix-26-q5",
+      "shared_task_group": "BixBench/bix-26-q5",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-26-q5",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "0923d260-fe1b-4fb4-4398-79edf546e584",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "d2f03458b81354c568e5abed77f690f627dba9e3c4eae0ec272d23007fa40135",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Use the stated DEG threshold and pathway adjusted-significance cutoff; compute the enriched-set difference between conditions."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use the stated DEG threshold and pathway adjusted-significance cutoff; compute the enriched-set difference between conditions.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-38-q1",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-tree",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute tree length for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-38-q1",
+      "shared_task_group": "BixBench/bix-38-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-38-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "975f3e91-53b0-44b1-ac9f-20023d9c8cd0",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "ec990d710671599243484f14b24ea7058f29098a543ae97c1f98d1a9ff87f5e0",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-45-q1",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'Genomics'",
+        "'Phylogenetics']"
+      ],
+      "workflow_family": "phylogenetic-relative",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute relative composition variability for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "aligned FASTA",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-45-q1",
+      "shared_task_group": "BixBench/bix-45-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-45-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "ebc7c8a6-ba34-46db-bf8c-b3e310434ba9",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "1df8d6c0f542932f84cf83f458daea32ed0a31659802ab967550a3ccbe232397",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-18-q3",
+      "source_tags": [
+        "Imaging"
+      ],
+      "workflow_family": "colony-morphometry",
+      "required_stages": [
+        "join biological replicate and culture-condition metadata to measurements",
+        "preserve measurement units and replicate hierarchy",
+        "summarize observed colony area or circularity",
+        "compare mutant and control conditions"
+      ],
+      "required_formats": [
+        "colony-measurement table",
+        "replicate metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-18-q3",
+      "shared_task_group": "BixBench/bix-18-q3",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-18-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d59734d2-a3e0-462a-a5fd-c8ddc11392b8",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "5516c318cf254fc2b26034f58dae41427e2b66b3cc414a0726509e73087634c3",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-11-q2",
+      "source_tags": [
+        "['Genomics'",
+        "'Phylogenetics and Evolutionary Analysis']"
+      ],
+      "workflow_family": "phylogenetic-treeness",
+      "required_stages": [
+        "join gene, taxon and group identifiers to input trees or alignments",
+        "compute treeness for each eligible gene",
+        "retain the within-gene and across-gene aggregation order",
+        "summarize biological groups or compare their distributions as requested"
+      ],
+      "required_formats": [
+        "Newick",
+        "ortholog/group metadata"
+      ],
+      "required_tools": [
+        "PhyKIT"
+      ],
+      "source_task_id": "bix-11-q2",
+      "shared_task_group": "BixBench/bix-11-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-11-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "cd811ead-7887-4369-b175-05aff4223765",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "a27bb10febe8a1e0d206ecee482bf61f8c3b7757ebbc1db0878a59aeae847f62",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-16-q4",
+      "source_tags": [
+        "Transcriptomics",
+        "Functional Genomics"
+      ],
+      "workflow_family": "expression-essentiality-association",
+      "required_stages": [
+        "align sample and gene identifiers across expression and dependency matrices",
+        "apply the specified expression transformation",
+        "compute gene-wise rank associations",
+        "adjust the tested family of p-values and summarize associations"
+      ],
+      "required_formats": [
+        "TPM expression matrix",
+        "dependency-score matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-16-q4",
+      "shared_task_group": "BixBench/bix-16-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "bda54b38-9b49-4009-aad6-d5f52675438a",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "41e8fc2121acfa5068af2a5f6cbe9d4970320d27b3134595070d3d2c4d350f8e",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-22-q4",
+      "source_tags": [
+        "Sequence Analysis",
+        "RNA-seq",
+        "Transcriptomics"
+      ],
+      "workflow_family": "gene-length-expression-association",
+      "required_stages": [
+        "join gene lengths and biotypes by stable identifier",
+        "select protein-coding genes and cell-type expression columns",
+        "average the specified biological samples",
+        "estimate gene-length versus expression association"
+      ],
+      "required_formats": [
+        "gene-length/biotype annotations",
+        "expression matrix",
+        "sample metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-22-q4",
+      "shared_task_group": "BixBench/bix-22-q4",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-22-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "34a4ea96-c800-4c11-959e-57cdc4932c52",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "d835f729dcd6b7e0b15b6df32b528cbd843733913eaf37fee2ebc6ab1be552a7",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Join expressed protein-coding genes to lengths, apply the total-count filter, and correlate length with sample-mean expression."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Join expressed protein-coding genes to lengths, apply the total-count filter, and correlate length with sample-mean expression.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-61-q2",
+      "source_tags": [
+        "['Whole Genome Sequencing (WGS)'",
+        "'SNP Analysis'",
+        "'Genomics'",
+        "'Antimicrobial Resistance']"
+      ],
+      "workflow_family": "bacterial-read-to-variant-workflow",
+      "required_stages": [
+        "trim paired reads with the stated adapter and quality policy",
+        "map retained reads to the matching reference with read groups",
+        "sort/index alignments and measure depth"
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "reference FASTA",
+        "adapter FASTA",
+        "BAM/BAI",
+        "VCF"
+      ],
+      "required_tools": [
+        "Trimmomatic",
+        "BWA",
+        "SAMtools",
+        "GATK"
+      ],
+      "source_task_id": "bix-61-q2",
+      "shared_task_group": "BixBench/bix-61-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-61-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "37829656-f147-5fd2-8f10-40fa15cfdf03",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "9bb2a23bce033101b00e64658923441ba15253384b65f6b874dad9af48b43cda",
+      "source_eval_mode": "llm_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Preserve the specified BWA-MEM read group and calculate genome-wide mean depth with explicit treatment of zero-coverage positions."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve the specified BWA-MEM read group and calculate genome-wide mean depth with explicit treatment of zero-coverage positions.",
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-51-q8",
+      "source_tags": [
+        "Other"
+      ],
+      "workflow_family": "clinical-logistic-regression",
+      "required_stages": [
+        "join binary clinical outcome and eligible covariates",
+        "encode success and reference categories",
+        "fit the requested single- or multi-predictor binomial model",
+        "derive coefficients, Wald evidence, AIC or predicted probability"
+      ],
+      "required_formats": [
+        "clinical outcome table",
+        "patient covariates"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-51-q8",
+      "shared_task_group": "BixBench/bix-51-q8",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-51-q8",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "93f63fb8-b56c-4ad1-8d3b-d651e2107423",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "c7bb46cc2e7abc72a546beb2d86a9d9ac291de498bd6c693cc2696f099beaf3a",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-17-q2",
+      "source_tags": [
+        "Genomics",
+        "Genomic Variant Analysis"
+      ],
+      "workflow_family": "clinical-variant-cohort-analysis",
+      "required_stages": [
+        "join sample genotypes, functional annotations and patient metadata",
+        "apply nonreference, coding-region and eligible-gene filters",
+        "retain sample-level denominators",
+        "summarize variant burden or test cohort differences"
+      ],
+      "required_formats": [
+        "VCF or annotated variant table",
+        "gene annotations",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-17-q2",
+      "shared_task_group": "BixBench/bix-17-q2",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-17-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "1cf79c8c-fb8c-453c-8788-c8958ab6f152",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "476f359c946b088141523c758381625bffc8217b14ddac02984efde972527320",
+      "source_eval_mode": "str_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    },
+    {
+      "task_id": "bix-18-q1",
+      "source_tags": [
+        "Imaging"
+      ],
+      "workflow_family": "colony-morphometry",
+      "required_stages": [
+        "join biological replicate and culture-condition metadata to measurements",
+        "preserve measurement units and replicate hierarchy",
+        "summarize observed colony area or circularity",
+        "compare mutant and control conditions"
+      ],
+      "required_formats": [
+        "colony-measurement table",
+        "replicate metadata"
+      ],
+      "required_tools": [],
+      "source_task_id": "bix-18-q1",
+      "shared_task_group": "BixBench/bix-18-q1",
+      "related_task": {
+        "benchmark": "BixBench",
+        "task_id": "bix-18-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "source_capsule_id": "d59734d2-a3e0-462a-a5fd-c8ddc11392b8",
+      "source_metadata_url": "https://huggingface.co/datasets/phylobio/BixBench-Verified-50/blob/c77fc8ea4611b546947b8a4710ed36ab72ee233c/BixBench-Verified-50.jsonl",
+      "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+      "source_question_sha256": "619b0c8047389540594821429420bb5d5e9de62cdcf1a7ba0d84e25760a5ec5b",
+      "source_eval_mode": "range_verifier",
+      "status": "unmapped",
+      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "scientific_decisions": [
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+      ]
+    }
+  ]
+}
