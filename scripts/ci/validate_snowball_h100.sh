@@ -20,7 +20,7 @@ uv run iris --cluster=marin job run \
   --sync-package marin-levanter \
   --extra gpu \
   --job-name "$job_name" \
-  -e JAX_PLATFORMS cuda \
+  -e JAX_PLATFORMS cuda,cpu \
   -e PYTEST_XDIST_AUTO_NUM_WORKERS 1 \
   -- bash -lc '
     set -e
