@@ -5,14 +5,15 @@
 
 Beyond the progress and loss rules: the telemetry path itself, the optimizer, MoE
 routing, throughput, evaluation, and Iris retries. One `levanter.metrics` scan per
-bridge cache interval feeds all three projections. The telemetry and optimizer
+bridge cache interval feeds all three projections; evaluation history comes from
+W&B instead (see `EvalHistory`). The telemetry and optimizer
 ones page; the health one announces in Slack without opening a triage session.
 See docs/ops/hero-run-health-alerts.md.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
@@ -35,6 +36,7 @@ from hero_runs import (
 )
 from loss_spikes import LossWindows, loss_spike_reason, windows_by_run
 from vllm_observability import sql_string
+from wandb_source import LoggedPoint
 
 # Past this the rollup no longer enrolls a run, so the rules that read it go blind.
 IRIS_STATE_STALE_AGE = timedelta(minutes=5)
@@ -50,7 +52,10 @@ ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
 EVAL_LOSS_RELATIVE_INCREASE = 0.02
-EVAL_HISTORY_SAMPLES = 3
+# The newest evaluation and the two before it.
+EVAL_HISTORY_LENGTH = 3
+# The W&B key of the evaluation loss the regression check reads.
+EVAL_LOSS_METRIC = "eval_dropless/paloma/macro_loss"
 
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"
@@ -60,7 +65,6 @@ _ROUTER_BIAS_MAX = "train_router_bias_max"
 _ROUTER_BIAS_MIN = "train_router_bias_min"
 _TOKENS_PER_SECOND = "throughput_tokens_per_second"
 _MFU = "throughput_mfu"
-_EVAL_LOSS = "eval_dropless_paloma_macro_loss"
 
 _SIGNAL_METRICS = (
     PHASE_METRIC,
@@ -72,15 +76,14 @@ _SIGNAL_METRICS = (
     _ROUTER_BIAS_MIN,
     _TOKENS_PER_SECOND,
     _MFU,
-    _EVAL_LOSS,
 )
 # The floor each throughput check compares its window against.
 _FLOORS = {_TOKENS_PER_SECOND: TOKENS_PER_SECOND_MIN, _MFU: MFU_MIN}
 
 _SIGNAL_LOOKBACK = timedelta(minutes=65)
-# The phase heartbeat and the evaluations need their own window: an outage is
-# measured from the last heartbeat however long ago it was, and evaluations are
-# hours apart. Both are one row at a time, so the wider scan stays cheap.
+# The phase heartbeat needs its own window: an outage is measured from the last
+# heartbeat however long ago it was. It is one row a minute, so the wider scan
+# stays cheap.
 _LIVENESS_LOOKBACK = timedelta(hours=24)
 HEALTH_WINDOW = timedelta(minutes=15)
 # Below this a median says more about sampling than about the run.
@@ -110,8 +113,6 @@ class MetricSignal:
 
     latest: float
     observed_at: datetime
-    previous: float | None
-    two_samples_ago: float | None
     recent_samples: int
     recent_total: float
     recent_below_floor: int
@@ -126,6 +127,28 @@ class RunSignals:
 
 
 Signals = dict[tuple[str, str], RunSignals]
+
+
+@dataclass(frozen=True)
+class EvalHistory:
+    """A run's newest evaluation losses in step order, oldest first, across its fork lineage.
+
+    Read from W&B, not finelog; docs/ops/hero-run-health-alerts.md explains why.
+    """
+
+    losses: tuple[float, ...]
+    latest_at: datetime
+
+
+def eval_history(points: Sequence[LoggedPoint]) -> EvalHistory | None:
+    """Fold step-ordered W&B points; None for a run with no evaluation."""
+    if not points:
+        return None
+    recent = points[-EVAL_HISTORY_LENGTH:]
+    return EvalHistory(
+        losses=tuple(point.value for point in recent),
+        latest_at=datetime.fromtimestamp(recent[-1].timestamp, UTC),
+    )
 
 
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
@@ -150,8 +173,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
     health_since = sql_epoch_ms(now - HEALTH_WINDOW)
     end = sql_epoch_ms(now)
-    liveness_metric_names = f"'{PHASE_METRIC}', '{_EVAL_LOSS}'"
-    health_metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS if name not in (PHASE_METRIC, _EVAL_LOSS))
+    health_metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS if name != PHASE_METRIC)
     common_predicate = f"{run_predicate} AND ({execution_predicate}) AND process_index = 0"
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
@@ -160,7 +182,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
         f"WHERE {common_predicate} "
-        f"AND name IN ({liveness_metric_names}) "
+        f"AND name = '{PHASE_METRIC}' "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
         "UNION ALL "
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
@@ -177,10 +199,8 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "), newest AS ("
         "SELECT origin_cluster, run_id, execution_uid, name, "
         "MAX(CASE WHEN rn = 1 THEN value END) AS latest_value, "
-        "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at, "
-        "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value, "
-        f"MAX(CASE WHEN rn = {EVAL_HISTORY_SAMPLES} THEN value END) AS two_samples_ago_value "
-        f"FROM ranked WHERE rn <= {EVAL_HISTORY_SAMPLES} "
+        "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at "
+        "FROM ranked WHERE rn = 1 "
         "GROUP BY origin_cluster, run_id, execution_uid, name"
         "), health_window AS ("
         "SELECT origin_cluster, run_id, name, COUNT(*) AS recent_samples, "
@@ -191,7 +211,6 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         ") "
         "SELECT newest.origin_cluster AS cluster, newest.run_id, newest.execution_uid, newest.name, "
         "newest.latest_value, to_timestamp_millis(newest.latest_at) AS observed_at, "
-        "newest.previous_value, newest.two_samples_ago_value, "
         "COALESCE(health_window.recent_samples, 0) AS recent_samples, "
         "COALESCE(health_window.recent_total, 0) AS recent_total, "
         "COALESCE(health_window.recent_below_floor, 0) AS recent_below_floor "
@@ -271,8 +290,6 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
         run.metrics[str(row["name"])] = MetricSignal(
             latest=latest,
             observed_at=as_utc(row["observed_at"]),
-            previous=as_number(row["previous_value"]),
-            two_samples_ago=as_number(row["two_samples_ago_value"]),
             recent_samples=int(row["recent_samples"] or 0),
             recent_total=float(row["recent_total"] or 0.0),
             recent_below_floor=int(row["recent_below_floor"] or 0),
@@ -394,9 +411,16 @@ def _loss_jumped(windows: LossWindows | None) -> bool:
 
 
 def health_alert_rows(
-    runs: tuple[WatchedRun, ...], signals: Signals, retry_events: pa.Table, now: datetime
+    runs: tuple[WatchedRun, ...],
+    signals: Signals,
+    retry_events: pa.Table,
+    evaluations: Mapping[str, EvalHistory],
+    now: datetime,
 ) -> list[dict]:
-    """Project the routing, throughput, evaluation, and Iris signals an operator reads."""
+    """Project the routing, throughput, evaluation, and Iris signals an operator reads.
+
+    `evaluations` is keyed by run ID; a run without an entry skips the evaluation check.
+    """
     now = as_utc(now)
     retries = _retries_by_root(retry_events)
 
@@ -417,7 +441,7 @@ def health_alert_rows(
             reasons.append("throughput_low")
         if _mostly_below_floor(metrics.get(_MFU)):
             reasons.append("mfu_low")
-        if _evaluation_regressed(metrics.get(_EVAL_LOSS), now):
+        if _evaluation_regressed(evaluations.get(run.run_id), now):
             reasons.append("eval_regressed")
         # No row at all means a controller that publishes no rollup (the GCE
         # clusters), not a rollup that broke.
@@ -462,14 +486,15 @@ def _mostly_below_floor(signal: MetricSignal | None) -> bool:
     return signal.recent_below_floor * 2 > signal.recent_samples
 
 
-def _evaluation_regressed(signal: MetricSignal | None, now: datetime) -> bool:
+def _evaluation_regressed(history: EvalHistory | None, now: datetime) -> bool:
     """True when evaluation loss sustains a rise or jumps by more than two percent."""
-    signal = _fresh(signal, now, _EVAL_FRESHNESS)
-    if signal is None:
+    if history is None or now - history.latest_at > _EVAL_FRESHNESS:
         return False
-    if signal.two_samples_ago is not None and isfinite(signal.two_samples_ago):
-        if signal.latest > signal.two_samples_ago:
-            return True
-    if signal.previous is None or not isfinite(signal.previous) or signal.previous <= 0:
+    *earlier, latest = history.losses
+    if not isfinite(latest):
         return False
-    return signal.latest > signal.previous * (1 + EVAL_LOSS_RELATIVE_INCREASE)
+    if len(earlier) == EVAL_HISTORY_LENGTH - 1 and isfinite(earlier[0]) and latest > earlier[0]:
+        return True
+    if not earlier or not isfinite(earlier[-1]) or earlier[-1] <= 0:
+        return False
+    return latest > earlier[-1] * (1 + EVAL_LOSS_RELATIVE_INCREASE)
