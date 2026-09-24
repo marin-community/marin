@@ -1,0 +1,2670 @@
+{
+  "benchmark": "SciGym",
+  "source_revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
+  "source_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/",
+  "scope": "All 350 system identifiers from the agentic task release. One shared protocol assessed; individual biological systems and missing mechanisms are uninspected. Source subset names are retained as metadata, not training difficulty labels.",
+  "inventory_completeness": {
+    "system_ids": 350,
+    "source_subsets": {
+      "small": 137,
+      "large": 213
+    },
+    "shared_protocol_patterns": 1,
+    "individual_system_inputs_reviewed": 0
+  },
+  "enumeration": "The two Parquet files were downloaded, but only folder_name was projected into Python. truth_sedml, partial and truth_xml columns were not loaded or used for authoring. Evaluation-run traces were not downloaded.",
+  "source_files": [
+    {
+      "path": "data/small-00000-of-00001.parquet",
+      "url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet",
+      "bytes": 399451,
+      "sha256": "7e7e33afd953a6eedb8a43548c4a41ab1b9077b5c7f729484aae6a9aa41e5b76",
+      "records": 137,
+      "schema": "folder_name: string\ntruth_sedml: string\npartial: string\ntruth_xml: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"folder_name\": {\"dtype\": \"string\", \"' + 175",
+      "loaded_columns": [
+        "folder_name"
+      ],
+      "excluded_columns": [
+        "truth_sedml",
+        "partial",
+        "truth_xml"
+      ]
+    },
+    {
+      "path": "data/large-00000-of-00001.parquet",
+      "url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet",
+      "bytes": 3516207,
+      "sha256": "ef4a0f53a23d40579f4b23308f8def7164ae6a20ea05acb80fad4afdc8673fe9",
+      "records": 213,
+      "schema": "folder_name: string\ntruth_sedml: string\npartial: string\ntruth_xml: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"folder_name\": {\"dtype\": \"string\", \"' + 175",
+      "loaded_columns": [
+        "folder_name"
+      ],
+      "excluded_columns": [
+        "truth_sedml",
+        "partial",
+        "truth_xml"
+      ]
+    }
+  ],
+  "source_card": {
+    "url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/README.md",
+    "sha256": "5061330fe1cc297e0d75d5b94532eec62d611a50f3fcaf4b1111b558497fcfd2"
+  },
+  "license_and_lineage": "No explicit dataset license was found in the inspected card metadata. Reuse remains unresolved. No reference models, benchmark prompts, answers or biological fixtures are vendored. Source observations are simulated from curated models; an adaptation must use independent observed biological data to enter final training.",
+  "evaluation_run_count": {
+    "systems": 137,
+    "rows": 2466,
+    "source": "https://huggingface.co/datasets/h4duan/scigym-eval",
+    "interpretation": "Repeated model-run records are not distinct tasks. Counts are from the paper and public dataset schema, not a downloaded trace inventory."
+  },
+  "source_grading": {
+    "repository": "h4duan/SciGym",
+    "revision": "88a7b93609e35b6ecb4eb343d816d6ff09256c6a",
+    "inspection": "Public prompts, question/experiment interfaces, example configuration and evaluator implementation inspected. No execution; simulator and SBML implementation details remain unreviewed.",
+    "files": [
+      {
+        "path": "README.md",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/README.md",
+        "sha256": "1f9f3a408764da24253cd5ce8cf2e655b5c712137d31cb31ff4d53a5612df7a7",
+        "bytes": 3053
+      },
+      {
+        "path": "pyproject.toml",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/pyproject.toml",
+        "sha256": "74866db947606d85097c5fc751a009f73cb82beed7fec4a175766ee593eff0a3",
+        "bytes": 833
+      },
+      {
+        "path": "configs/default.yml",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/configs/default.yml",
+        "sha256": "fff34b138469611a1d2ca8e14f1754a430810e6c67b4db6b42f5835dab119856",
+        "bytes": 325
+      },
+      {
+        "path": "scigym/prompts/template.md",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
+        "sha256": "31915b307b1d83be346d81c5d64327933b25c5454b1c49503fa8e9089dfdd07a",
+        "bytes": 4517
+      },
+      {
+        "path": "scigym/prompts/customized_functions_sim.md",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/customized_functions_sim.md",
+        "sha256": "ee120d52d6c22801890b26403fd93aa6e9cca5dcb70bff2d083cd8e1310c8274",
+        "bytes": 454
+      },
+      {
+        "path": "scigym/prompts/experiment_actions_perturb.md",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/experiment_actions_perturb.md",
+        "sha256": "61fcbcaceef1d45960dfc1a0d2aa0f8efc55ae0ffdfa4aea87ae5724e4f1c5c4",
+        "bytes": 668
+      },
+      {
+        "path": "scigym/eval/evaluator.py",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/eval/evaluator.py",
+        "sha256": "8d90fcf888f441ab8d37f5f549efa1d388dc663640c351e2a6c512ec53161c76",
+        "bytes": 11789
+      },
+      {
+        "path": "scigym/eval/utils.py",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/eval/utils.py",
+        "sha256": "4937e2dc81f462376fa3c41d27520440d5b9c0906487492920c2015a84ff17ad",
+        "bytes": 18829
+      },
+      {
+        "path": "scigym/data/question.py",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/data/question.py",
+        "sha256": "cd9aeea5d3701a74f852b316b28513b1901b8d4e556619f090eed195fd059384",
+        "bytes": 2197
+      },
+      {
+        "path": "scigym/actions/experiment.py",
+        "url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/actions/experiment.py",
+        "sha256": "5934855cb1375f89c5657541efb2c4eb6131fcbf4aad17c40702cfd7fb24fff9",
+        "bytes": 4246
+      }
+    ],
+    "default_metrics": [
+      "Observed-trajectory SMAPE",
+      "SBML XML string lengths",
+      "Added-reaction reactant/product and reactant/product/modifier set precision, recall and F1"
+    ],
+    "llm_judge": false,
+    "static_code_findings": [
+      {
+        "path": "scigym/eval/utils.py",
+        "function": "get_reaction_hash / extract_reaction_hashes",
+        "finding": "Reaction matching hashes sets of species IDs by role. It ignores stoichiometric coefficients, repeated reactions, reversibility and kinetic laws; exact role-set recovery is not complete chemical recovery."
+      },
+      {
+        "path": "scigym/eval/utils.py",
+        "function": "compute_smape",
+        "finding": "Uses mean abs(a-b)/(abs(a)+abs(b)), without a factor of two or 100; zero/zero contributes zero and mismatched shapes return one. Explicit finite-value checks are needed for adaptation."
+      },
+      {
+        "path": "scigym/eval/utils.py",
+        "function": "compute_dict_smape",
+        "finding": "Appends only keys present in each dictionary. Contrary to its zero-fill comment, missing species are not aligned or filled; equal-sized mismatched species sets can be compared positionally."
+      },
+      {
+        "path": "scigym/eval/evaluator.py",
+        "function": "evaluate_smape_noise",
+        "finding": "Computes a perturbed true_traj but scores the perturbed prediction against self.true_traj, the unperturbed trajectory. This static finding has not been reproduced by execution."
+      },
+      {
+        "path": "scigym/eval/evaluator.py",
+        "function": "evaluate_smape_noise",
+        "finding": "Simulation exceptions skip trials, and an empty successful-trial list yields zero mean/min/max error. A new verifier must require completed trials and reject failed simulations."
+      }
+    ],
+    "adaptation_requirements": [
+      "Match species identities, units and time grids before numerical comparison.",
+      "Score each intervention against its matching reference and report completed-trial counts.",
+      "Freeze intervention seeds and simulator versions; reject nonfinite or failed outputs.",
+      "Separate reaction topology, kinetics and predictive performance; trajectory agreement does not establish a unique mechanism."
+    ]
+  },
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "Identifier enumerated; shared protocol reviewed; individual system input and endpoint uninspected.",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null
+  },
+  "patterns": {
+    "iterative-mechanism-recovery": {
+      "scientific_decision": "Compare candidate mechanisms using designed interventions and prediction of system dynamics.",
+      "required_stages": [
+        "inspect an incomplete SBML model and declared simulation settings",
+        "choose permitted observations or initial-concentration interventions",
+        "analyze resulting species time courses and simulate candidate models",
+        "revise missing mechanisms and submit a complete SBML model",
+        "evaluate structural recovery and predictive agreement under defined conditions"
+      ],
+      "required_formats": [
+        "SBML XML",
+        "SED-ML",
+        "species time-course tables"
+      ],
+      "required_tools": [
+        "python-libsbml",
+        "Tellurium",
+        "libRoadRunner"
+      ],
+      "output_artifacts": [
+        "complete proposed SBML model",
+        "intervention definitions and species trajectories",
+        "structural and predictive score tables"
+      ],
+      "scientific_constraints": [
+        "The prompt forbids changes to boundary/constant species.",
+        "A fitted trajectory can be compatible with multiple mechanisms; do not equate fit with unique causal recovery.",
+        "The public source uses simulated measurements. Observed perturbation/time-course data are required for a real-data training adaptation."
+      ],
+      "remaining_gaps": [
+        "Review each system-specific scientific endpoint before assigning coverage; 350 identifiers share one inspected protocol.",
+        "Resolve data rights and obtain independent observed time courses with intervention, units and replicate metadata.",
+        "Specify and validate an offline connected workflow within 30 minutes, with input-reading oracle and complete artifact checks.",
+        "Correct the recorded scorer limitations in any independent verifier; the upstream scorer has not been executed here."
+      ]
+    }
+  },
+  "workflow_patterns": {
+    "iterative-mechanism-recovery": [
+      "BIOMD0000000932",
+      "BIOMD0000000184",
+      "BIOMD0000000894",
+      "BIOMD0000000624",
+      "BIOMD0000000319",
+      "BIOMD0000001031",
+      "BIOMD0000000031",
+      "BIOMD0000000919",
+      "BIOMD0000001022",
+      "BIOMD0000000079",
+      "BIOMD0000000813",
+      "BIOMD0000000914",
+      "BIOMD0000000772",
+      "BIOMD0000000821",
+      "BIOMD0000000036",
+      "BIOMD0000000041",
+      "BIOMD0000000363",
+      "BIOMD0000001036",
+      "BIOMD0000000629",
+      "BIOMD0000000753",
+      "BIOMD0000000893",
+      "BIOMD0000000970",
+      "BIOMD0000000899",
+      "BIOMD0000000877",
+      "BIOMD0000000800",
+      "BIOMD0000000084",
+      "BIOMD0000000785",
+      "BIOMD0000000935",
+      "BIOMD0000000838",
+      "BIOMD0000000462",
+      "BIOMD0000000486",
+      "BIOMD0000000322",
+      "BIOMD0000000258",
+      "BIOMD0000001045",
+      "BIOMD0000001038",
+      "BIOMD0000000080",
+      "BIOMD0000000909",
+      "BIOMD0000000454",
+      "BIOMD0000000897",
+      "BIOMD0000001013",
+      "BIOMD0000000922",
+      "BIOMD0000000045",
+      "BIOMD0000000733",
+      "BIOMD0000000910",
+      "BIOMD0000000967",
+      "BIOMD0000000405",
+      "BIOMD0000000591",
+      "BIOMD0000000231",
+      "BIOMD0000000795",
+      "BIOMD0000000771",
+      "BIOMD0000000459",
+      "BIOMD0000001035",
+      "BIOMD0000000360",
+      "BIOMD0000000283",
+      "BIOMD0000000657",
+      "BIOMD0000001048",
+      "BIOMD0000000485",
+      "BIOMD0000000156",
+      "BIOMD0000000461",
+      "BIOMD0000000762",
+      "BIOMD0000001037",
+      "BIOMD0000000758",
+      "BIOMD0000000876",
+      "BIOMD0000000906",
+      "BIOMD0000000892",
+      "BIOMD0000000760",
+      "BIOMD0000000487",
+      "BIOMD0000001024",
+      "BIOMD0000000191",
+      "BIOMD0000000072",
+      "BIOMD0000000435",
+      "BIOMD0000000233",
+      "BIOMD0000001016",
+      "BIOMD0000000927",
+      "BIOMD0000000957",
+      "BIOMD0000000920",
+      "BIOMD0000000827",
+      "BIOMD0000000850",
+      "BIOMD0000000912",
+      "BIOMD0000000438",
+      "BIOMD0000001023",
+      "BIOMD0000000029",
+      "BIOMD0000000159",
+      "BIOMD0000000413",
+      "BIOMD0000000357",
+      "BIOMD0000000767",
+      "BIOMD0000000783",
+      "BIOMD0000000082",
+      "BIOMD0000000456",
+      "BIOMD0000000066",
+      "BIOMD0000000755",
+      "BIOMD0000000728",
+      "BIOMD0000000891",
+      "BIOMD0000000458",
+      "BIOMD0000000068",
+      "BIOMD0000000282",
+      "BIOMD0000000361",
+      "BIOMD0000000937",
+      "BIOMD0000000460",
+      "BIOMD0000000027",
+      "BIOMD0000000157",
+      "BIOMD0000000484",
+      "BIOMD0000000830",
+      "BIOMD0000000847",
+      "BIOMD0000000359",
+      "BIOMD0000000763",
+      "BIOMD0000000888",
+      "BIOMD0000000916",
+      "BIOMD0000000882",
+      "BIOMD0000000192",
+      "BIOMD0000000742",
+      "BIOMD0000000043",
+      "BIOMD0000000799",
+      "BIOMD0000000777",
+      "BIOMD0000000793",
+      "BIOMD0000000573",
+      "BIOMD0000000039",
+      "BIOMD0000000044",
+      "BIOMD0000000923",
+      "BIOMD0000000732",
+      "BIOMD0000001057",
+      "BIOMD0000000092",
+      "BIOMD0000000966",
+      "BIOMD0000000885",
+      "BIOMD0000000911",
+      "BIOMD0000000098",
+      "BIOMD0000000076",
+      "BIOMD0000000329",
+      "BIOMD0000000224",
+      "BIOMD0000000663",
+      "BIOMD0000000713",
+      "BIOMD0000000323",
+      "BIOMD0000000483",
+      "BIOMD0000000626",
+      "BIOMD0000000878",
+      "BIOMD0000000455",
+      "BIOMD0000000902",
+      "BIOMD0000000037",
+      "BIOMD0000000407",
+      "BIOMD0000000470",
+      "BIOMD0000000239",
+      "BIOMD0000000334",
+      "BIOMD0000000609",
+      "BIOMD0000000690",
+      "BIOMD0000000102",
+      "BIOMD0000000442",
+      "BIOMD0000001053",
+      "BIOMD0000000395",
+      "BIOMD0000000631",
+      "BIOMD0000000123",
+      "BIOMD0000000469",
+      "BIOMD0000000513",
+      "BIOMD0000000689",
+      "BIOMD0000000667",
+      "BIOMD0000000061",
+      "BIOMD0000000655",
+      "BIOMD0000000622",
+      "BIOMD0000000218",
+      "BIOMD0000000725",
+      "BIOMD0000000625",
+      "BIOMD0000000652",
+      "BIOMD0000000365",
+      "BIOMD0000000011",
+      "BIOMD0000000895",
+      "BIOMD0000000871",
+      "BIOMD0000000116",
+      "BIOMD0000000250",
+      "BIOMD0000000464",
+      "BIOMD0000000023",
+      "BIOMD0000000514",
+      "BIOMD0000001054",
+      "BIOMD0000000746",
+      "BIOMD0000000398",
+      "BIOMD0000000206",
+      "BIOMD0000000172",
+      "BIOMD0000000105",
+      "BIOMD0000000091",
+      "BIOMD0000000432",
+      "BIOMD0000000886",
+      "BIOMD0000000002",
+      "BIOMD0000000333",
+      "BIOMD0000000709",
+      "BIOMD0000000243",
+      "BIOMD0000000030",
+      "BIOMD0000000477",
+      "BIOMD0000000230",
+      "BIOMD0000000600",
+      "BIOMD0000000707",
+      "BIOMD0000000770",
+      "BIOMD0000000473",
+      "BIOMD0000000590",
+      "BIOMD0000000049",
+      "BIOMD0000000823",
+      "BIOMD0000000748",
+      "BIOMD0000000396",
+      "BIOMD0000000441",
+      "BIOMD0000000176",
+      "BIOMD0000000229",
+      "BIOMD0000000619",
+      "BIOMD0000000769",
+      "BIOMD0000000510",
+      "BIOMD0000000050",
+      "BIOMD0000000583",
+      "BIOMD0000000940",
+      "BIOMD0000000726",
+      "BIOMD0000000211",
+      "BIOMD0000000656",
+      "BIOMD0000000905",
+      "BIOMD0000000015",
+      "BIOMD0000000181",
+      "BIOMD0000000428",
+      "BIOMD0000000872",
+      "BIOMD0000000065",
+      "BIOMD0000000721",
+      "BIOMD0000000756",
+      "BIOMD0000001033",
+      "BIOMD0000000261",
+      "BIOMD0000000651",
+      "BIOMD0000000560",
+      "BIOMD0000000840",
+      "BIOMD0000000489",
+      "BIOMD0000000930",
+      "BIOMD0000000467",
+      "BIOMD0000000259",
+      "BIOMD0000000354",
+      "BIOMD0000000431",
+      "BIOMD0000000861",
+      "BIOMD0000000106",
+      "BIOMD0000000205",
+      "BIOMD0000000745",
+      "BIOMD0000000648",
+      "BIOMD0000000579",
+      "BIOMD0000000033",
+      "BIOMD0000000143",
+      "BIOMD0000000504",
+      "BIOMD0000000347",
+      "BIOMD0000001055",
+      "BIOMD0000000730",
+      "BIOMD0000000074",
+      "BIOMD0000000444",
+      "BIOMD0000000433",
+      "BIOMD0000000887",
+      "BIOMD0000000964",
+      "BIOMD0000000708",
+      "BIOMD0000000332",
+      "BIOMD0000000476",
+      "BIOMD0000000921",
+      "BIOMD0000000046",
+      "BIOMD0000000492",
+      "BIOMD0000000754",
+      "BIOMD0000000364",
+      "BIOMD0000000653",
+      "BIOMD0000000160",
+      "BIOMD0000000089",
+      "BIOMD0000000067",
+      "BIOMD0000000010",
+      "BIOMD0000000788",
+      "BIOMD0000000766",
+      "BIOMD0000000616",
+      "BIOMD0000000661",
+      "BIOMD0000000226",
+      "BIOMD0000000515",
+      "BIOMD0000000028",
+      "BIOMD0000000022",
+      "BIOMD0000000055",
+      "BIOMD0000000848",
+      "BIOMD0000000412",
+      "BIOMD0000000465",
+      "BIOMD0000000468",
+      "BIOMD0000000565",
+      "BIOMD0000000052",
+      "BIOMD0000000581",
+      "BIOMD0000000761",
+      "BIOMD0000001004",
+      "BIOMD0000000666",
+      "BIOMD0000000221",
+      "BIOMD0000000427",
+      "BIOMD0000000017",
+      "BIOMD0000000219",
+      "BIOMD0000000213",
+      "BIOMD0000000623",
+      "BIOMD0000000654",
+      "BIOMD0000000471",
+      "BIOMD0000000495",
+      "BIOMD0000000602",
+      "BIOMD0000001017",
+      "BIOMD0000000073",
+      "BIOMD0000000539",
+      "BIOMD0000000880",
+      "BIOMD0000000434",
+      "BIOMD0000000443",
+      "BIOMD0000000174",
+      "BIOMD0000000103",
+      "BIOMD0000000630",
+      "BIOMD0000000647",
+      "BIOMD0000000394",
+      "BIOMD0000001052",
+      "BIOMD0000000093",
+      "BIOMD0000000430",
+      "BIOMD0000000447",
+      "BIOMD0000000099",
+      "BIOMD0000000744",
+      "BIOMD0000000204",
+      "BIOMD0000000491",
+      "BIOMD0000000572",
+      "BIOMD0000000038",
+      "BIOMD0000000032",
+      "BIOMD0000000596",
+      "BIOMD0000000792",
+      "BIOMD0000000169",
+      "BIOMD0000000013",
+      "BIOMD0000000903",
+      "BIOMD0000000873",
+      "BIOMD0000000260",
+      "BIOMD0000000720",
+      "BIOMD0000000466",
+      "BIOMD0000000151",
+      "BIOMD0000000516",
+      "BIOMD0000000482",
+      "BIOMD0000000328",
+      "BIOMD0000000662",
+      "BIOMD0000000615",
+      "BIOMD0000000355",
+      "BIOMD0000000222",
+      "BIOMD0000000325",
+      "BIOMD0000000228",
+      "BIOMD0000000941",
+      "BIOMD0000000026",
+      "BIOMD0000000588",
+      "BIOMD0000000511",
+      "BIOMD0000000210",
+      "BIOMD0000000014",
+      "BIOMD0000000676",
+      "BIOMD0000000478",
+      "BIOMD0000000048",
+      "BIOMD0000000035",
+      "BIOMD0000000042",
+      "BIOMD0000000472",
+      "BIOMD0000000639",
+      "BIOMD0000000743",
+      "BIOMD0000000209",
+      "BIOMD0000000203",
+      "BIOMD0000000397",
+      "BIOMD0000000094",
+      "BIOMD0000000100",
+      "BIOMD0000000177",
+      "BIOMD0000000530",
+      "BIOMD0000000883",
+      "BIOMD0000000440",
+      "BIOMD0000000070"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "BIOMD0000000932",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000184",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000894",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000624",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000319",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001031",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000031",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000919",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001022",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000079",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000813",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000914",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000772",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000821",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000036",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000041",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000363",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001036",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000629",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000753",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000893",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000970",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000899",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000877",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000800",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000084",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000785",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000935",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000838",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000462",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000486",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000322",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000258",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001045",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001038",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000080",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000909",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000454",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000897",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001013",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000922",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000045",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000733",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000910",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000967",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000405",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000591",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000231",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000795",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000771",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000459",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001035",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000360",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000283",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000657",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001048",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000485",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000156",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000461",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000762",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001037",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000758",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000876",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000906",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000892",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000760",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000487",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001024",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000191",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000072",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000435",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000233",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001016",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000927",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000957",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000920",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000827",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000850",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000912",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000438",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001023",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000029",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000159",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000413",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000357",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000767",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000783",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000082",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000456",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000066",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000755",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000728",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000891",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000458",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000068",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000282",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000361",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000937",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000460",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000027",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000157",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000484",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000830",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000847",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000359",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000763",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000888",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000916",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000882",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000192",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000742",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000043",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000799",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000777",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000793",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000573",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000039",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000044",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000923",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000732",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001057",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000092",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000966",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000885",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000911",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000098",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000076",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000329",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000224",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000663",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000713",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000323",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000483",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000626",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000878",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000455",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000902",
+      "source_subset": "small",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/small-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000037",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000407",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000470",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000239",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000334",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000609",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000690",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000102",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000442",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001053",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000395",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000631",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000123",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000469",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000513",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000689",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000667",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000061",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000655",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000622",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000218",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000725",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000625",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000652",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000365",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000011",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000895",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000871",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000116",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000250",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000464",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000023",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000514",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001054",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000746",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000398",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000206",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000172",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000105",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000091",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000432",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000886",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000002",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000333",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000709",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000243",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000030",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000477",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000230",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000600",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000707",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000770",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000473",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000590",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000049",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000823",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000748",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000396",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000441",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000176",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000229",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000619",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000769",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000510",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000050",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000583",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000940",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000726",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000211",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000656",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000905",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000015",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000181",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000428",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000872",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000065",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000721",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000756",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001033",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000261",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000651",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000560",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000840",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000489",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000930",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000467",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000259",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000354",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000431",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000861",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000106",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000205",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000745",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000648",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000579",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000033",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000143",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000504",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000347",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001055",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000730",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000074",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000444",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000433",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000887",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000964",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000708",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000332",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000476",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000921",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000046",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000492",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000754",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000364",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000653",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000160",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000089",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000067",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000010",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000788",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000766",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000616",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000661",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000226",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000515",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000028",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000022",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000055",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000848",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000412",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000465",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000468",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000565",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000052",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000581",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000761",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001004",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000666",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000221",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000427",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000017",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000219",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000213",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000623",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000654",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000471",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000495",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000602",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001017",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000073",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000539",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000880",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000434",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000443",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000174",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000103",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000630",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000647",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000394",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000001052",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000093",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000430",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000447",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000099",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000744",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000204",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000491",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000572",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000038",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000032",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000596",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000792",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000169",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000013",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000903",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000873",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000260",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000720",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000466",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000151",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000516",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000482",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000328",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000662",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000615",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000355",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000222",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000325",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000228",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000941",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000026",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000588",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000511",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000210",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000014",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000676",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000478",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000048",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000035",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000042",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000472",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000639",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000743",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000209",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000203",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000397",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000094",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000100",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000177",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000530",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000883",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000440",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    },
+    {
+      "task_id": "BIOMD0000000070",
+      "source_subset": "large",
+      "workflow_family": "iterative-mechanism-recovery",
+      "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
+    }
+  ]
+}

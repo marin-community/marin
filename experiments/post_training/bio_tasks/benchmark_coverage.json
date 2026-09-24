@@ -397,6 +397,17 @@
       "source_inventory_name": "DrugDiscoveryBench",
       "task_inventory_status": "all 82 public prompts and endpoints assessed; biological inputs and scoring uninspected",
       "advertised_full_suite_count": 82
+    },
+    "SciGym": {
+      "revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
+      "source_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/",
+      "inventory_count": 350,
+      "public_inventory_count": 350,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/scigym.json",
+      "source_inventory_name": "SciGym",
+      "task_inventory_status": "all identifiers; shared protocol and source scorer reviewed; individual system inputs uninspected"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

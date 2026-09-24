@@ -304,9 +304,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
+| [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 system IDs; shared protocol and scorer reviewed, individual systems uninspected | — |
 
-Of these 2,306 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,258 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 2,656 ID task/protocol/definition records, 47 have manually assessed component mappings,
+2,608 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -337,6 +338,15 @@ Six questions require attachments absent from the public preview; four shared
 structure accessions are tracked separately from task counts.
 Full-release rubrics use an LLM judge; independent tasks need quantitative artifact
 contracts. No mappings are assigned from category or tool-name similarity.
+
+SciGym contains 350 system IDs under one shared mechanism-recovery protocol.
+Its 2,466 public evaluation rows are repeated runs over 137 systems. The inventory
+records SBML/SED-ML formats, intervention design and trajectory validation;
+individual system inputs remain uninspected. Source measurements are simulated,
+so a training adaptation needs independent observed time courses. Static scorer
+review found an unperturbed reference used in perturbation scoring, zero-error
+summaries when every simulation fails, and incomplete species alignment. These
+findings are recorded with source revisions; they have not been reproduced by execution.
 
 LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.
 The public harness and card are inspected, but existing access lacks the dataset

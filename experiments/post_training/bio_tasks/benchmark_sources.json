@@ -4,7 +4,7 @@
   "retrieved_at": "2026-09-24",
   "scope": "Agentic (Harbor) tab only. Benchmark/protocol rows are not independent datasets or task counts. Shared questions and parent subsets must be deduplicated before coverage reporting.",
   "policy": "Preserve every OOD assignment in the agentic tab: Terminal-Bench-Science/full and lite, GeneBench/original and Pro, BioMysteryBench and SciCode. All other listed agentic sources are provisionally ID. Borrow workflow ideas; use independent biological inputs and references. Do not use OOD formulations or derived copies for authoring.",
-  "task_coverage": "benchmark_coverage.json indexes 2,306 task/protocol/definition records across 28 ID releases, with overlaps and source-specific review limits. 47 have component mappings, 2,258 are unmapped and one is excluded. No full workflow is validated. PromptBio includes all 244 public agent-facing definitions and 316 required-output declarations; biological inputs and source evaluators remain uninspected. Other releases include partial examples, planning contexts and registry definitions. These are not unique independent workflows. Remaining eligible sources are not fully inventoried. BioMysteryBench retains 90 identifiers only as OOD. BioXArena adds 76 reconciled task identities with catalog/scorer endpoint review; full prompts and data remain uninspected. TxBench public subsets add 12 PP, six antibody and four oligonucleotide task definitions; manifest/file counts differ from all three READMEs. Full suites remain unavailable. Biomni-Eval1 adds all 433 released IDs across ten source categories; its deterministic evaluator was inspected but not executed. LABBench2 advertises 1,912 rows, but its gated content is not accessible with existing access. DrugDiscoveryBench adds all 82 public preview IDs; review depth and absent attachments are explicit. All remain unmapped.",
+  "task_coverage": "benchmark_coverage.json indexes 2,656 task/protocol/definition records across 29 ID releases, with overlaps and source-specific review limits. 47 have component mappings, 2,608 are unmapped and one is excluded. No full workflow is validated. PromptBio includes all 244 public agent-facing definitions and 316 required-output declarations; biological inputs and source evaluators remain uninspected. Other releases include partial examples, planning contexts and registry definitions. These are not unique independent workflows. Remaining eligible sources are not fully inventoried. BioMysteryBench retains 90 identifiers only as OOD. BioXArena adds 76 reconciled task identities with catalog/scorer endpoint review; full prompts and data remain uninspected. TxBench public subsets add 12 PP, six antibody and four oligonucleotide task definitions; manifest/file counts differ from all three READMEs. Full suites remain unavailable. Biomni-Eval1 adds all 433 released IDs across ten source categories; its deterministic evaluator was inspected but not executed. LABBench2 advertises 1,912 rows, but its gated content is not accessible with existing access. DrugDiscoveryBench adds all 82 public preview IDs; review depth and absent attachments are explicit. All remain unmapped. SciGym adds 350 system IDs under one shared protocol; individual models remain uninspected and all records unmapped.",
   "sources": [
     {
       "sheet": "Agentic (Harbor)",
@@ -1038,11 +1038,11 @@
       "distribution": "ID",
       "assignment": "2026-09-24: preserve sheet OOD; remaining sources provisionally ID",
       "scientific_scope": "Systems-biology dry lab: infer hidden reaction mechanisms from interventions on 350 SBML systems.",
-      "grading": "Simulator-grounded recovery of system structure/parameters; use the task\u2019s official metrics.",
+      "grading": "Numerical trajectory agreement and reaction role-set recovery. Static scorer limitations are recorded in the task inventory; do not adopt the perturbation scorer unchanged.",
       "scoring_access": "Public grading",
       "source_url": "https://arxiv.org/abs/2507.02083",
       "data_url": "https://huggingface.co/datasets/h4duan/scigym-eval",
-      "inspection": "Paper v2 and public evaluation dataset schema inspected. The task release is scigym-sbml (350 systems: 137 small and 213 large); scigym-eval has 2,466 model-run rows over 137 system IDs, not 2,466 independent tasks. Task IDs have not yet been enumerated into the coverage index.",
+      "inspection": "All 350 task-release system IDs enumerated. Shared prompts, experiment interface and evaluator reviewed; individual system inputs uninspected. No evaluator execution or model calls.",
       "training_mapping_allowed": true,
       "task_release_url": "https://huggingface.co/datasets/h4duan/scigym-sbml",
       "release_evidence": {
@@ -1052,9 +1052,17 @@
         "evaluated_systems": 137,
         "evaluation_run_rows": 2466,
         "evaluation_schema_url": "https://huggingface.co/datasets/h4duan/scigym-eval",
-        "checked_at": "2026-09-24"
+        "checked_at": "2026-09-24",
+        "task_revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
+        "code_revision": "88a7b93609e35b6ecb4eb343d816d6ff09256c6a",
+        "enumerated_system_ids": 350,
+        "task_file_hashes": {
+          "data/small-00000-of-00001.parquet": "7e7e33afd953a6eedb8a43548c4a41ab1b9077b5c7f729484aae6a9aa41e5b76",
+          "data/large-00000-of-00001.parquet": "ef4a0f53a23d40579f4b23308f8def7164ae6a20ea05acb80fad4afdc8673fe9"
+        }
       },
-      "authoring_assessment": "Borrow iterative experiment-design, SBML and held-out dynamics-validation patterns. The source observations are simulated from curated models, so direct reuse does not meet the final real-observation training requirement. Full task-release and scorer implementation inspection remain pending."
+      "authoring_assessment": "Borrow experiment-design, SBML and held-out prediction patterns. Simulated source observations do not meet the final real-data requirement. Independent observed inputs, license review and a corrected deterministic artifact verifier remain required.",
+      "task_inventory": "benchmark_tasks/scigym.json"
     },
     {
       "sheet": "Agentic (Harbor)",
