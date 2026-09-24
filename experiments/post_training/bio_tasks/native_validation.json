@@ -1433,6 +1433,107 @@
           }
         ]
       }
+    },
+    {
+      "job_id": "/exedev/bio-singlecell-domain-package-fixed-20260924-075036",
+      "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+      "scope": "Single-recipe authoring subset for real-singlecell-read-qc. Full observed inputs, independent packaged oracle, row-permutation check and all 15 negative controls passed. Not a complete corpus or training release.",
+      "archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/c897fd8720bb2f60745014fd02d7ef03262a158ad69f15e91f3e0a68ce9a11e9/outputs.tar.zst",
+        "size_bytes": 214972071,
+        "sha256": "c897fd8720bb2f60745014fd02d7ef03262a158ad69f15e91f3e0a68ce9a11e9",
+        "preservation": "Durable regional GCS copy; provider size and MD5 verified."
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+        "model_calls": 0,
+        "singlecell_manifest_sha256": "2b7b779911921802413affb56521989c378d4406d749fd5ecd775c97a53cd7f2",
+        "domain_validation_sha256": "fd54d5ba05ceaa585e7e359e0e4275684558ee55e0b2ffa0adcc9d4378417b84"
+      },
+      "recipe_ids": [
+        "real-singlecell-read-qc"
+      ],
+      "build_execution": {
+        "argv": [
+          "/app/bio-sc-domain-wc0xgvb0/python/bin/python",
+          "/app/phase.py",
+          "/iris/outputs/singlecell-package-resource.json",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/singlecell-corpus",
+          "--source-cache",
+          "/app/bio-sc-domain-wc0xgvb0/source-cache",
+          "--tool-ref",
+          "22d240c8a1be1242d79f570a47c8759ca99e045d",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1",
+          "--recipes",
+          "real-singlecell-read-qc"
+        ],
+        "exit_code": 0,
+        "seconds": 591.2474002550007
+      },
+      "phase_resources": {
+        "module": "experiments.post_training.bio_tasks.build",
+        "status": "passed",
+        "seconds": 591.0899904120015,
+        "peak_rss_kib": 994496,
+        "finished_at": "2026-09-24T08:01:12.443767+00:00"
+      },
+      "benchmark_distribution_counts": {
+        "ID": 1449,
+        "OOD": 90
+      },
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-singlecell-domain-package-fixed-20260924-075036",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T08:03:01.526409+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "task_validation": {
+        "task_id": "real-singlecell-read-qc-v1-20260923-00000",
+        "task_sha256": "0c4dc0ba8f0d82e43032a79fc1a771a4eb9dab85309470710810e02d604edd01",
+        "target_sha256": "09135062ae7f96cfbfab2f62caf34e5434d948b70999c02a6129ef57e86491de",
+        "input_sha256": "eb67cddfadd67d1218e58f770651e93e28818923a13cce3c0c9299ff58f4d998",
+        "validation": {
+          "missing_artifact:cell_qc.tsv": 0.0,
+          "missing_table_row:cell_qc.tsv": 0.0,
+          "duplicate_table_row:cell_qc.tsv": 0.0,
+          "changed_table_value:cell_qc.tsv": 0.0,
+          "missing_artifact:feature_qc.tsv": 0.0,
+          "missing_table_row:feature_qc.tsv": 0.0,
+          "duplicate_table_row:feature_qc.tsv": 0.0,
+          "changed_table_value:feature_qc.tsv": 0.0,
+          "missing_artifact:filtered_counts.mtx.gz": 0.0,
+          "changed_matrix_count:filtered_counts.mtx.gz": 0.0,
+          "oracle": 1.0,
+          "row_permutation": 1.0,
+          "empty": 0.0,
+          "missing_id": 0.0,
+          "duplicate_id": 0.0,
+          "retained_every_cell": 0.0,
+          "malformed": 0.0
+        }
+      },
+      "limits": "Harbor offline container execution and independent scientific review remain pending. HMMER validation also repeated successfully in this job; the earlier native record preserves the first passed reference."
     }
   ],
   "preparation_runs": [

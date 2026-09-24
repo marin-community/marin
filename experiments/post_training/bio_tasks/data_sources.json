@@ -1093,6 +1093,17 @@
             "peak_rss_kib": 119728,
             "finished_at": "2026-09-24T07:11:15.306118+00:00"
           }
+        },
+        "packaged_validation": {
+          "job_id": "/exedev/bio-singlecell-domain-package-fixed-20260924-075036",
+          "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+          "manifest_sha256": "2b7b779911921802413affb56521989c378d4406d749fd5ecd775c97a53cd7f2",
+          "status": "passed",
+          "total_build_seconds": 591.0899904120015,
+          "peak_rss_kib": 994496,
+          "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/c897fd8720bb2f60745014fd02d7ef03262a158ad69f15e91f3e0a68ce9a11e9/outputs.tar.zst",
+          "archive_sha256": "c897fd8720bb2f60745014fd02d7ef03262a158ad69f15e91f3e0a68ce9a11e9",
+          "harbor": "pending"
         }
       },
       "data_origin": "real",

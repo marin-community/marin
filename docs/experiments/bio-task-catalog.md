@@ -231,8 +231,10 @@ and artifact grading 149–151 seconds on a reserved TRC CPU host. The
 [native record](../../experiments/post_training/bio_tasks/native_validation_runs/40ed93019b52.json)
 pins inputs, packages, artifacts and resources. This checks cell/gene filtering
 and identity-preserving sparse export. Normalization, annotation, clustering and
-donor-level comparisons remain separate workflow gaps. Packaged and Harbor checks
-are pending; the inspected source does not establish exact benchmark independence.
+donor-level comparisons remain separate workflow gaps. The one-recipe package build
+passed its oracle and all 15 negative controls in 591 seconds with 971 MiB peak RSS.
+Harbor execution remains pending; the inspected source does not establish exact
+benchmark independence.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:
@@ -271,9 +273,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 full prompts and 131 output artifacts assessed, one objective excluded | — |
 | [BAISBench](../../experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json) | 193 discovery questions across 41 studies; 15 annotation dataset identities | — |
 | [PromptBio-Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/promptbio-bench.json) | All 244 task definitions; 27 workflow families and 316 required-output declarations | — |
+| [BioXArena](../../experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json) | All 76 task IDs, catalog objectives and scorers; full per-task prompts and data uninspected | — |
 
-Of these 1,693 ID task/protocol/definition records, 46 have manually assessed component mappings,
-1,646 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 1,769 ID task/protocol/definition records, 46 have manually assessed component mappings,
+1,722 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -283,6 +286,15 @@ for 18 original BixBench endpoints and five overlapping Verified-50 protocols.
 These 23 mappings share one biological input. Cross-gene and biological-group
 aggregation, native PhyKIT agreement and benchmark-lineage screening remain
 pending; method replicates do not substitute for gene or biological replicates.
+
+BioXArena's 76 task identities agree across source graders, four launch lists
+and the data-release manifest. Catalog objectives and executable scorer endpoints
+are assessed; full prompts, input schemas and sample submissions remain
+uninspected. The inventory distinguishes prediction metrics from broader workflow
+names, records correlation masking and row-order requirements, and flags the
+mitochondria-counting metric conflict: the catalog says MAE, while the pinned
+grade function computes Spearman correlation. All 76 remain unmapped. The public
+scorers use deterministic numerical metrics or exact labels, with no LLM judge.
 
 PromptBio-Bench includes all 131 bioinformatics and 113 data-science task
 definitions at the pinned release. Every question and required-output declaration

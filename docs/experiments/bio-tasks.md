@@ -106,7 +106,8 @@ retained entries, 1,422 cells and 40,312 endogenous genes. Changing one count fa
 with correct summaries. The reference took 97.8 seconds and 1.11 GiB peak RSS;
 the oracle took 219.4 seconds and 68 MiB. Full artifact grading took 149–151 seconds
 and about 117 MiB. These are measured on one reserved TRC CPU host, with no model
-calls. Packaged corpus and Harbor checks remain pending. GEO reuse policy and study
+calls. The one-recipe package build passed its oracle and all 15 negative controls
+in 591 seconds with 971 MiB peak RSS; Harbor execution remains pending. GEO reuse policy and study
 attribution are recorded; donor/pool reconciliation and benchmark-lineage review
 remain open. Broad sorting gates do not provide fine cell labels or donors.
 

@@ -319,6 +319,18 @@
       "task_metadata_bytes": 155545,
       "required_output_artifact_count": 316,
       "source_data_and_evaluators_inspected": false
+    },
+    "BioXArena": {
+      "revision": "29f88d4d573001405abf0694aee72d91c3f47e6c",
+      "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c",
+      "inventory_count": 76,
+      "public_inventory_count": 76,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/bioxarena.json",
+      "source_inventory_name": "BioXArena",
+      "task_inventory_status": "all-76-identities-catalog-objectives-and-scorers-assessed-full-prompts-uninspected",
+      "data_revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

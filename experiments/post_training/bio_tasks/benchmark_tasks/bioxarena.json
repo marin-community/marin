@@ -1,0 +1,2944 @@
+{
+  "benchmark": "BioXArena",
+  "source_revision": "29f88d4d573001405abf0694aee72d91c3f47e6c",
+  "scope": "All 76 source task identities, all public grader functions, shared metrics, launch lists, public data catalog and archive manifest inspected. Nine biomedical domains. Provisional ID from the agentic tab.",
+  "assessment_scope": "Catalog objectives and executable scoring endpoints assessed. Authoritative per-task descriptions, sample submissions and input data remain inside separate archives and have not been inspected. Patterns are endpoint summaries, not claims of full prompt review or execution.",
+  "identity_policy": "Task IDs agree between all four 19-task launch lists, the 76 grader paths and the public data manifest. Shared datasets, model targets and train/test cohorts are not independent studies.",
+  "data_release": {
+    "revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3",
+    "url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/",
+    "access": "public; metadata only inspected",
+    "manifest_sha256": "30f867d6314c20cace4ebde4c3546137e3ab747e9290150ffd37b3442fb62194",
+    "catalog_sha256": "1ad1306f5d88ba263e626d44af29486ccc8c9d875c43b382d67bf190281f3d2b",
+    "archives_downloaded": false
+  },
+  "source_files": {
+    "tree": {
+      "url": "https://api.github.com/repos/mbzuai-ai4bio/BioXArena/git/trees/29f88d4d573001405abf0694aee72d91c3f47e6c?recursive=1",
+      "sha256": "04170b6ba1ef98e5f0f1079eb4be2da4f749eb5b6ee7402824cbff8c126a2df4",
+      "truncated": false
+    },
+    "shared_metrics": {
+      "url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/utils.py",
+      "sha256": "654f9b5431608d0b78b88070496f384e6f30c46db4f9ab481ed5b3d70ee7947c"
+    },
+    "evaluator": {
+      "url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/evaluation/evaluate_llm_agents.py",
+      "sha256": "2d7c32f99bf1279df837c913397f3af81262e3975d8d295e14aa99ac8732ecba"
+    }
+  },
+  "source_runtime": {
+    "task_timeout_seconds": 7200,
+    "launcher_parallelism": 1,
+    "launch_part_count": 4,
+    "our_target_seconds": 1800,
+    "note": "Source scripts configure a two-hour timeout and GPU availability. This is not a measured per-task runtime or a demonstrated CPU requirement."
+  },
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "Catalog objective and source scorer assessed; full prompt and data uninspected.",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null
+  },
+  "patterns": {
+    "chemical-biology": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "imaging": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "network-biology": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "perturbation-dynamics": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "phenotype-disease": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "sequence": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "single-cell": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "structure": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    },
+    "text-integrated": {
+      "scientific_decisions": [
+        "Preserve independent biological units and keep training/tuning inputs separate from held-out outcomes.",
+        "Task titles and metric endpoints do not establish real-data provenance or a complete analysis workflow."
+      ],
+      "remaining_gaps": [
+        "Inspect the authoritative per-task description, sample submission and biological input schemas; no data archives or private outcomes were retrieved.",
+        "Select independent real observations and implement the complete endpoint with an executable reference, strict output validation and a measured solve within 30 minutes.",
+        "Define finite/missing-value behavior, row uniqueness, metric orientation and an explicit acceptance rule without an LLM judge."
+      ]
+    }
+  },
+  "workflow_patterns": {
+    "chemical-biology": [
+      "chemical-biology/bace1-binding-affinity",
+      "chemical-biology/cell-painting-perturbation",
+      "chemical-biology/cyp-inhibition-multi-label",
+      "chemical-biology/egfr-binding-affinity",
+      "chemical-biology/gpcr-binding-multi-class",
+      "chemical-biology/herg-binding-affinity",
+      "chemical-biology/kinase-selectivity-multi-label",
+      "chemical-biology/tox21-sr-are"
+    ],
+    "imaging": [
+      "imaging/amos-organ-segmentation",
+      "imaging/drug-moa-prediction",
+      "imaging/labelfree-cell-counting",
+      "imaging/lung-nodule-malignancy",
+      "imaging/mitochondria-counting",
+      "imaging/nucleus-type-classification",
+      "imaging/skin-lesion-diagnosis",
+      "imaging/virtual-staining"
+    ],
+    "network-biology": [
+      "network-biology/gene-disease-association",
+      "network-biology/go-function-multi-label",
+      "network-biology/metabolic-network-kegg",
+      "network-biology/pathway-membership-reactome",
+      "network-biology/ppi-prediction-string",
+      "network-biology/protein-complex-corum",
+      "network-biology/synthetic-lethality-prediction",
+      "network-biology/tf-regulatory-prediction"
+    ],
+    "perturbation-dynamics": [
+      "perturbation-dynamics/cancer-drug-sensitivity",
+      "perturbation-dynamics/crispr-perturbation-prediction",
+      "perturbation-dynamics/drug-transcriptional-response",
+      "perturbation-dynamics/eccite-multimodal-perturbation",
+      "perturbation-dynamics/gene-regulatory-network-inference",
+      "perturbation-dynamics/multi-timepoint-perturbation",
+      "perturbation-dynamics/rna-velocity-cell-transition",
+      "perturbation-dynamics/spear-atac-perturbation"
+    ],
+    "phenotype-disease": [
+      "phenotype-disease/alzheimers-disease-staging",
+      "phenotype-disease/autism-diagnosis",
+      "phenotype-disease/breast-cancer-subtype",
+      "phenotype-disease/covid19-severity-classification",
+      "phenotype-disease/diabetes-readmission",
+      "phenotype-disease/genotype-to-phenotype",
+      "phenotype-disease/pan-cancer-survival-prediction",
+      "phenotype-disease/spatial-immune-infiltration"
+    ],
+    "sequence": [
+      "sequence/gene-tissue-expression",
+      "sequence/isoform-expression",
+      "sequence/multi-tf-binding",
+      "sequence/protein-protein-interaction",
+      "sequence/regulatory-element-detection",
+      "sequence/remote-homology-detection",
+      "sequence/rna-protein-binding-affinity",
+      "sequence/rna-protein-binding-signal",
+      "sequence/rna-reactivity-imputation",
+      "sequence/variant-effect-pathogenicity"
+    ],
+    "single-cell": [
+      "single-cell/batch-integration",
+      "single-cell/cell-type-from-expression",
+      "single-cell/chromatin-to-expression",
+      "single-cell/cite-seq-protein-prediction",
+      "single-cell/cross-modality-cell-matching",
+      "single-cell/cross-modality-cell-type",
+      "single-cell/developmental-stage-prediction",
+      "single-cell/gene-expression-denoising",
+      "single-cell/label-projection",
+      "single-cell/rna-to-protein-prediction"
+    ],
+    "structure": [
+      "structure/complex-structure-evaluation",
+      "structure/enzyme-commission-prediction",
+      "structure/protein-binding-site-detection",
+      "structure/protein-fold-classification",
+      "structure/protein-ligand-binding-affinity",
+      "structure/protein-protein-interface",
+      "structure/protein-stability-change",
+      "structure/protein-structure-prediction"
+    ],
+    "text-integrated": [
+      "text-integrated/biomedical-figure-vqa",
+      "text-integrated/dna-enzyme-function",
+      "text-integrated/ecg-signal-qa",
+      "text-integrated/gene-expression-classification",
+      "text-integrated/medical-vqa",
+      "text-integrated/molecule-qa",
+      "text-integrated/pathology-vqa",
+      "text-integrated/protein-function-matching"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "chemical-biology/bace1-binding-affinity",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "bace1 binding affinity; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/bace1-binding-affinity/grade.py",
+      "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
+      "source_metadata_bytes": 1153,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "affinity",
+          "target_col": "affinity"
+        },
+        "columns": [
+          "affinity"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/cell-painting-perturbation",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "cell painting perturbation; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/cell-painting-perturbation/grade.py",
+      "source_metadata_sha256": "26d88d229380d6da86ecf686687671332a74b19e59904403ba2cfe7308504068",
+      "source_metadata_bytes": 1149,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "perturbation",
+          "label_col": "perturbation"
+        },
+        "columns": [
+          "perturbation"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/cyp-inhibition-multi-label",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "cyp inhibition multi label; predict the scored biological endpoint and validate macro ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/cyp-inhibition-multi-label/grade.py",
+      "source_metadata_sha256": "a041386ef71bed5f2c0c5ab98e1a16615ec4567562373e1dc9c2ebef606dee36",
+      "source_metadata_bytes": 1188,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "label_cols": {
+            "source_expression": "LABEL_COLS"
+          },
+          "missing_val": -1
+        },
+        "columns": [
+          "{'source_expression': 'LABEL_COLS'}"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/egfr-binding-affinity",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "egfr binding affinity; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/egfr-binding-affinity/grade.py",
+      "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
+      "source_metadata_bytes": 1153,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "affinity",
+          "target_col": "affinity"
+        },
+        "columns": [
+          "affinity"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/gpcr-binding-multi-class",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "gpcr binding multi class; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/gpcr-binding-multi-class/grade.py",
+      "source_metadata_sha256": "6aacc173775176c8ae4a3b2e0fceee1864100cd86804db75405a9f183e23881b",
+      "source_metadata_bytes": 1065,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/herg-binding-affinity",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "herg binding affinity; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/herg-binding-affinity/grade.py",
+      "source_metadata_sha256": "28ef51311a1c184cf41afe703c775fa96bb1935f3b8180938fcc5e3238e52224",
+      "source_metadata_bytes": 1153,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "affinity",
+          "target_col": "affinity"
+        },
+        "columns": [
+          "affinity"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/kinase-selectivity-multi-label",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "kinase selectivity multi label; predict the scored biological endpoint and validate macro ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/kinase-selectivity-multi-label/grade.py",
+      "source_metadata_sha256": "ac7f65d2e72590f7a014345f6cc6c0482f18546c776d5991eb645df0041c82e3",
+      "source_metadata_bytes": 1155,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "label_cols": {
+            "source_expression": "LABEL_COLS"
+          },
+          "missing_val": -1
+        },
+        "columns": [
+          "{'source_expression': 'LABEL_COLS'}"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "chemical-biology/tox21-sr-are",
+      "workflow_family": "chemical-biology",
+      "workflow_pattern": "tox21 sr are; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/tox21-sr-are/grade.py",
+      "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
+      "source_metadata_bytes": 1049,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/amos-organ-segmentation",
+      "workflow_family": "imaging",
+      "workflow_pattern": "amos organ segmentation; predict the scored biological endpoint and validate mean organ Dice",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/amos-organ-segmentation/grade.py",
+      "source_metadata_sha256": "74ffb6989b479c11e8945df0b4a1b7483a02a8ac85e0b43c936d4b5c4987e23a",
+      "source_metadata_bytes": 5584,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean organ Dice against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV prediction_file paths and NIfTI masks",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean organ Dice",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Only organs present in each reference volume contribute; missing masks score zero. Validate geometry, shape, labels and completeness explicitly."
+      }
+    },
+    {
+      "task_id": "imaging/drug-moa-prediction",
+      "workflow_family": "imaging",
+      "workflow_pattern": "drug moa prediction; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/drug-moa-prediction/grade.py",
+      "source_metadata_sha256": "e192b5485a7a46a7f3eb6cabd12c8267341d83ae6e9dad40086372375312071a",
+      "source_metadata_bytes": 1424,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "moa",
+          "label_col": "moa"
+        },
+        "columns": [
+          "moa"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/labelfree-cell-counting",
+      "workflow_family": "imaging",
+      "workflow_pattern": "labelfree cell counting; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/labelfree-cell-counting/grade.py",
+      "source_metadata_sha256": "972e15163525c4bb32e19e8ba47c1610735c68ea7b11fe7afbb3a36a33698d08",
+      "source_metadata_bytes": 1070,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "n_cells",
+          "target_col": "n_cells"
+        },
+        "columns": [
+          "n_cells"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/lung-nodule-malignancy",
+      "workflow_family": "imaging",
+      "workflow_pattern": "lung nodule malignancy; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/lung-nodule-malignancy/grade.py",
+      "source_metadata_sha256": "25c3a8225930263f27a87297150d2d671f39ae3bf33f6febcb7d8a54bb23e84f",
+      "source_metadata_bytes": 1153,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "malignancy_level",
+          "label_col": "malignancy_level"
+        },
+        "columns": [
+          "malignancy_level"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/mitochondria-counting",
+      "workflow_family": "imaging",
+      "workflow_pattern": "mitochondria counting; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/mitochondria-counting/grade.py",
+      "source_metadata_sha256": "c3eb7a4624d34068afb279f4fbc981b0347544513bc33cbaaaa24de87557131d",
+      "source_metadata_bytes": 1078,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "n_instances",
+          "target_col": "n_instances"
+        },
+        "columns": [
+          "n_instances"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Data README advertises MAE, while the pinned executable grader calls Spearman correlation on n_instances; record the disagreement and resolve acceptance before adaptation."
+      }
+    },
+    {
+      "task_id": "imaging/nucleus-type-classification",
+      "workflow_family": "imaging",
+      "workflow_pattern": "nucleus type classification; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/nucleus-type-classification/grade.py",
+      "source_metadata_sha256": "2c12b74f4e3e4a3d723388bb93c927dc2f11ba7046224eee90ae074eb8059572",
+      "source_metadata_bytes": 1081,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "dominant_type",
+          "label_col": "dominant_type"
+        },
+        "columns": [
+          "dominant_type"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/skin-lesion-diagnosis",
+      "workflow_family": "imaging",
+      "workflow_pattern": "skin lesion diagnosis; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/skin-lesion-diagnosis/grade.py",
+      "source_metadata_sha256": "78a282ec8058b0d4173c429386ecf60ec1d76533a887a19843aea8176f37606e",
+      "source_metadata_bytes": 1073,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "diagnosis",
+          "label_col": "diagnosis"
+        },
+        "columns": [
+          "diagnosis"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "imaging/virtual-staining",
+      "workflow_family": "imaging",
+      "workflow_pattern": "virtual staining; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/virtual-staining/grade.py",
+      "source_metadata_sha256": "ee436422baaa036682e98a4b56ded8a3770e7e1f58c84bd495b2890134e61cf4",
+      "source_metadata_bytes": 1161,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "positive_ratio",
+          "target_col": "positive_ratio"
+        },
+        "columns": [
+          "positive_ratio"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The predicted artifact is an aggregate positive-tissue ratio, not a generated stained image."
+      }
+    },
+    {
+      "task_id": "network-biology/gene-disease-association",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "gene disease association; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/gene-disease-association/grade.py",
+      "source_metadata_sha256": "596e931727b43cfd9e5db5800ddde3f0689f435fc7dc89b69139bf9d9fb3c98c",
+      "source_metadata_bytes": 1170,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "disgenet_score",
+          "target_col": "disgenet_score"
+        },
+        "columns": [
+          "disgenet_score"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/go-function-multi-label",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "go function multi label; predict the scored biological endpoint and validate macro ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/go-function-multi-label/grade.py",
+      "source_metadata_sha256": "87c4f1f743e0ba6ef866ac5d183f0407fde461f9fe878e0baa977b50c6c79b88",
+      "source_metadata_bytes": 1297,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "label_cols": {
+            "source_expression": "GO_COLS"
+          },
+          "missing_val": -1
+        },
+        "columns": [
+          "{'source_expression': 'GO_COLS'}"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/metabolic-network-kegg",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "metabolic network kegg; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/metabolic-network-kegg/grade.py",
+      "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
+      "source_metadata_bytes": 1049,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/pathway-membership-reactome",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "pathway membership reactome; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/pathway-membership-reactome/grade.py",
+      "source_metadata_sha256": "bc57d86a8a00310f3e2de0f352941759fb966e9828de1cd825ce54656bd953f6",
+      "source_metadata_bytes": 1051,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/ppi-prediction-string",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "ppi prediction string; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/ppi-prediction-string/grade.py",
+      "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
+      "source_metadata_bytes": 1049,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/protein-complex-corum",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "protein complex corum; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/protein-complex-corum/grade.py",
+      "source_metadata_sha256": "bc57d86a8a00310f3e2de0f352941759fb966e9828de1cd825ce54656bd953f6",
+      "source_metadata_bytes": 1051,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/synthetic-lethality-prediction",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "synthetic lethality prediction; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/synthetic-lethality-prediction/grade.py",
+      "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
+      "source_metadata_bytes": 1049,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "network-biology/tf-regulatory-prediction",
+      "workflow_family": "network-biology",
+      "workflow_pattern": "tf regulatory prediction; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/tf-regulatory-prediction/grade.py",
+      "source_metadata_sha256": "19e072994c7837d171f39861de8c7706545d2c46d4c4165c8c82a8e8fec1521f",
+      "source_metadata_bytes": 1049,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/cancer-drug-sensitivity",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "cancer drug sensitivity; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/cancer-drug-sensitivity/grade.py",
+      "source_metadata_sha256": "6adf2f9b357957e63c6ce851a8370bc220c85d27a7e1a63eaea709a01272e3e8",
+      "source_metadata_bytes": 1149,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "ln_ic50",
+          "target_col": "ln_ic50"
+        },
+        "columns": [
+          "ln_ic50"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/crispr-perturbation-prediction",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "crispr perturbation prediction; predict the scored biological endpoint and validate mean column-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/crispr-perturbation-prediction/grade.py",
+      "source_metadata_sha256": "1df4a74ab741b35763afdfba9a7ba9187d340f61225b1b86bb9fcfa34fb7c42c",
+      "source_metadata_bytes": 2023,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean column-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean column-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Constant target or prediction columns are skipped; define complete finite predictions and a fixed scored feature universe."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/drug-transcriptional-response",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "drug transcriptional response; predict the scored biological endpoint and validate mean column-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/drug-transcriptional-response/grade.py",
+      "source_metadata_sha256": "1df4a74ab741b35763afdfba9a7ba9187d340f61225b1b86bb9fcfa34fb7c42c",
+      "source_metadata_bytes": 2023,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean column-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean column-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Constant target or prediction columns are skipped; define complete finite predictions and a fixed scored feature universe."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/eccite-multimodal-perturbation",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "eccite multimodal perturbation; predict the scored biological endpoint and validate mean of modality-level mean Pearson scores",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/eccite-multimodal-perturbation/grade.py",
+      "source_metadata_sha256": "32b09c45b94f8757a200d558de45d174540e39db56366dfadf4aa8ca02a40e2b",
+      "source_metadata_bytes": 2912,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean of modality-level mean Pearson scores against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_rna_* and delta_protein_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean of modality-level mean Pearson scores",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "RNA and protein modality means receive equal weight when valid; skipped or constant outputs require stronger completeness checks."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/gene-regulatory-network-inference",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "gene regulatory network inference; predict the scored biological endpoint and validate average precision",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/gene-regulatory-network-inference/grade.py",
+      "source_metadata_sha256": "e11e02f1f18967869307e619e7dd2f48d3f7803309a89cae34424b63a9db0642",
+      "source_metadata_bytes": 1134,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute average precision against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "average precision",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/multi-timepoint-perturbation",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "multi timepoint perturbation; predict the scored biological endpoint and validate mean column-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/multi-timepoint-perturbation/grade.py",
+      "source_metadata_sha256": "7bcbb2323d9a0ecea5e2d632a73353d2b60fecbc0cb428dc345402e5aca6ba1c",
+      "source_metadata_bytes": 2072,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean column-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean column-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Keep perturbation, dose, time and biological replication distinct; constant columns are skipped by the source scorer."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/rna-velocity-cell-transition",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "rna velocity cell transition; predict the scored biological endpoint and validate mean column-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/rna-velocity-cell-transition/grade.py",
+      "source_metadata_sha256": "9e9e0179f5553ea204ccbef17895d6538e820f70a94907c81a2e48bc095b6323",
+      "source_metadata_bytes": 2022,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean column-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean column-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The catalog endpoint predicts unspliced counts from spliced counts; this is not validation of a full velocity field or transition graph."
+      }
+    },
+    {
+      "task_id": "perturbation-dynamics/spear-atac-perturbation",
+      "workflow_family": "perturbation-dynamics",
+      "workflow_pattern": "spear atac perturbation; predict the scored biological endpoint and validate mean column-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/spear-atac-perturbation/grade.py",
+      "source_metadata_sha256": "2e6c0b896d217c6356131198794f999b7019d45dfecf0f1a2fc561f9c9c33f86",
+      "source_metadata_bytes": 2026,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean column-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV delta_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean column-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Accessibility predictions require correct feature identities; constant columns are skipped."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/alzheimers-disease-staging",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "alzheimers disease staging; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/alzheimers-disease-staging/grade.py",
+      "source_metadata_sha256": "4f77d3daff67ef92e28f74827cbbb591cf9d6f297508fde93317cbb16ec2e0f2",
+      "source_metadata_bytes": 1125,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "stage",
+          "label_col": "stage"
+        },
+        "columns": [
+          "stage"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/autism-diagnosis",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "autism diagnosis; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/autism-diagnosis/grade.py",
+      "source_metadata_sha256": "cca46df541132242f18ce6781fa5edf95ec6bc644f5e330d0c67d7274b3329b8",
+      "source_metadata_bytes": 2145,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "diagnosis",
+          "label_col": "diagnosis"
+        },
+        "columns": [
+          "diagnosis"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/breast-cancer-subtype",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "breast cancer subtype; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/breast-cancer-subtype/grade.py",
+      "source_metadata_sha256": "09484018a919c3609998667b177acf0d257fae76fc82c869f496ed013167b865",
+      "source_metadata_bytes": 1134,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "subtype",
+          "label_col": "subtype"
+        },
+        "columns": [
+          "subtype"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/covid19-severity-classification",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "covid19 severity classification; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/covid19-severity-classification/grade.py",
+      "source_metadata_sha256": "4775e221feedfe09f60cfec1529146392198daeeaaeb254838298920743c1267",
+      "source_metadata_bytes": 1142,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "severity",
+          "label_col": "severity"
+        },
+        "columns": [
+          "severity"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/diabetes-readmission",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "diabetes readmission; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/diabetes-readmission/grade.py",
+      "source_metadata_sha256": "6e29d8d5b0d5005b086ee59a9f29ed8b5715146211fb261a581a889786d07874",
+      "source_metadata_bytes": 1139,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "readmitted",
+          "label_col": "readmitted"
+        },
+        "columns": [
+          "readmitted"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/genotype-to-phenotype",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "genotype to phenotype; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/genotype-to-phenotype/grade.py",
+      "source_metadata_sha256": "94a17aa862379f1335b71b5e840c83cbd94f19202e51f2402caccbee050ec83e",
+      "source_metadata_bytes": 1660,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV expression column",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Donor-by-gene observations need donor-aware separation; repeated genes do not create independent donors."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/pan-cancer-survival-prediction",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "pan cancer survival prediction; predict the scored biological endpoint and validate Harrell concordance",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/pan-cancer-survival-prediction/grade.py",
+      "source_metadata_sha256": "eacc10c21832c7eb8453674542f7e595df1f44237842cf1793b78a9012aa9bea",
+      "source_metadata_bytes": 1198,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Harrell concordance against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Harrell concordance",
+        "helper_arguments": {
+          "id_col": "id",
+          "risk_col": "risk_score",
+          "time_col": "OS.time",
+          "event_col": "OS"
+        },
+        "columns": [
+          "risk_score"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "phenotype-disease/spatial-immune-infiltration",
+      "workflow_family": "phenotype-disease",
+      "workflow_pattern": "spatial immune infiltration; predict the scored biological endpoint and validate mean marker-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/spatial-immune-infiltration/grade.py",
+      "source_metadata_sha256": "536cf2c43d81b33e81a23a34b8101159ba479f01bb0c5e30f101ba057dbfe706",
+      "source_metadata_bytes": 1961,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean marker-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV six immune-marker columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean marker-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The endpoint is marker expression at spatial locations, not direct validation of immune-cell abundance."
+      }
+    },
+    {
+      "task_id": "sequence/gene-tissue-expression",
+      "workflow_family": "sequence",
+      "workflow_pattern": "gene tissue expression; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/gene-tissue-expression/grade.py",
+      "source_metadata_sha256": "f68f57892775da473f0595854cf44c74190acf36d6067dd6a4fbe66e72884b1d",
+      "source_metadata_bytes": 1055,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "log2_tpm",
+          "target_col": "log2_tpm"
+        },
+        "columns": [
+          "log2_tpm"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/isoform-expression",
+      "workflow_family": "sequence",
+      "workflow_pattern": "isoform expression; predict the scored biological endpoint and validate mean tissue-wise Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/isoform-expression/grade.py",
+      "source_metadata_sha256": "2d45eab150ac4b8b2e3a5d927ca4b5128ccf453b2a02d4e36f399ad2ffed3435",
+      "source_metadata_bytes": 2063,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean tissue-wise Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV labels_0 through labels_29",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean tissue-wise Spearman",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Each tissue is scored across examples; constant columns are skipped and transcript identities must remain aligned."
+      }
+    },
+    {
+      "task_id": "sequence/multi-tf-binding",
+      "workflow_family": "sequence",
+      "workflow_pattern": "multi tf binding; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/multi-tf-binding/grade.py",
+      "source_metadata_sha256": "20fafb203bc729d0ea9883386bd4aad3aa1ebaa41895c482f096f1841ab5d29d",
+      "source_metadata_bytes": 1052,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "binding",
+          "label_col": "binding"
+        },
+        "columns": [
+          "binding"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/protein-protein-interaction",
+      "workflow_family": "sequence",
+      "workflow_pattern": "protein protein interaction; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/protein-protein-interaction/grade.py",
+      "source_metadata_sha256": "e9204aeea49cbe22322a9022dcbcc2a530a5d541f2e3c22966507e27918043e7",
+      "source_metadata_bytes": 1096,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/regulatory-element-detection",
+      "workflow_family": "sequence",
+      "workflow_pattern": "regulatory element detection; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/regulatory-element-detection/grade.py",
+      "source_metadata_sha256": "d8f493ed80a1b91fed7580a9d30443d2a6d664f7ff280817c4484aa0510600f9",
+      "source_metadata_bytes": 1050,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/remote-homology-detection",
+      "workflow_family": "sequence",
+      "workflow_pattern": "remote homology detection; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/remote-homology-detection/grade.py",
+      "source_metadata_sha256": "79c91bca8c75b59adce9d68f951e077e2c027559fcc4d7ff69fcf09f6b359609",
+      "source_metadata_bytes": 1095,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "tm_max",
+          "target_col": "tm_max"
+        },
+        "columns": [
+          "tm_max"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The output is a continuous structural-similarity score; profile-search bookkeeping alone does not cover this endpoint."
+      }
+    },
+    {
+      "task_id": "sequence/rna-protein-binding-affinity",
+      "workflow_family": "sequence",
+      "workflow_pattern": "rna protein binding affinity; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-protein-binding-affinity/grade.py",
+      "source_metadata_sha256": "ed3cb3a2523778c95cc57f241039d60d628c8591f3d5c40ae58780fe489348c6",
+      "source_metadata_bytes": 1093,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "score",
+          "target_col": "score"
+        },
+        "columns": [
+          "score"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/rna-protein-binding-signal",
+      "workflow_family": "sequence",
+      "workflow_pattern": "rna protein binding signal; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-protein-binding-signal/grade.py",
+      "source_metadata_sha256": "ed3cb3a2523778c95cc57f241039d60d628c8591f3d5c40ae58780fe489348c6",
+      "source_metadata_bytes": 1093,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "score",
+          "target_col": "score"
+        },
+        "columns": [
+          "score"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "sequence/rna-reactivity-imputation",
+      "workflow_family": "sequence",
+      "workflow_pattern": "rna reactivity imputation; predict the scored biological endpoint and validate mean row-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-reactivity-imputation/grade.py",
+      "source_metadata_sha256": "d8daa03bdd9292bebe36108d1d82d2f1d29d66c6b489cb484774c80e42b8c1d8",
+      "source_metadata_bytes": 2497,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean row-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV target_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean row-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Source masks positions missing in either targets or predictions and skips rows without a valid correlation. Require predictions for all eligible reference positions to prevent selective omissions."
+      }
+    },
+    {
+      "task_id": "sequence/variant-effect-pathogenicity",
+      "workflow_family": "sequence",
+      "workflow_pattern": "variant effect pathogenicity; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/variant-effect-pathogenicity/grade.py",
+      "source_metadata_sha256": "d8f493ed80a1b91fed7580a9d30443d2a6d664f7ff280817c4484aa0510600f9",
+      "source_metadata_bytes": 1050,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "single-cell/batch-integration",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "batch integration; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/batch-integration/grade.py",
+      "source_metadata_sha256": "0462a1f1b748aa0c23cfdf638061f5a23d470c2b1519cecfe718276abaa8ba3b",
+      "source_metadata_bytes": 1058,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "cell_type",
+          "label_col": "cell_type"
+        },
+        "columns": [
+          "cell_type"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The actual endpoint is cell-type prediction in held-out batches; label accuracy does not independently validate batch correction."
+      }
+    },
+    {
+      "task_id": "single-cell/cell-type-from-expression",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "cell type from expression; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cell-type-from-expression/grade.py",
+      "source_metadata_sha256": "ee191cf65411f1556dbb0a54db05219b6bbf61c0a0591c183a8fad761709ccf2",
+      "source_metadata_bytes": 1152,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "cell_type",
+          "label_col": "cell_type"
+        },
+        "columns": [
+          "cell_type"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The README and output cell_type identify classification, despite a grader docstring mentioning cell communication."
+      }
+    },
+    {
+      "task_id": "single-cell/chromatin-to-expression",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "chromatin to expression; predict the scored biological endpoint and validate mean gene-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/chromatin-to-expression/grade.py",
+      "source_metadata_sha256": "a1dfe034183576f8192a6d64ac1c65e73edf41813d603744f9ad070ab8fbad01",
+      "source_metadata_bytes": 1976,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean gene-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV gene_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean gene-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Keep paired cell identities and held-out donors/batches explicit; constant predicted features must not shrink the evaluation universe."
+      }
+    },
+    {
+      "task_id": "single-cell/cite-seq-protein-prediction",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "cite seq protein prediction; predict the scored biological endpoint and validate mean protein-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cite-seq-protein-prediction/grade.py",
+      "source_metadata_sha256": "660d4b3a469aee56d743f2e3cf9cd70c3b49d7ad4f0f3c2d697737f7ca9d74e1",
+      "source_metadata_bytes": 1994,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean protein-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV protein_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean protein-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Protein/cell identities and modality-specific scaling matter; constant outputs are skipped by the source scorer."
+      }
+    },
+    {
+      "task_id": "single-cell/cross-modality-cell-matching",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "cross modality cell matching; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cross-modality-cell-matching/grade.py",
+      "source_metadata_sha256": "f8e407242e877b1767b7e49df0f70d5c207bdb38bd395dfc28fe524a8888a374",
+      "source_metadata_bytes": 1106,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "match_idx",
+          "label_col": "match_idx"
+        },
+        "columns": [
+          "match_idx"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "single-cell/cross-modality-cell-type",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "cross modality cell type; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cross-modality-cell-type/grade.py",
+      "source_metadata_sha256": "2ff406ff981b1b34d61a7ad8217f4083b0c6943f5d09aacb0998bed6ab55ca9a",
+      "source_metadata_bytes": 1110,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "celltype_l2",
+          "label_col": "celltype_l2"
+        },
+        "columns": [
+          "celltype_l2"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "single-cell/developmental-stage-prediction",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "developmental stage prediction; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/developmental-stage-prediction/grade.py",
+      "source_metadata_sha256": "460fafbee7657f5d070a806436b816a6c114caecc5752deb9db993c3490a7683",
+      "source_metadata_bytes": 1098,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "stage",
+          "label_col": "stage"
+        },
+        "columns": [
+          "stage"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "single-cell/gene-expression-denoising",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "gene expression denoising; predict the scored biological endpoint and validate mean gene-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/gene-expression-denoising/grade.py",
+      "source_metadata_sha256": "1eb9bbd9dc8b359b895c42254d82bfbe3256cedb581527f00e425d7137000827",
+      "source_metadata_bytes": 1498,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean gene-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV gene_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean gene-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Undefined correlations are omitted; the provenance of clean targets is uninspected and real-versus-simulated status must be established."
+      }
+    },
+    {
+      "task_id": "single-cell/label-projection",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "label projection; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/label-projection/grade.py",
+      "source_metadata_sha256": "342b9d4c938c2ce741b62b5d9e81c5e27e59a50b5f613fe2a138c052152f5d9a",
+      "source_metadata_bytes": 1122,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "cell_type",
+          "label_col": "cell_type"
+        },
+        "columns": [
+          "cell_type"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "single-cell/rna-to-protein-prediction",
+      "workflow_family": "single-cell",
+      "workflow_pattern": "rna to protein prediction; predict the scored biological endpoint and validate mean protein-wise Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/rna-to-protein-prediction/grade.py",
+      "source_metadata_sha256": "aebd9b87fdb4058473f562799472d7844e3fbd84eff16fec19792bfebf27d69b",
+      "source_metadata_bytes": 1390,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean protein-wise Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV protein_* columns",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean protein-wise Pearson",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Undefined correlations are omitted; zero valid columns score zero, which the outer correlation normalization maps to one half."
+      }
+    },
+    {
+      "task_id": "structure/complex-structure-evaluation",
+      "workflow_family": "structure",
+      "workflow_pattern": "complex structure evaluation; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/complex-structure-evaluation/grade.py",
+      "source_metadata_sha256": "530b511b64e302c8eb1233b9be62eba6025756b8acfe02939926e76a0e96ddbe",
+      "source_metadata_bytes": 1060,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "dockq_avg",
+          "target_col": "dockq_avg"
+        },
+        "columns": [
+          "dockq_avg"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "structure/enzyme-commission-prediction",
+      "workflow_family": "structure",
+      "workflow_pattern": "enzyme commission prediction; predict the scored biological endpoint and validate macro F1",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/enzyme-commission-prediction/grade.py",
+      "source_metadata_sha256": "335e76d4d809fcefc04ebda8e5cf79ebf5473615a70a6faa6a2061deb9666b92",
+      "source_metadata_bytes": 1057,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute macro F1 against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "macro F1",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "ec_class",
+          "label_col": "ec_class"
+        },
+        "columns": [
+          "ec_class"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "structure/protein-binding-site-detection",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein binding site detection; predict the scored biological endpoint and validate average precision",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-binding-site-detection/grade.py",
+      "source_metadata_sha256": "18b9334305fe5ee64b204142418ee0f84f61fe8999117560e1d99dc98a2a3db8",
+      "source_metadata_bytes": 1045,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute average precision against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "average precision",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The public catalog describes chain-level binding-site-density classification, not residue-level site localization."
+      }
+    },
+    {
+      "task_id": "structure/protein-fold-classification",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein fold classification; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-fold-classification/grade.py",
+      "source_metadata_sha256": "bb70836d75e16b5633df6ba78805088929a8fb5a852cfed4bc151d8d60e85747",
+      "source_metadata_bytes": 1061,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "fold_label",
+          "label_col": "fold_label"
+        },
+        "columns": [
+          "fold_label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "structure/protein-ligand-binding-affinity",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein ligand binding affinity; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-ligand-binding-affinity/grade.py",
+      "source_metadata_sha256": "4ffedf697629e8df395adab4688d0342d53859dcc08d32e49b7b69c22039cfd2",
+      "source_metadata_bytes": 1068,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "affinity_value",
+          "target_col": "affinity_value"
+        },
+        "columns": [
+          "affinity_value"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "structure/protein-protein-interface",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein protein interface; predict the scored biological endpoint and validate Pearson",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-protein-interface/grade.py",
+      "source_metadata_sha256": "435bf37bb8eb1165da73341b68f4993dbbd36d15194e4798f1a51fd86a2b82b1",
+      "source_metadata_bytes": 1076,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Pearson against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Pearson",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "interface_fraction",
+          "target_col": "interface_fraction"
+        },
+        "columns": [
+          "interface_fraction"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The scorer evaluates an interface fraction, not the identities or coordinates of contacting residues."
+      }
+    },
+    {
+      "task_id": "structure/protein-stability-change",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein stability change; predict the scored biological endpoint and validate Spearman",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-stability-change/grade.py",
+      "source_metadata_sha256": "4c641fcacf049de9cbec067ba8cc458c8538a4d78c62c6327ad980e8586730b3",
+      "source_metadata_bytes": 1048,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute Spearman against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "Spearman",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "ddg",
+          "target_col": "ddg"
+        },
+        "columns": [
+          "ddg"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "structure/protein-structure-prediction",
+      "workflow_family": "structure",
+      "workflow_pattern": "protein structure prediction; predict the scored biological endpoint and validate mean simplified TM score after Kabsch alignment",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-structure-prediction/grade.py",
+      "source_metadata_sha256": "6c0024ba7e16924b020ec715a356c9abf67777f3060169d1cb76e8df74d26c24",
+      "source_metadata_bytes": 3014,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute mean simplified TM score after Kabsch alignment against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV coords_file paths and JSON coordinate arrays",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "mean simplified TM score after Kabsch alignment",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "The implementation uses fixed residue correspondence and one rigid alignment, not a full structural alignment search. Check shape, finite coordinates, residue identities and short-chain handling."
+      }
+    },
+    {
+      "task_id": "text-integrated/biomedical-figure-vqa",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "biomedical figure vqa; predict the scored biological endpoint and validate case-normalized multiple-choice exact match",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/biomedical-figure-vqa/grade.py",
+      "source_metadata_sha256": "1447925e1350ebc6ab94b82fd75015908ae5b5d8e85bab5b450ea175293f9b5c",
+      "source_metadata_bytes": 1415,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute case-normalized multiple-choice exact match against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV label column",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "case-normalized multiple-choice exact match",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Answer-choice accuracy does not verify a complete evidence-retrieval or figure-analysis workflow."
+      }
+    },
+    {
+      "task_id": "text-integrated/dna-enzyme-function",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "dna enzyme function; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/dna-enzyme-function/grade.py",
+      "source_metadata_sha256": "88189f27a5d8d00ceedd971751937656b4ebf3094aa4799558e538d4ebeca250",
+      "source_metadata_bytes": 1098,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "text-integrated/ecg-signal-qa",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "ecg signal qa; predict the scored biological endpoint and validate normalized exact match",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/ecg-signal-qa/grade.py",
+      "source_metadata_sha256": "c8223466a278c9e5d270ae5a6f62a70adbcfc35b65745f6556cd91f05b9774b3",
+      "source_metadata_bytes": 1529,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute normalized exact match against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV label column",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "normalized exact match",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Lowercase/trim and sorted pipe-separated answer normalization; preserve the distinction between set-like labels and free-text clinical interpretation."
+      }
+    },
+    {
+      "task_id": "text-integrated/gene-expression-classification",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "gene expression classification; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/gene-expression-classification/grade.py",
+      "source_metadata_sha256": "e9204aeea49cbe22322a9022dcbcc2a530a5d541f2e3c22966507e27918043e7",
+      "source_metadata_bytes": 1096,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "text-integrated/medical-vqa",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "medical vqa; predict the scored biological endpoint and validate normalized exact match",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/medical-vqa/grade.py",
+      "source_metadata_sha256": "32b4ac4090880565cf7814ae70e834a5f41ef536ad106fa75b52e858d2a67100",
+      "source_metadata_bytes": 1373,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute normalized exact match against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV label column",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "normalized exact match",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Lowercase and surrounding-whitespace normalization; exact wording is not a complete check of clinical reasoning."
+      }
+    },
+    {
+      "task_id": "text-integrated/molecule-qa",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "molecule qa; predict the scored biological endpoint and validate accuracy",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/molecule-qa/grade.py",
+      "source_metadata_sha256": "dfc0c1a8769190976d58a01fbe9ebbabe27e70be426c99a15368591f68c58697",
+      "source_metadata_bytes": 1065,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute accuracy against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "accuracy",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    },
+    {
+      "task_id": "text-integrated/pathology-vqa",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "pathology vqa; predict the scored biological endpoint and validate normalized exact match",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/pathology-vqa/grade.py",
+      "source_metadata_sha256": "32b4ac4090880565cf7814ae70e834a5f41ef536ad106fa75b52e858d2a67100",
+      "source_metadata_bytes": 1373,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute normalized exact match against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV label column",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "normalized exact match",
+        "helper_arguments": {},
+        "columns": [],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Lowercase and surrounding-whitespace normalization; exact wording is not a complete check of image-analysis reasoning."
+      }
+    },
+    {
+      "task_id": "text-integrated/protein-function-matching",
+      "workflow_family": "text-integrated",
+      "workflow_pattern": "protein function matching; predict the scored biological endpoint and validate ROC AUC",
+      "source_metadata_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/protein-function-matching/grade.py",
+      "source_metadata_sha256": "f1eb5871f66fbe204357fe4328f2f5538cc2ecc754118fac200e3f4a041d2308",
+      "source_metadata_bytes": 1063,
+      "source_description_catalog_url": "https://huggingface.co/datasets/mbzuai-ai4bio/BioXArena-Data-Public/blob/a7a42ca128ee4387308f0bd1cf3cada8c363ace3/README.md",
+      "authoritative_prompt_status": "not-inspected; public/description.md is inside the separate data archive",
+      "required_stages": [
+        "Inspect modality-specific public inputs and sample identities",
+        "Establish training/tuning and held-out biological units",
+        "Fit or apply the task-specific predictive analysis",
+        "Export the required predictions in source identifier order",
+        "Compute ROC AUC against independently held-out outcomes"
+      ],
+      "required_formats": [
+        "CSV predictions",
+        "task-specific native inputs: schema uninspected"
+      ],
+      "required_tools": [],
+      "source_scorer": {
+        "metric": "ROC AUC",
+        "helper_arguments": {
+          "id_col": "id",
+          "pred_col": "label",
+          "label_col": "label"
+        },
+        "columns": [
+          "label"
+        ],
+        "uses_llm_judge": false,
+        "row_policy": "Every task first checks that the first-column header and all values match the reference in the original order, before later sorting.",
+        "normalization": "Correlation scores are mapped by (r+1)/2 in the outer evaluator; bounded metrics retain their scale.",
+        "scientific_limit": "Preserve output identities and define scientifically meaningful held-out groups, calibration and acceptance thresholds. Ranking or label metrics alone do not validate all upstream analysis stages."
+      }
+    }
+  ]
+}

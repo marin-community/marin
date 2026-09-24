@@ -211,7 +211,7 @@
       ],
       "source_url": "https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl",
       "tool_execution": {
-        "status": "passed",
+        "status": "passed_reference_check",
         "evidence": "native_validation_runs/a619ee74f5b8.json",
         "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
         "instances": 1,
