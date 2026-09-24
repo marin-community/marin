@@ -155,19 +155,45 @@ def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
         SkyRLRetentionPolicy(resume_checkpoint_count=6)
 
 
-def test_skyrl_topology_rejects_unassigned_gpus() -> None:
+def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> None:
     plan = dataclasses.replace(
         _role_plan(),
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
-        num_inference_engines=4,
-        inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=1,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
     )
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["generator"]["speculative_decoding"] = {
+        "method": "eagle3",
+        "model": {
+            "source_uri": "hf://test/draft",
+            "source_identity": "0" * 40,
+        },
+        "num_speculative_tokens": 3,
+        "training": {},
+    }
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(recipe),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        topology=SkyRLTopology(
+            num_nodes=6,
+            gpus_per_node=8,
+            gpu_variant="H100",
+            role_plan=plan,
+        ),
+    )
+    step = skyrl_step(spec, _execution())
+    launch_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(launch_config.launch_config_yaml)
 
-    with pytest.raises(ValueError, match=r"policy \+ rollout=36 GPUs, topology=64 GPUs"):
-        SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    assert launch["iris"]["allocation"]["num_nodes"] == 6
+    assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
+    assert launch["run"]["export_hf"] is False
+    assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
 def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
@@ -316,8 +342,8 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
 
 
-def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    step = skyrl_step(_spec(), _execution())
+def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
             output_path="s3://test/run",
@@ -357,11 +383,12 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
 
     model = run_skyrl(config)
 
-    assert model.policy_export_uri.endswith("global_step_8/policy")
+    assert model.hf_model_uri is not None and model.hf_model_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
     assert model.iris_job_id == "01KTEST"
     launch = launch_configs[0]
     assert launch["schema_version"] == 1
+    assert launch["run"]["export_hf"] is True
     assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
@@ -390,6 +417,44 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+
+def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://test/run",
+            prefix="s3://test",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    response = {
+        "run_id": config.run_id,
+        "attempt_id": config.attempt_id,
+        "state": "succeeded",
+        "iris_job_id": "01KNOEXPORT",
+        "iris_job_state": "succeeded",
+        "failure": None,
+        "model": None,
+    }
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda _command, **kwargs: _FakeLauncherProcess(
+            response=json.dumps(response),
+            returncode=0,
+            stdout=kwargs["stdout"],
+        ),
+    )
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
+
+    run = run_skyrl(config)
+
+    assert run.hf_model_uri is None
+    assert run.global_step is None
+    assert run.iris_job_id == "01KNOEXPORT"
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:

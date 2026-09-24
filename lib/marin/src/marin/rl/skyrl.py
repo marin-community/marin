@@ -148,14 +148,14 @@ class SkyRLTopology:
             )
         planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        if planned_gpus != allocated_gpus:
+        # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # and validates that the complete role plan exactly consumes this allocation.
+        if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
             raise ValueError(
-                "SkyRL role plan does not consume the allocated topology: "
+                "SkyRL core role plan exceeds the allocated topology: "
                 f"{placement}={planned_gpus} GPUs, topology={allocated_gpus} GPUs "
-                f"({self.num_nodes} nodes x {self.gpus_per_node}); rollout uses "
-                f"{plan.num_inference_engines} engines x TP{plan.inference_engine_tensor_parallel_size} "
-                f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size}"
+                f"({self.num_nodes} nodes x {self.gpus_per_node})"
             )
 
         if plan.train_batch_size % plan.policy_mini_batch_size:
@@ -583,17 +583,20 @@ class SkyRLRunConfig:
     attempt_id: str
     model: ResolvedModelLocator
     output: SkyRLOutputPaths
+    export_hf: bool
+    draft_checkpoint_root: str | None
     launcher_requirement: str
 
 
-class SkyRLModel(Artifact):
-    """Validated terminal HF policy export from a MarinSkyRL run."""
+class SkyRLRun(Artifact):
+    """Terminal result from a MarinSkyRL run."""
 
-    policy_export_uri: str
-    global_step: int
+    hf_model_uri: str | None
+    global_step: int | None
     tokenizer_uri: str
     tokenizer_revision: str
     checkpoint_root: str
+    draft_checkpoint_root: str | None
     terminal_manifest_uri: str
     iris_job_id: str
 
@@ -654,8 +657,8 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
-    """Run the pinned external launcher and return its validated model value."""
+def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
+    """Run the pinned external launcher and return its validated result."""
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
@@ -671,17 +674,20 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
         if completed.returncode != 0 or response.state != "succeeded":
             failure = response.failure or f"launcher exited {completed.returncode}"
             raise RuntimeError(f"MarinSkyRL attempt {config.attempt_id} failed: {failure}\n{completed.stderr.strip()}")
+        if response.iris_job_id is None:
+            raise ValueError("successful MarinSkyRL response requires iris_job_id")
         model = response.model
-        if model is None or response.iris_job_id is None:
-            raise ValueError("successful MarinSkyRL response requires model and iris_job_id")
-        result = SkyRLModel(
+        if config.export_hf and model is None:
+            raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
+        result = SkyRLRun(
             path=config.output.terminal_manifest_uri,
-            policy_export_uri=model.policy_export_uri,
-            global_step=model.global_step,
-            tokenizer_uri=model.tokenizer_uri,
-            tokenizer_revision=model.tokenizer_revision,
-            checkpoint_root=model.checkpoint_root,
-            terminal_manifest_uri=model.terminal_manifest_uri,
+            hf_model_uri=model.policy_export_uri if model is not None else None,
+            global_step=model.global_step if model is not None else None,
+            tokenizer_uri=config.model.tokenizer_uri,
+            tokenizer_revision=config.model.tokenizer_revision,
+            checkpoint_root=config.output.checkpoint_root,
+            draft_checkpoint_root=config.draft_checkpoint_root,
+            terminal_manifest_uri=config.output.terminal_manifest_uri,
             iris_job_id=response.iris_job_id,
         )
     except Exception:
@@ -717,6 +723,7 @@ def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
     *,
+    export_hf: bool,
     run_id: str,
     attempt_id: str,
     model: ResolvedModelLocator,
@@ -744,7 +751,7 @@ def _launch_config_yaml(
             "seed": spec.seed,
             "mode": "train",
             "submission": "wait",
-            "export_hf": True,
+            "export_hf": export_hf,
         },
         "runtime": {
             "launcher_commit": spec.runtime.commit,
@@ -807,7 +814,12 @@ def _launch_config_yaml(
     return yaml.safe_dump(launch, sort_keys=False)
 
 
-def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
+def skyrl_step(
+    spec: SkyRLSpec,
+    execution: IrisSkyRLExecution,
+    *,
+    export_hf: bool = False,
+) -> ArtifactStep[SkyRLRun]:
     """Build a versioned MarinSkyRL training artifact."""
     step_name = spec.name
     deps = tuple(
@@ -837,6 +849,14 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             resolved_config_uri=prefix_join(ctx.output_path, "resolved-launch.yaml"),
             terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
         )
+        draft_training = _declared_config_value(
+            _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"
+        )
+        draft_checkpoint_root = (
+            prefix_join(output.checkpoint_root, "drafts")
+            if draft_training is not _MISSING_CONFIG_VALUE and draft_training is not None
+            else None
+        )
         run_id = f"{step_name}-{spec.version}"
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
@@ -848,6 +868,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             launch_config_yaml=_launch_config_yaml(
                 spec,
                 execution,
+                export_hf=export_hf,
                 run_id=run_id,
                 attempt_id=attempt_id,
                 model=model,
@@ -859,13 +880,15 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             attempt_id=attempt_id,
             model=model,
             output=output,
+            export_hf=export_hf,
+            draft_checkpoint_root=draft_checkpoint_root,
             launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
     return ArtifactStep(
         name=step_name,
         version=spec.version,
-        artifact_type=SkyRLModel,
+        artifact_type=SkyRLRun,
         run=run_skyrl,
         build_config=build_config,
         deps=deps,
