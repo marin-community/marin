@@ -401,7 +401,7 @@
       "scoring_access": "Gated grading",
       "source_url": "https://github.com/EdisonScientific/BixBench3",
       "data_url": "https://github.com/EdisonScientific/BixBench3/blob/d0e0bbb41222335b1b8878f533a58466a3a782dc/src/bixbench3/grading/grader.py",
-      "inspection": "All 20 stable paper IDs inventoried; 19 task bodies manually assessed. One pathogen-enhancement objective excluded from training authoring. Full output contracts and native execution not assessed.",
+      "inspection": "All 20 stable paper IDs inventoried; 19 full prompts and 131 output contracts assessed. One pathogen-enhancement objective excluded. Static source-metric review recorded; no benchmark inputs or ground truth downloaded and no benchmark executed.",
       "training_mapping_allowed": true,
       "task_inventory": "benchmark_tasks/bixbench3.json",
       "release_evidence": {
@@ -410,7 +410,8 @@
         "runner_revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
         "metadata_manifest_sha256": "ce913c15132b109dbf8c3ce431ea2aebc24b260efd70eb283bfa6b6df1ae999c",
         "task_count": 20,
-        "checked_at": "2026-09-24"
+        "checked_at": "2026-09-24",
+        "contract_manifest_sha256": "57cdca13b11d4b77f083d19a38e228dba46ecfe0a525cb3e65ec421b33452b8b"
       },
       "authoring_assessment": "Borrow multi-assay joins, technical-versus-biological replication, complete quantitative artifacts and explicit workflow boundaries. Preserve real cohort structure when bounding runtime. Do not adopt the separate LLM process judge."
     },

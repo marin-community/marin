@@ -2,7 +2,7 @@
   "benchmark": "BixBench3",
   "source_revision": "3be006a68327e1fd04cd2c5fc87a703e53ca67cd",
   "runner_revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
-  "scope": "All 20 released paper task IDs; 19 task bodies assessed for connected workflow patterns and one restricted objective retained as an identifier only. Biological inputs, answer artifacts and process-judge rubrics are not training seeds.",
+  "scope": "All 20 released paper task IDs; 19 eligible prompts and their full output contracts assessed, with one restricted objective retained as an identifier only. Biological inputs, answer artifacts and process-judge rubrics are not training seeds.",
   "source_runtime": "Runner README reports an average near eight hours and a 24-hour ceiling on substantially larger CPUs; no timings measured here.",
   "grading_scope": "Deterministic artifact grading and a separate model-based process judgment. This inventory adapts only independently verifiable operations.",
   "tasks": [
@@ -17,7 +17,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "expression-damid-integration",
       "required_stages": [
         "join assay-specific biological replicates",
@@ -46,9 +46,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.17.659900_v1/agent/prompt.md",
+        "source_sha256": "ce9fc2f8933d2b62d254f7082531d77df0b1802271e0e36b66c82c41383c3a35",
+        "artifact_count": 12,
+        "formats": {
+          "tsv": 12
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Count rows use annotation-native IDs; differential-expression and response sets use different gene namespaces. Replicate and averaged target sets are separate artifacts."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.02.11.704850_v1",
@@ -61,7 +73,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "bulk-expression-communication",
       "required_stages": [
         "quantify paired bulk libraries",
@@ -89,9 +101,22 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.11.704850_v1/agent/prompt.md",
+        "source_sha256": "05ee38e221dae85d96be776dcfe6e17f5407f2f6d559ee35901fe2ee52308a81",
+        "artifact_count": 10,
+        "formats": {
+          "tsv": 1,
+          "csv": 9
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Communication deltas use magnitude plus direction in the output tables; this differs from the signed delta described in method prose. Count and expression tables also use different gene identifiers."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.08.16.670679_v1",
@@ -104,7 +129,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "repeated-subject-expression",
       "required_stages": [
         "count annotated alignments and remaining reads",
@@ -132,9 +157,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.08.16.670679_v1/agent/prompt.md",
+        "source_sha256": "cf801263a0eeed556cedd29e613ebaf0ac9a4e82c44458fd66352dc2f14b2145",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Coefficients, anatomical positions and genes form composite keys. Count, model, enrichment and directional-summary artifacts require consistent cohort and coefficient definitions."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.02.03.703548_v1",
@@ -147,7 +184,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "expression-variant-ancestry",
       "required_stages": [
         "quantify transcript clusters",
@@ -184,9 +221,21 @@
         "PRJNA914055"
       ],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.03.703548_v1/agent/prompt.md",
+        "source_sha256": "3fe98770f33c4bda2ebcc52c23157f67a0f535d32909984935ba1a3f7c4bf085",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Raw and length-normalized matrices must share their feature universe. The field named percent_missing is a fraction, and ancestry components require an explicit orientation."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.07.20.665670_v1",
@@ -199,7 +248,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "small-rna-orthology",
       "required_stages": [
         "trim and length-filter small RNAs",
@@ -226,9 +275,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.20.665670_v1/agent/prompt.md",
+        "source_sha256": "7063b28f60c89c71f904185f9e2828996a76af1a03a018509ba4fd82b5f922cd",
+        "artifact_count": 10,
+        "formats": {
+          "csv": 10
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Target-prediction tables include scores on both sides of the selection threshold. Count unique sequences separately from reads; interval and orthogroup artifacts use different matching semantics."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.07.08.663208_v1",
@@ -241,7 +302,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "perturbation-multiome-damid",
       "required_stages": [
         "quantify bulk expression",
@@ -273,9 +334,22 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.08.663208_v1/agent/prompt.md",
+        "source_sha256": "efbb4324bd8df941fd6b36f88d0f511ea834f220b66ae5dd6627371f5dd0638b",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 3,
+          "tsv": 1
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Cell identity includes replicate prefixes and a normalized barcode. Consensus peak intervals and unique target-gene sets require separate checks; arbitrary peak IDs cannot establish coordinate correctness."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.07.28.666515_v1",
@@ -288,7 +362,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "cross-platform-methylation",
       "required_stages": [
         "reconcile runs and biological samples",
@@ -321,9 +395,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.28.666515_v1/agent/prompt.md",
+        "source_sha256": "2526ffd4f8ffd3f2d583895a0b630a55d56e42c79775d6b052fb95d8a0f3020f",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "The array genotype table includes tested probes, while pathology tables retain significant sites. Missing gene-level combined evidence remains missing when one analysis contributes no selected sites."
+        ]
+      }
     },
     {
       "task_id": "10.1038_s42003-022-03654-9_v1",
@@ -336,7 +422,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "xenograft-and-tumorsphere-expression",
       "required_stages": [
         "separate species in xenograft alignments",
@@ -367,9 +453,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s42003-022-03654-9_v1/agent/prompt.md",
+        "source_sha256": "d4ded016ecfc4484d2d71331eab3f71a4c0ba44cd427d291f043835ace1ef53c",
+        "artifact_count": 12,
+        "formats": {
+          "csv": 12
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Some gene tables contain the full tested universe and another only the significant subset. Shrunken contrast tables omit the unshrunk statistic column; leading-edge outputs include ranked membership information."
+        ]
+      }
     },
     {
       "task_id": "10_1186_s12915_024_01879_0_v1",
@@ -382,7 +480,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "tagseq-clone-signatures",
       "required_stages": [
         "merge technical runs within biological samples",
@@ -411,9 +509,22 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10_1186_s12915_024_01879_0_v1/agent/prompt.md",
+        "source_sha256": "1c4226ca86e9e2a69a4ab7ae06275d63af875dd64e7524610e4d5732cc16e667",
+        "artifact_count": 14,
+        "formats": {
+          "tsv": 1,
+          "csv": 13
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Raw count IDs preserve annotation version suffixes, whereas selected differential-expression tables drop them. Shared signatures must retain regulation direction."
+        ]
+      }
     },
     {
       "task_id": "10.1038_s41467-023-44243-6_v1",
@@ -426,7 +537,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "transcript-level-compound-controls",
       "required_stages": [
         "assign independent biological replicates",
@@ -452,9 +563,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s41467-023-44243-6_v1/agent/prompt.md",
+        "source_sha256": "6f5fc012b993a93c9af29e4fa8c511edb316ee1940177f5a30328caab5bedf25",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "The required effect is an ordinary treatment/control ratio, not a log fold change. Raw transcript and repeat-feature counts remain separate from modeled statistics."
+        ]
+      }
     },
     {
       "task_id": "10.1016_j.crtox.2021.01.003_v1",
@@ -467,7 +590,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "probe-transcriptomics-pathways",
       "required_stages": [
         "align reads to assay-specific probes",
@@ -497,9 +620,21 @@
         "GSE154899"
       ],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1016_j.crtox.2021.01.003_v1/agent/prompt.md",
+        "source_sha256": "0c346d124895fcbb1a01ac90349ebf5492874cb50f436ba8f29fe356a7ba74ea",
+        "artifact_count": 5,
+        "formats": {
+          "csv": 5
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Rows combine dose, time, direction and gene-set identity. The curated response table requires the complete declared contrast-by-set product, unlike significance-filtered pathway outputs."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.06.02.657493_v1",
@@ -512,7 +647,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "probiotic-timecourse-expression",
       "required_stages": [
         "QC and trim reads",
@@ -540,9 +675,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.02.657493_v1/agent/prompt.md",
+        "source_sha256": "2bb4df4f084176addc7fea5d6dd81f49b1f9f7f1eb6edd664b3527f597b83bfe",
+        "artifact_count": 5,
+        "formats": {
+          "csv": 5
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "The raw matrix includes all treatment-timepoint replicates; the four selected contrast outputs contain only the declared significant loci. Locus keys retain annotation provenance."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.03.10.709901_v1",
@@ -555,7 +702,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "microsatellite-cell-lineage",
       "required_stages": [
         "process each amplicon panel",
@@ -586,9 +733,22 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.03.10.709901_v1/agent/prompt.md",
+        "source_sha256": "502850a53b58bbb2be08e24c4dc4d6f163b651eb4794b399dcec1d79933cbbfe",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 3,
+          "tsv": 1
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Report all cell-library QC rows but restrict both axes of the distance matrix to the same passing cells. Triplet counts and percentage summaries must agree after removing unresolved comparisons."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.07.21.665972_v1",
@@ -601,7 +761,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "mrna-mirna-tumor-contrasts",
       "required_stages": [
         "combine technical runs by biological sample",
@@ -628,9 +788,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.21.665972_v1/agent/prompt.md",
+        "source_sha256": "0e8ac250987d1b1b9b478e3961d3071be04821f7f46a454c66b0d841c18e5b78",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "The mRNA outputs contain selected genes, while microRNA outputs retain all tested features. One common significance-only output filter would be incorrect."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.01.09.698641_v1",
@@ -643,7 +815,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "transposable-elements-splicing-isoforms",
       "required_stages": [
         "retain multi-mapping evidence",
@@ -672,9 +844,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.09.698641_v1/agent/prompt.md",
+        "source_sha256": "be60095f851be18d15e69695625d723cb85da558dda67ad6a18026b8bc2ed243",
+        "artifact_count": 7,
+        "formats": {
+          "csv": 7
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Keep missing adjusted probabilities. Stable genomic intron keys exclude transient cluster labels, and splice-usage direction differs from the expression contrast direction. Long-read transcript categories require provenance."
+        ]
+      }
     },
     {
       "task_id": "10.1101_2025.07.31.667834_v1",
@@ -707,7 +891,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "chromatin-reporter-integration",
       "required_stages": [
         "align paired chromatin reads",
@@ -737,9 +921,21 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.18.664654_v1/agent/prompt.md",
+        "source_sha256": "4ce586412d7499ffb226aecaf01fd57342de394b8f724bd25c1a41098a04fde4",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Genomic windows, reporter identity and promoter labels define distinct joins. Cluster labels require biological anchoring rather than numeric k-means labels."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.01.02.697332_v1",
@@ -752,7 +948,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "expression-accessibility-integration",
       "required_stages": [
         "construct merged gene models",
@@ -782,9 +978,22 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.02.697332_v1/agent/prompt.md",
+        "source_sha256": "fbf18ff02e3cd5fedd900799803725d6f4c8de13b969592496c06ccdd2312902",
+        "artifact_count": 6,
+        "formats": {
+          "csv": 4,
+          "bed": 2
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Three-column BED outputs use interval matching; chromosome alone is not a unique record ID. Raw gene matrices retain zero rows, whereas fitted contrasts have explicitly filtered universes."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.01.31.702960_v1",
@@ -797,7 +1006,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "paired-small-rna-mrna-regulation",
       "required_stages": [
         "quantify mRNA and small-RNA classes separately",
@@ -829,9 +1038,21 @@
         "PRJNA13758"
       ],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.31.702960_v1/agent/prompt.md",
+        "source_sha256": "54b92eb966e21af506024bf45e002084c5bfc80ce4a671566eb57e5d28593a74",
+        "artifact_count": 14,
+        "formats": {
+          "csv": 14
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "Small-RNA keys combine identifier, class and feature name; gene IDs alone can collide. Separate complete fits, direction-filtered sets and paired-regulation subsets."
+        ]
+      }
     },
     {
       "task_id": "10.64898_2026.02.04.703711_v1",
@@ -844,7 +1065,7 @@
       "runtime_seconds": null,
       "status": "unmapped",
       "training_mapping_allowed": true,
-      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "assessment": "Research objective, method guidance and every required-output section assessed; native execution and biological source independence remain unvalidated.",
       "workflow_family": "observed-community-and-growth-model",
       "required_stages": [
         "infer amplicon sequence variants",
@@ -874,9 +1095,43 @@
       ],
       "source_accessions_mentioned": [],
       "remaining_gaps": [
-        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Define fresh complete artifact acceptance on independent observations, including explicit row/column membership, duplicate rejection and missing/nonfinite-value behavior; shared-row agreement alone is insufficient.",
         "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
-      ]
+      ],
+      "output_contract_review": {
+        "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.04.703711_v1/agent/prompt.md",
+        "source_sha256": "ca56e5ddda0c91ca657d199e2bfe2a4ecebfec2d4d35b429aea90a94516c0e42",
+        "artifact_count": 4,
+        "formats": {
+          "csv": 4
+        },
+        "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+        "scientific_decisions": [
+          "ASV matrix columns depend on inferred sequences. Taxon tables include explicit zeros and designated inocula; measured productivity and simulated trajectories use different composite keys and scopes."
+        ]
+      }
     }
-  ]
+  ],
+  "required_output_artifact_count": 131,
+  "source_grader_review": {
+    "revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
+    "files": {
+      "metrics.py": {
+        "url": "https://github.com/EdisonScientific/BixBench3/blob/d0e0bbb41222335b1b8878f533a58466a3a782dc/src/bixbench3/grading/metrics.py",
+        "sha256": "940b1cd6b76572b08624fcef6e8bc8c3904ae15943c45d1e20848eed4582873c"
+      },
+      "grader.py": {
+        "url": "https://github.com/EdisonScientific/BixBench3/blob/d0e0bbb41222335b1b8878f533a58466a3a782dc/src/bixbench3/grading/grader.py",
+        "sha256": "69053e1d0e435069b71a82669b1f9500aba944e8b33d2c5a3f7953b502561d98"
+      }
+    },
+    "scope": "Static review of numeric alignment, label/interval metrics and score combination; source benchmark not executed.",
+    "findings": [
+      "Numeric and categorical agreement use shared row identities; numeric agreement also uses shared value columns. Enforce completeness separately.",
+      "Duplicate keys retain the first row. Fresh contracts should reject duplicate identifiers.",
+      "Numeric coercion and missing-value masks can omit pairs; explicit missing/nonfinite-value contracts are required.",
+      "Interval overlap rules may allow many-to-many matches; require an explicit geometric and multiplicity policy.",
+      "Artifact checks are multiplied. Which checks are configured per task has not been audited because ground-truth packages were not downloaded."
+    ]
+  }
 }

@@ -285,10 +285,11 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/bixbench3.json",
       "source_inventory_name": "BixBench3",
-      "task_inventory_status": "19-task-bodies-assessed-one-objective-excluded",
+      "task_inventory_status": "19-full-prompts-and-output-contracts-assessed-one-objective-excluded",
       "runner_revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
       "metadata_access": "gated-authorized",
-      "task_metadata_bytes": 107623
+      "task_metadata_bytes": 107623,
+      "required_output_artifact_count": 131
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

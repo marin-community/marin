@@ -235,7 +235,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) | 50 (all overlap original IDs) | — |
 | [CellBench](../../experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json) | 50 analysis-planning contexts | — |
 | [BioML-bench](../../experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json) | 406 registry definitions; 24 selected by the released experiment | — |
-| [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 task bodies assessed, one objective excluded | — |
+| [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 full prompts and 131 output artifacts assessed, one objective excluded | — |
 
 Of these 1,241 ID task/protocol/definition records, 23 have manually assessed component mappings,
 1,217 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
@@ -303,8 +303,9 @@ protocol uses activity proxies. Neither supplies real training inputs or a biolo
 ground truth by itself. Public assay labels also mean that a prediction-file score
 cannot establish whether each fold was excluded during fitting.
 
-BixBench3 contributes 20 research-scale paper tasks. Nineteen task bodies have
-assessed workflow stages; full artifact contracts still need endpoint-level review.
+BixBench3 contributes 20 research-scale paper tasks. Nineteen full prompts have
+assessed workflow stages and all 131 required output artifacts reviewed for identities,
+row universes, units and relationships. The inventory records these decisions per task.
 One pathogen-enhancement objective remains an excluded identifier. The source
 grades artifacts deterministically and uses a separate process judge; our acceptance
 rules require quantitative artifacts. Its reported runs average roughly eight hours,
@@ -312,6 +313,11 @@ so adaptations need an explicit analysis boundary and measured runtime. Multi-as
 joins, technical versus biological replication, missing observations and complete
 output tables must survive that reduction. Simulated community-growth trajectories
 remain distinct from observed microbial measurements.
+Static review of the shared grader found that numeric agreement uses shared rows
+and columns, duplicate keys retain the first row, and missing-value masks can omit
+pairs. Adapted contracts require explicit completeness, uniqueness and missing-value
+checks. Task-specific grading configurations packaged with ground truth remain
+uninspected; the source benchmark has not been executed.
 
 For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
