@@ -88,7 +88,7 @@ def grpo_model_loss(
     accumulation_steps: int,
     block_size: int,
 ) -> tuple[jax.Array, dict[str, Metric]]:
-    """Compute the same inference-mode raw-policy scores and GRPO objective."""
+    """Return GRPO loss and metrics for a complete model batch."""
     current = response_logprobs(model, batch, key=key, block_size=block_size)
     return grpo_loss(
         current,
