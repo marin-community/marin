@@ -335,8 +335,35 @@
       "scoring_access": "Public grading",
       "source_url": "https://arxiv.org/abs/2505.08341",
       "data_url": "https://github.com/EperLuo/BaisBench/tree/cfab1beb09a7cba999c16f01475fdca37fee5cac",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "Pinned workbook question stems, Task2 scoring source, release README and Hugging Face file manifest inspected; 193 discovery records and 15 annotation dataset identities enumerated. No benchmark execution or recipe coverage claimed.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/baisbench.json",
+      "authoring_assessment": "Use explicit cell, donor and study units. Many stems require external mechanistic or functional evidence beyond expression matrices; adapt only to complete deterministic artifact contracts on independent observations.",
+      "release_evidence": {
+        "revision": "cfab1beb09a7cba999c16f01475fdca37fee5cac",
+        "data_revision": "0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4",
+        "public_inventory_count": 208,
+        "question_stems_reviewed": 193,
+        "studies": 41,
+        "annotation_dataset_ids": 15,
+        "source_files": {
+          "README.md": {
+            "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/README.md",
+            "sha256": "2ffa8418f0a78bc9ca111c8534e3c352bd69f6dcea0f7ba4ff07d2ac68eb969c",
+            "bytes": 2054
+          },
+          "Task2.ipynb": {
+            "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2.ipynb",
+            "sha256": "485b89409a0b5c42cff410fd3b4077bf4e661851c8807873d618e5ff9e0cdce4",
+            "bytes": 12176
+          },
+          "Task2_data/BAISBench_task2.xlsx": {
+            "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+            "sha256": "a6957372ffd79acc13cd3e07df14166042aefec3aef563971e027be59941e31b",
+            "bytes": 44486
+          }
+        }
+      }
     },
     {
       "sheet": "Agentic (Harbor)",

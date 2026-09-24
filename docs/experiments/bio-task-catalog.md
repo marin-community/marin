@@ -240,12 +240,25 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [CellBench](../../experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json) | 50 analysis-planning contexts | — |
 | [BioML-bench](../../experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json) | 406 registry definitions; 24 selected by the released experiment | — |
 | [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 full prompts and 131 output artifacts assessed, one objective excluded | — |
+| [BAISBench](../../experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json) | 193 discovery questions across 41 studies; 15 annotation dataset identities | — |
 
-Of these 1,241 ID task/protocol/definition records, 23 have manually assessed component mappings,
-1,217 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 1,449 ID task/protocol/definition records, 46 have manually assessed component mappings,
+1,402 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
+
+The COX1 recipe supplies per-tree treeness, length and pair-distance components
+for 18 original BixBench endpoints and five overlapping Verified-50 protocols.
+These 23 mappings share one biological input. Cross-gene and biological-group
+aggregation, native PhyKIT agreement and benchmark-lineage screening remain
+pending; method replicates do not substitute for gene or biological replicates.
+
+BAISBench question stems have manually assessed workflow patterns. Task1 has
+dataset identities and a broad annotation pattern; its scoring implementation
+and input schemas remain uninspected. Discovery answer-choice grading does not
+check biological artifacts, and some questions require external functional or
+mechanistic evidence beyond expression matrices.
 
 ScienceAgentBench includes all 27 Bioinformatics-domain tasks from its verified
 release; 75 tasks from other disciplines are outside the selected scope. CORE-Bench

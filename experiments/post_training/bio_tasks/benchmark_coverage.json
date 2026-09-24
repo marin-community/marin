@@ -290,6 +290,21 @@
       "metadata_access": "gated-authorized",
       "task_metadata_bytes": 107623,
       "required_output_artifact_count": 131
+    },
+    "BAISBench": {
+      "revision": "cfab1beb09a7cba999c16f01475fdca37fee5cac",
+      "source_url": "https://github.com/EperLuo/BaisBench/tree/cfab1beb09a7cba999c16f01475fdca37fee5cac",
+      "inventory_count": 208,
+      "public_inventory_count": 208,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/baisbench.json",
+      "source_inventory_name": "BAISBench",
+      "task_inventory_status": "193-question-stems-assessed-15-annotation-identities",
+      "study_count": 41,
+      "discovery_questions": 193,
+      "annotation_datasets": 15,
+      "data_revision": "0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

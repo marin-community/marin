@@ -606,9 +606,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -616,8 +618,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Difference of biological-group medians.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -626,10 +630,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-11-q2",
@@ -637,9 +648,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -647,8 +660,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Proportion of eligible fungal genes above the requested treeness threshold.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -657,10 +672,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-11-q3",
@@ -668,9 +690,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -678,8 +702,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Maximum across eligible animal genes.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -688,10 +714,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-11-q4",
@@ -699,9 +732,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -709,8 +744,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Group Mann-Whitney U statistic; group order and ties must be defined.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -719,10 +756,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-11-q5",
@@ -730,9 +774,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -740,8 +786,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Group Mann-Whitney p-value; sidedness, ties and exact/asymptotic method must be defined.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -750,10 +798,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-11-q6",
@@ -761,9 +816,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -771,8 +828,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Median across eligible fungal genes.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -781,10 +840,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-12-q2",
@@ -3257,9 +3323,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3267,8 +3335,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Mean of per-gene mean pair distances within fungi; retain both aggregation levels.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3277,10 +3347,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-34-q2",
@@ -3289,9 +3366,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3299,8 +3378,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Median of all eligible tip-pair distances within one identified gene tree.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3309,10 +3390,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-34-q3",
@@ -3321,9 +3409,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3331,8 +3421,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Mann-Whitney U on per-gene mean distances, with genes as comparison units.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3341,10 +3433,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-34-q4",
@@ -3353,9 +3452,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3363,8 +3464,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Range of per-gene mean distances within animals.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3373,10 +3476,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-34-q5",
@@ -3385,9 +3495,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3395,8 +3507,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Ratio of group medians of per-gene mean distances; specify numerator and denominator.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3405,10 +3519,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-34-q6",
@@ -3417,9 +3538,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute patristic distances for each eligible gene",
@@ -3427,8 +3550,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate patristic distances using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Mean of per-gene mean pair distances within animals; retain both aggregation levels.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3437,10 +3562,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-patristic"
+      "workflow_family": "phylogenetic-patristic",
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-35-q1",
@@ -3825,9 +3957,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute tree length for each eligible gene",
@@ -3835,8 +3969,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate tree length using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Ratio of group median tree lengths, with a defined fold-change direction.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3845,10 +3981,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-tree"
+      "workflow_family": "phylogenetic-tree",
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-38-q2",
@@ -3857,9 +4000,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute tree length for each eligible gene",
@@ -3867,8 +4012,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate tree length using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Variance across animal ortholog trees; specify population versus sample denominator.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3877,10 +4024,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-tree"
+      "workflow_family": "phylogenetic-tree",
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-38-q3",
@@ -3889,9 +4043,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute tree length for each eligible gene",
@@ -3899,8 +4055,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate tree length using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Proportion of eligible fungal orthologs above the requested tree-length threshold.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3909,10 +4067,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-tree"
+      "workflow_family": "phylogenetic-tree",
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-38-q5",
@@ -3921,9 +4086,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute tree length for each eligible gene",
@@ -3931,8 +4098,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate tree length using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Proportion of fungal orthologs above the animal mean tree length.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3941,10 +4110,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-tree"
+      "workflow_family": "phylogenetic-tree",
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-38-q6",
@@ -3953,9 +4129,11 @@
         "Genomics",
         "Phylogenetics and Evolutionary Analysis"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute tree length for each eligible gene",
@@ -3963,8 +4141,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate tree length using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Median of within-ortholog group ratios after a one-to-one ortholog join.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -3973,10 +4153,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-tree"
+      "workflow_family": "phylogenetic-tree",
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-39-q2",
@@ -6137,9 +6324,11 @@
         "Phylogenetics and Evolutionary Analysis",
         "Genomics"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
       "required_stages": [
         "join gene, taxon and group identifiers to input trees or alignments",
         "compute treeness for each eligible gene",
@@ -6147,8 +6336,10 @@
         "summarize biological groups or compare their distributions as requested"
       ],
       "remaining_gaps": [
-        "Validate treeness using the package definition on independent real gene families; root placement, gap policy, taxon pruning, matched orthologs and the comparison unit must be explicit.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Mean over the five eligible input trees, followed by the requested scaling and rounding.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending."
       ],
       "required_formats": [
         "Newick",
@@ -6157,10 +6348,17 @@
       "required_tools": [
         "PhyKIT"
       ],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "phylogenetic-treeness"
+      "workflow_family": "phylogenetic-treeness",
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
+      ]
     },
     {
       "task_id": "bix-61-q1",
@@ -6764,5 +6962,51 @@
       "runtime_seconds": null,
       "workflow_family": "tissue-rnaseq-set-comparison"
     }
-  ]
+  ],
+  "tree_component_assessment": {
+    "recipe": "real-cox1-tree-comparison",
+    "mapped_task_ids": [
+      "bix-11-q1",
+      "bix-11-q2",
+      "bix-11-q3",
+      "bix-11-q4",
+      "bix-11-q5",
+      "bix-11-q6",
+      "bix-34-q1",
+      "bix-34-q2",
+      "bix-34-q3",
+      "bix-34-q4",
+      "bix-34-q5",
+      "bix-34-q6",
+      "bix-38-q1",
+      "bix-38-q2",
+      "bix-38-q3",
+      "bix-38-q5",
+      "bix-38-q6",
+      "bix-60-q1"
+    ],
+    "source_definition_review": {
+      "revision": "a9af92b60111ac77c9c1c7df3e9695d2d4f62dca",
+      "files": {
+        "patristic_distances": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/patristic_distances.py",
+          "sha256": "60902ecafb505e9f10df9e37a7ba1b94939403e78b6e8f1143253f51db6ab0d2"
+        },
+        "treeness": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/treeness.py",
+          "sha256": "ad0d654d161e5480b94980c9799903f912545f80499fcf1a632dc579286bdea8"
+        },
+        "total_tree_length": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/total_tree_length.py",
+          "sha256": "a03344151d4fb8b39353a1f78bd444d8a884b05ac1dfcb2a873f92701b78d49a"
+        }
+      }
+    },
+    "definition_review_scope": "Three upstream command implementations inspected for operation and output rounding only. Shared parser internals, benchmark package version and native PhyKIT execution remain unverified.",
+    "native_evidence": "native_validation_runs/e2f647365a6f.json",
+    "native_oracle_seconds": 1028.827498728002,
+    "runtime_scope": "One complete three-method COX1 oracle, not the runtime of any benchmark endpoint.",
+    "distinct_biological_inputs": 1,
+    "coverage_unit": "Task records with a shared component, not completed or independent benchmark workflows."
+  }
 }

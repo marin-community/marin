@@ -83,18 +83,31 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "7090b016cbd816db05d2b35b139e6207bd2ed959cb4d268907f2a22157aef96b",
       "source_eval_mode": "llm_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
       "scientific_decisions": [
         "Return the difference between group medians as a proportion; do not subtract percentages without converting units."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
+        "Difference of biological-group medians.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending.",
         "Return the difference between group medians as a proportion; do not subtract percentages without converting units.",
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "This protocol overlaps the original question ID. Its input equivalence remains unverified; do not count it as another independent workflow."
+      ],
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
       ]
     },
     {
@@ -277,17 +290,31 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "ddb16c5feb7a007c384a9afd4c6f304c8ad1dc24c44285f723bcd2a2da2b5690",
       "source_eval_mode": "llm_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
       "scientific_decisions": [
         "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "Median of all eligible tip-pair distances within one identified gene tree.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending.",
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance.",
+        "This protocol overlaps the original question ID. Its input equivalence remains unverified; do not count it as another independent workflow."
+      ],
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
       ]
     },
     {
@@ -1030,17 +1057,31 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "1d030254eae14b7f694a6939a50bac8cc08106b5d1dbb8bb447efd7d79864bc3",
       "source_eval_mode": "llm_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
       "scientific_decisions": [
         "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "Ratio of group medians of per-gene mean distances; specify numerator and denominator.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending.",
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance.",
+        "This protocol overlaps the original question ID. Its input equivalence remains unverified; do not count it as another independent workflow."
+      ],
+      "covered_stages": [
+        "All 3,916 unordered tip-pair path lengths for each of three estimates of one observed COX1 alignment."
       ]
     },
     {
@@ -1924,17 +1965,31 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "ec990d710671599243484f14b24ea7058f29098a543ae97c1f98d1a9ff87f5e0",
       "source_eval_mode": "llm_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
       "scientific_decisions": [
         "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "Ratio of group median tree lengths, with a defined fold-change direction.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending.",
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance.",
+        "This protocol overlaps the original question ID. Its input equivalence remains unverified; do not count it as another independent workflow."
+      ],
+      "covered_stages": [
+        "Sum of all unrooted edge lengths in each of three estimates of one observed COX1 alignment."
       ]
     },
     {
@@ -2060,17 +2115,31 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "a27bb10febe8a1e0d206ecee482bf61f8c3b7757ebbc1db0878a59aeae847f62",
       "source_eval_mode": "llm_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "component-only",
+      "assessment": "The individual endpoint shares a measured tree-analysis component with real-cox1-tree-comparison. The required aggregation and biological sampling remain uncovered.",
       "scientific_decisions": [
         "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cox1-tree-comparison"
+      ],
+      "independent_data_sources": [
+        "UniProt:metazoan-cox1-20260924"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/e2f647365a6f.json"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "Proportion of eligible fungal genes above the requested treeness threshold.",
+        "The recipe compares inference methods for one mitochondrial gene. It has no fungal/animal multi-gene collection or matched ortholog-group joins; its three trees are not independent biological replicates.",
+        "PhyKIT has been inspected, not executed here. Validate the required pinned package, rooting and taxon policies, and rounding before claiming package-equivalent endpoints; inspected treeness and tree-length commands round to four decimals.",
+        "The native evidence checks a shared operation on observed UniProt sequences. Benchmark-specific endpoint validation and full benchmark-lineage independence screening remain pending.",
+        "Inspect the individual endpoint within the shared workflow family; source grading or expected-answer changes do not establish equivalent task acceptance.",
+        "This protocol overlaps the original question ID. Its input equivalence remains unverified; do not count it as another independent workflow."
+      ],
+      "covered_stages": [
+        "Internal-edge length divided by total edge length in each of three unrooted estimates of one observed COX1 alignment."
       ]
     },
     {
@@ -2350,5 +2419,38 @@
         "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
       ]
     }
-  ]
+  ],
+  "tree_component_assessment": {
+    "recipe": "real-cox1-tree-comparison",
+    "mapped_task_ids": [
+      "bix-11-q1",
+      "bix-34-q2",
+      "bix-34-q5",
+      "bix-38-q1",
+      "bix-11-q2"
+    ],
+    "source_definition_review": {
+      "revision": "a9af92b60111ac77c9c1c7df3e9695d2d4f62dca",
+      "files": {
+        "patristic_distances": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/patristic_distances.py",
+          "sha256": "60902ecafb505e9f10df9e37a7ba1b94939403e78b6e8f1143253f51db6ab0d2"
+        },
+        "treeness": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/treeness.py",
+          "sha256": "ad0d654d161e5480b94980c9799903f912545f80499fcf1a632dc579286bdea8"
+        },
+        "total_tree_length": {
+          "source_url": "https://raw.githubusercontent.com/JLSteenwyk/PhyKIT/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/total_tree_length.py",
+          "sha256": "a03344151d4fb8b39353a1f78bd444d8a884b05ac1dfcb2a873f92701b78d49a"
+        }
+      }
+    },
+    "definition_review_scope": "Three upstream command implementations inspected for operation and output rounding only. Shared parser internals, benchmark package version and native PhyKIT execution remain unverified.",
+    "native_evidence": "native_validation_runs/e2f647365a6f.json",
+    "native_oracle_seconds": 1028.827498728002,
+    "runtime_scope": "One complete three-method COX1 oracle, not the runtime of any benchmark endpoint.",
+    "distinct_biological_inputs": 1,
+    "coverage_unit": "Task records with a shared component, not completed or independent benchmark workflows."
+  }
 }

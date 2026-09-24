@@ -1,0 +1,3916 @@
+{
+  "benchmark": "BAISBench",
+  "scope": "193 released question stems from 41 studies and identities of 15 annotation datasets. These are 208 protocol records, not 208 independent studies.",
+  "identity_policy": "The release has no standalone global question IDs. Inventory keys use discovery/<source DOI>/q<original question column> and annotation/<source filename>; original row positions and question hashes preserve traceability. Missing question columns are not renumbered.",
+  "assessment_scope": "All 193 permitted question stems manually assigned workflow prerequisites. Answer columns, answer options, stored predictions and biological matrices do not supply authoring patterns. Task1 identities and broad workflow only; full Task1 notebook and schemas uninspected.",
+  "source_files": {
+    "README.md": {
+      "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/README.md",
+      "sha256": "2ffa8418f0a78bc9ca111c8534e3c352bd69f6dcea0f7ba4ff07d2ac68eb969c",
+      "bytes": 2054
+    },
+    "Task2.ipynb": {
+      "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2.ipynb",
+      "sha256": "485b89409a0b5c42cff410fd3b4077bf4e661851c8807873d618e5ff9e0cdce4",
+      "bytes": 12176
+    },
+    "Task2_data/BAISBench_task2.xlsx": {
+      "url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "sha256": "a6957372ffd79acc13cd3e07df14166042aefec3aef563971e027be59941e31b",
+      "bytes": 44486
+    }
+  },
+  "data_release": {
+    "revision": "0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4",
+    "files": [
+      ".gitattributes",
+      "BAISBench_task1.csv",
+      "BAISBench_task2.csv",
+      "README.md",
+      "Task1_data/Adipose.h5ad",
+      "Task1_data/Adipose_raw.h5ad",
+      "Task1_data/Blood.h5ad",
+      "Task1_data/Blood_raw.h5ad",
+      "Task1_data/Bone_marrow.h5ad",
+      "Task1_data/Bone_marrow_raw.h5ad",
+      "Task1_data/Breast.h5ad",
+      "Task1_data/Breast_raw.h5ad",
+      "Task1_data/Eye.h5ad",
+      "Task1_data/Eye_raw.h5ad",
+      "Task1_data/Heart.h5ad",
+      "Task1_data/Heart_raw.h5ad",
+      "Task1_data/Intestine.h5ad",
+      "Task1_data/Intestine_raw.h5ad",
+      "Task1_data/Kidney.h5ad",
+      "Task1_data/Kidney_raw.h5ad",
+      "Task1_data/Liver.h5ad",
+      "Task1_data/Liver_raw.h5ad",
+      "Task1_data/Ovary.h5ad",
+      "Task1_data/Ovary_raw.h5ad",
+      "Task1_data/Pancreas.h5ad",
+      "Task1_data/Pancreas_raw.h5ad",
+      "Task1_data/Salivary_gland.h5ad",
+      "Task1_data/Salivary_gland_raw.h5ad",
+      "Task1_data/Skin.h5ad",
+      "Task1_data/Skin_raw.h5ad",
+      "Task1_data/Testis.h5ad",
+      "Task1_data/Testis_raw.h5ad",
+      "Task1_data/Trachea.h5ad",
+      "Task1_data/Trachea_raw.h5ad",
+      "Task2_data/BAISBench_task2.xlsx",
+      "Task2_data/BAISBench_task2_categories.npy",
+      "Task2_data/h5ad_file/task2 - Bhattacharya et al. (2024) Genes.h5ad",
+      "Task2_data/h5ad_file/task2 - Binvignat et al. (2024) JCI Insight.h5ad",
+      "Task2_data/h5ad_file/task2 - Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology.h5ad",
+      "Task2_data/h5ad_file/task2 - Cowan et al. (2020) Cell - fovea centralis.h5ad",
+      "Task2_data/h5ad_file/task2 - Cowan et al. (2020) Cell - pigment epithelium of eye.h5ad",
+      "Task2_data/h5ad_file/task2 - Cowan et al. (2020) Cell - retina (organoid).h5ad",
+      "Task2_data/h5ad_file/task2 - Elmentaite et al. (2020) Developmental Cell - Fetal Human Gut.h5ad",
+      "Task2_data/h5ad_file/task2 - Elmentaite et al. (2020) Developmental Cell - Paediatric Human Gut.h5ad",
+      "Task2_data/h5ad_file/task2 - Fan et al. (2019) Nat Commun.h5ad",
+      "Task2_data/h5ad_file/task2 - Fasolino et al. (2022) Nat Metab.h5ad",
+      "Task2_data/h5ad_file/task2 - Guerrero-Murillo et al. (2024) bioRxiv.h5ad",
+      "Task2_data/h5ad_file/task2 - Heimlich et al. (2024) Blood Advances.h5ad",
+      "Task2_data/h5ad_file/task2 - Horeth et al. (2023) J Dent Res.h5ad",
+      "Task2_data/h5ad_file/task2 - Joseph et al. (2020) Prostate - All Human Cells.h5ad",
+      "Task2_data/h5ad_file/task2 - Joseph et al. (2020) Prostate - All Mouse Cells.h5ad",
+      "Task2_data/h5ad_file/task2 - Joseph et al. (2020) Prostate - Human Fibromuscular Stromal Cells.h5ad",
+      "Task2_data/h5ad_file/task2 - Joseph et al. (2020) Prostate - Mouse Epithelial Cells.h5ad",
+      "Task2_data/h5ad_file/task2 - Joseph et al. (2020) Prostate - Mouse Fibromuscular Stromal Cells.h5ad",
+      "Task2_data/h5ad_file/task2 - J\u00e4kel et al. (2019) Nature.h5ad",
+      "Task2_data/h5ad_file/task2 - Knight-Schrijver et al. (2022) Nat Cardiovasc Res.h5ad",
+      "Task2_data/h5ad_file/task2 - Kurkalang et al. (2023) Cancer Science.h5ad",
+      "Task2_data/h5ad_file/task2 - Lavaert et al. (2020) Immunity.h5ad",
+      "Task2_data/h5ad_file/task2 - Lee et al. (2020) Sci. Immunol..h5ad",
+      "Task2_data/h5ad_file/task2 - Lengyel et al. (2022) Cell Reports - Fallopian tube.h5ad",
+      "Task2_data/h5ad_file/task2 - Lengyel et al. (2022) Cell Reports - Ovary.h5ad",
+      "Task2_data/h5ad_file/task2 - Li et al. (2024) Cell Stem Cell.h5ad",
+      "Task2_data/h5ad_file/task2 - Lukassen et al. (2020) The EMBO Journal - lung.h5ad",
+      "Task2_data/h5ad_file/task2 - Lukassen et al. (2020) The EMBO Journal - respiratory airway.h5ad",
+      "Task2_data/h5ad_file/task2 - Martin et al. (2019) Cell.h5ad",
+      "Task2_data/h5ad_file/task2 - Melms et al. (2021) Nature.h5ad",
+      "Task2_data/h5ad_file/task2 - Menon et al. (2019) Nat Commun.h5ad",
+      "Task2_data/h5ad_file/task2 - Mimpen et al. (2024) The FASEB Journal.h5ad",
+      "Task2_data/h5ad_file/task2 - Moerkens et al. (2024) Cell Reports - IFN.h5ad",
+      "Task2_data/h5ad_file/task2 - Moerkens et al. (2024) Cell Reports - media.h5ad",
+      "Task2_data/h5ad_file/task2 - Opasawatchai et al. (2022) Front. Dent. Med.h5ad",
+      "Task2_data/h5ad_file/task2 - Phan et al. (2024) Nat Commun.h5ad",
+      "Task2_data/h5ad_file/task2 - Rabadam et al. (2024) JCI Insight.h5ad",
+      "Task2_data/h5ad_file/task2 - Rustam et al. (2023) Am J Respir Crit Care Med.h5ad",
+      "Task2_data/h5ad_file/task2 - Sol\u00e9-Boldo et al. (2020) Commun Biol.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Fetal kidney full.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Fetal kidney immune.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Fetal kidney nephron.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Fetal kidney stroma.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Mature kidney full.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Mature kidney immune.h5ad",
+      "Task2_data/h5ad_file/task2 - Stewart et al. (2019) Science - Mature kidney non PT parenchyma.h5ad",
+      "Task2_data/h5ad_file/task2 - Strati et al. (2023) Cell Reports Medicine.h5ad",
+      "Task2_data/h5ad_file/task2 - Szabo et al. (2019) Nat Commun.h5ad",
+      "Task2_data/h5ad_file/task2 - Wang et al. (2020) Journal of Experimental Medicine - Colon.h5ad",
+      "Task2_data/h5ad_file/task2 - Wang et al. (2020) Journal of Experimental Medicine - Ileum.h5ad",
+      "Task2_data/h5ad_file/task2 - Wang et al. (2020) Journal of Experimental Medicine - Rectum.h5ad",
+      "Task2_data/h5ad_file/task2 - Watanabe et al. (2022) Am J Respir Cell Mol Biol.h5ad",
+      "Task2_data/h5ad_file/task2 - Whitfield et al. (2023) Clinical &amp; Translational Med.h5ad",
+      "Task2_data/h5ad_file/task2 - Wiedemann et al. (2023) Cell Reports.h5ad",
+      "Task2_data/h5ad_file/task2 - Wu et al. (2020) The EMBO Journal.h5ad",
+      "Task2_data/h5ad_file/task2 - Xiang et al. (2020) Front. Cardiovasc. Med. - human.h5ad",
+      "Task2_data/h5ad_file/task2 - Xiang et al. (2020) Front. Cardiovasc. Med. - mouse.h5ad",
+      "Task2_data/h5ad_file/task2 - Xu et al. (2022) Sci Rep - Bronchial.h5ad",
+      "Task2_data/h5ad_file/task2 - Xu et al. (2022) Sci Rep - Nasal.h5ad",
+      "Task2_data/h5ad_file/task2 - Yang et al. (2021) Nature.h5ad",
+      "Task2_data/h5ad_file/task2 - de Vrij et al. (2024) Commun Biol - Cross-sectional.h5ad",
+      "Task2_data/h5ad_file/task2 - de Vrij et al. (2024) Commun Biol - Longitudinal w treatment.h5ad"
+    ],
+    "metadata_sha256": "568c6f458c4cd1bb0d7681dac74418ca71589a7030b9e62e0005c0bd05408199"
+  },
+  "task_defaults": {
+    "status": "unmapped",
+    "assessment": "Question-stem workflow prerequisites assessed; biological data, answer options and exact output acceptance remain uninspected.",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null
+  },
+  "patterns": {
+    "single-cell-hierarchical-annotation": {
+      "required_stages": [
+        "inspect count layer and QC",
+        "normalize and select features",
+        "cluster or transfer reference labels",
+        "resolve marker-supported cell identities",
+        "report cell labels and hierarchy-aware uncertainty"
+      ],
+      "scientific_decisions": [
+        "Cluster counts and labels depend on preprocessing and annotation resolution; saved source labels are not independent validation."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Cluster counts and labels depend on preprocessing and annotation resolution; saved source labels are not independent validation.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cell-type-expression-localization": {
+      "required_stages": [
+        "join cell and donor metadata",
+        "establish expression scale",
+        "summarize the specified feature by cell type",
+        "report detection and abundance denominators"
+      ],
+      "scientific_decisions": [
+        "A detected transcript is not a demonstrated protein activity or causal mechanism."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "A detected transcript is not a demonstrated protein activity or causal mechanism.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "compartment-expression-contrast": {
+      "required_stages": [
+        "join donor, condition and tissue labels",
+        "separate compositional changes from within-cell-type expression",
+        "compare compartment-specific summaries"
+      ],
+      "scientific_decisions": [
+        "Use donor-level replication and interactions; expression and cell abundance can change together."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Use donor-level replication and interactions; expression and cell abundance can change together.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "donor-aware-cell-composition": {
+      "required_stages": [
+        "join biological-sample and cell labels",
+        "count eligible cells by sample",
+        "define denominator",
+        "compare group proportions with sample-level replication"
+      ],
+      "scientific_decisions": [
+        "Cells are nested within donors; proportions depend on captured populations and cannot establish tissue prevalence without sampling evidence."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Cells are nested within donors; proportions depend on captured populations and cannot establish tissue prevalence without sampling evidence.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "single-cell-gene-module": {
+      "required_stages": [
+        "pin gene-set membership and gene identifiers",
+        "choose expression layer and matched controls",
+        "score modules by cell",
+        "aggregate by donor and cell type"
+      ],
+      "scientific_decisions": [
+        "Module scores depend on background and normalization; transcript scores do not establish pathway activation."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Module scores depend on background and normalization; transcript scores do not establish pathway activation.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "data-and-literature-evidence-synthesis": {
+      "required_stages": [
+        "state the biological claim",
+        "identify measurable consequences",
+        "analyze independent observations",
+        "join explicit external evidence",
+        "separate observation from mechanism"
+      ],
+      "scientific_decisions": [
+        "The stem requests an interpretation that may not be identifiable from the supplied matrix. Author an explicit numerical evidence contract before adapting; no LLM judge."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "The stem requests an interpretation that may not be identifiable from the supplied matrix. Author an explicit numerical evidence contract before adapting; no LLM judge.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "single-cell-state-characterization": {
+      "required_stages": [
+        "resolve cell subtypes",
+        "compare marker and module profiles",
+        "join donor and condition context",
+        "report reproducible state features"
+      ],
+      "scientific_decisions": [
+        "A named state needs marker and contextual evidence; an embedding or cluster ID alone is insufficient."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "A named state needs marker and contextual evidence; an embedding or cluster ID alone is insufficient.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "replicate-aware-single-cell-contrast": {
+      "required_stages": [
+        "join cell and donor identities",
+        "select relevant populations",
+        "preserve biological replicates",
+        "fit condition or interaction contrast",
+        "adjust multiple tests"
+      ],
+      "scientific_decisions": [
+        "Define covariates, expression layer, tested universe and effect direction; avoid treating cells as independent subjects."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Define covariates, expression layer, tested universe and effect direction; avoid treating cells as independent subjects.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "sample-level-signal-detection": {
+      "required_stages": [
+        "identify source assay and feature identities",
+        "audit background and negative controls",
+        "calculate sample-level signal and detection limits",
+        "report evidence and uncertainty"
+      ],
+      "scientific_decisions": [
+        "A sparse zero does not demonstrate biological absence; raw read evidence may be required beyond a processed expression matrix."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "A sparse zero does not demonstrate biological absence; raw read evidence may be required beyond a processed expression matrix.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cell-communication-hypotheses": {
+      "required_stages": [
+        "assign sender and receiver populations",
+        "pin ligand-receptor database",
+        "quantify compatible expression",
+        "compare samples or conditions",
+        "export interactions and support"
+      ],
+      "scientific_decisions": [
+        "Ligand-receptor coexpression suggests a hypothesis; transcriptomic associations do not demonstrate communication or causation."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Ligand-receptor coexpression suggests a hypothesis; transcriptomic associations do not demonstrate communication or causation.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "single-cell-contrast-enrichment": {
+      "required_stages": [
+        "fit replicate-aware cell-type contrast",
+        "pin gene mappings and gene-set release",
+        "define background or ranking",
+        "calculate enrichment and multiplicity",
+        "report complete results"
+      ],
+      "scientific_decisions": [
+        "Do not interchange overrepresentation and rank-based enrichment or reuse cells as biological replicates."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Do not interchange overrepresentation and rank-based enrichment or reuse cells as biological replicates.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cell-type-genetic-risk-association": {
+      "required_stages": [
+        "pin risk loci or gene evidence",
+        "resolve locus-to-gene mapping",
+        "measure cell-type expression or enrichment",
+        "compare the specified background",
+        "report uncertainty"
+      ],
+      "scientific_decisions": [
+        "Expression of a risk-associated gene does not establish the causal cell type; locus mapping and comparison universe matter."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Expression of a risk-associated gene does not establish the causal cell type; locus mapping and comparison universe matter.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "subtype-marker-evidence": {
+      "required_stages": [
+        "identify relevant cells",
+        "contrast candidate subtypes",
+        "quantify marker detection and specificity",
+        "retain donor context",
+        "report supporting and contradictory markers"
+      ],
+      "scientific_decisions": [
+        "Pin the comparison populations and specificity rule; a known marker name alone is not a validated annotation."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Pin the comparison populations and specificity rule; a known marker name alone is not a validated annotation.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "donor-level-clinical-association": {
+      "required_stages": [
+        "join samples to outcomes and timepoints",
+        "quantify cell or module features per donor",
+        "define association model and covariates",
+        "estimate uncertainty",
+        "report confounding limits"
+      ],
+      "scientific_decisions": [
+        "Repeated samples need paired or longitudinal treatment; observational associations do not justify a treatment claim."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Repeated samples need paired or longitudinal treatment; observational associations do not justify a treatment claim.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cell-state-anatomical-context": {
+      "required_stages": [
+        "identify cell states from expression",
+        "link measured anatomical or spatial metadata",
+        "quantify localization evidence",
+        "report uncertainty"
+      ],
+      "scientific_decisions": [
+        "Anatomical proximity requires measured spatial evidence or explicit external references; expression alone is insufficient."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Anatomical proximity requires measured spatial evidence or explicit external references; expression alone is insufficient.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "single-cell-trajectory-hypotheses": {
+      "required_stages": [
+        "select relevant cells and states",
+        "construct neighborhood or trajectory model",
+        "justify root and direction with independent evidence",
+        "test changing features",
+        "report stability"
+      ],
+      "scientific_decisions": [
+        "Pseudotime is not elapsed time or demonstrated lineage; cross-sectional data may not determine direction."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Pseudotime is not elapsed time or demonstrated lineage; cross-sectional data may not determine direction.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cross-dataset-cell-state-comparison": {
+      "required_stages": [
+        "harmonize feature identities and measured layers",
+        "retain species, donor and batch metadata",
+        "align comparable populations",
+        "quantify concordance with controls"
+      ],
+      "scientific_decisions": [
+        "Batch correction must preserve the biological contrast; cross-species comparisons require explicit ortholog mapping."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Batch correction must preserve the biological contrast; cross-species comparisons require explicit ortholog mapping.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "cell-type-feature-coexpression": {
+      "required_stages": [
+        "select eligible cells and layer",
+        "declare detection thresholds",
+        "intersect expressed-feature sets",
+        "report numerator and denominator by sample"
+      ],
+      "scientific_decisions": [
+        "Dropout, library depth and threshold choice affect observed co-detection; coexpression does not establish functional interaction."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Dropout, library depth and threshold choice affect observed co-detection; coexpression does not establish functional interaction.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "regulatory-module-evidence": {
+      "required_stages": [
+        "pin TF-target or motif evidence",
+        "quantify target/module expression",
+        "compare relevant cell states or conditions",
+        "distinguish predicted regulation from perturbation evidence"
+      ],
+      "scientific_decisions": [
+        "Gene-expression association alone does not establish a regulatory edge or direction."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "Gene-expression association alone does not establish a regulatory edge or direction.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "lineage-potential-evidence": {
+      "required_stages": [
+        "define progenitor and outcome identities",
+        "identify lineage or perturbation measurements",
+        "quantify observed outcomes",
+        "compare to expression-based hypotheses"
+      ],
+      "scientific_decisions": [
+        "A transcriptional state does not establish differentiation potential without lineage or functional evidence."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "A transcriptional state does not establish differentiation potential without lineage or functional evidence.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    },
+    "transcriptome-and-functional-assay": {
+      "required_stages": [
+        "join expression samples to intervention or protein measurements",
+        "define observed endpoint and controls",
+        "quantify concordance",
+        "separate assays in the output"
+      ],
+      "scientific_decisions": [
+        "The question needs measurements beyond RNA expression; do not invent functional, plasma-protein or intervention outcomes from H5AD alone."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "required_tools": [],
+      "remaining_gaps": [
+        "The question needs measurements beyond RNA expression; do not invent functional, plasma-protein or intervention outcomes from H5AD alone.",
+        "Review full input schemas and endpoint acceptance, select independent observed biological inputs, and validate all required artifacts."
+      ]
+    }
+  },
+  "workflow_patterns": {
+    "cell-type-expression-localization": [
+      "discovery/10.1038/s41598-022-17832-6/q1",
+      "discovery/10.1038/s41467-019-12780-8/q3",
+      "discovery/10.1038/s42003-020-0922-4/q3",
+      "discovery/10.1126/science.aat5031/q5",
+      "discovery/10.1038/s41467-019-12464-3/q5",
+      "discovery/10.15252/embj.20105114/q1",
+      "discovery/10.15252/embj.20105114/q2",
+      "discovery/10.1038/s41467-024-45165-7/q3",
+      "discovery/10.1016/j.stem.2023.12.013/q2",
+      "discovery/10.1016/j.jcmgh.2022.02.007/q3",
+      "discovery/10.1016/j.jcmgh.2022.02.007/q4",
+      "discovery/10.1016/j.celrep.2022.111838/q2",
+      "discovery/10.1016/j.cell.2020.08.013/q3",
+      "discovery/10.1038/s42003-024-06225-2/q1"
+    ],
+    "compartment-expression-contrast": [
+      "discovery/10.1038/s41598-022-17832-6/q2"
+    ],
+    "donor-aware-cell-composition": [
+      "discovery/10.1038/s41598-022-17832-6/q3",
+      "discovery/10.1172/jci.insight.176963/q2",
+      "discovery/10.1101/2024.01.23.576878/q2",
+      "discovery/10.1101/2024.01.23.576878/q3",
+      "discovery/10.1002/ctm2.1356/q1",
+      "discovery/10.1016/j.celrep.2023.111994/q3",
+      "discovery/10.1084/jem.20191130/q1",
+      "discovery/10.1164/rccm.202207-1384OC/q2",
+      "discovery/10.1164/rccm.202207-1384OC/q5",
+      "discovery/10.1016/j.xcrm.2023.101158/q1",
+      "discovery/10.1038/s41586-021-03569-1/q2",
+      "discovery/10.3389/fdmed.2021.806294/q1",
+      "discovery/10.1038/s44161-022-00183-w/q2",
+      "discovery/10.1111/cas.15979/q3",
+      "discovery/10.1126/sciimmunol.abd1554/q1",
+      "discovery/10.1126/sciimmunol.abd1554/q3",
+      "discovery/10.1038/s41586-019-0903-2/q3",
+      "discovery/10.1002/pros.24020/q3",
+      "discovery/10.3390/genes15030298/q1",
+      "discovery/10.1172/jci.insight.178499/q1",
+      "discovery/10.1172/jci.insight.178499/q5",
+      "discovery/10.1016/j.celrep.2022.111838/q1",
+      "discovery/10.1016/j.devcel.2020.11.010/q3"
+    ],
+    "single-cell-gene-module": [
+      "discovery/10.1038/s41598-022-17832-6/q4",
+      "discovery/10.15252/embj.2019104063/q5",
+      "discovery/10.1038/s41467-019-12464-3/q3",
+      "discovery/10.1038/s41467-024-45165-7/q1",
+      "discovery/10.1038/s44161-022-00183-w/q5",
+      "discovery/10.1111/cas.15979/q1",
+      "discovery/10.1126/sciimmunol.abd1554/q2",
+      "discovery/10.3389/fcvm.2020.00052/q4"
+    ],
+    "data-and-literature-evidence-synthesis": [
+      "discovery/10.1038/s41598-022-17832-6/q5",
+      "discovery/10.1172/jci.insight.176963/q3",
+      "discovery/10.1038/s41467-019-11036-9/q5",
+      "discovery/10.15252/embj.2019104063/q4",
+      "discovery/10.1038/s42003-020-0922-4/q4",
+      "discovery/10.1016/j.xcrm.2023.101158/q5",
+      "discovery/10.1182/bloodadvances.2023011445/q5",
+      "discovery/10.15252/embj.20105114/q5",
+      "discovery/10.1016/j.cell.2019.08.008/q5",
+      "discovery/10.1038/s41586-021-03569-1/q4",
+      "discovery/10.1038/s41586-021-03569-1/q5",
+      "discovery/10.3389/fdmed.2021.806294/q4",
+      "discovery/10.1096/fj.202300601RRR/q4",
+      "discovery/10.1038/s44161-022-00183-w/q4",
+      "discovery/10.1016/j.immuni.2020.03.019/q4",
+      "discovery/10.1016/j.stem.2023.12.013/q5",
+      "discovery/10.1038/s42255-022-00531-x/q4",
+      "discovery/10.1016/j.jcmgh.2022.02.007/q5",
+      "discovery/10.1002/pros.24020/q4",
+      "discovery/10.1002/pros.24020/q5",
+      "discovery/10.1038/s42003-024-06225-2/q5",
+      "discovery/10.1016/j.devcel.2020.11.010/q2",
+      "discovery/10.1016/j.devcel.2020.11.010/q5"
+    ],
+    "single-cell-state-characterization": [
+      "discovery/10.1172/jci.insight.176963/q1",
+      "discovery/10.1038/s41586-021-03710-0/q2",
+      "discovery/10.1038/s41467-019-12780-8/q4",
+      "discovery/10.1165/rcmb.2021-0555OC/q3",
+      "discovery/10.1101/2024.01.23.576878/q4",
+      "discovery/10.1038/s41467-019-11036-9/q1",
+      "discovery/10.1002/ctm2.1356/q5",
+      "discovery/10.1016/j.celrep.2023.111994/q4",
+      "discovery/10.1016/j.celrep.2023.111994/q5",
+      "discovery/10.15252/embj.2019104063/q1",
+      "discovery/10.15252/embj.2019104063/q3",
+      "discovery/10.1038/s42003-020-0922-4/q2",
+      "discovery/10.1126/science.aat5031/q1",
+      "discovery/10.1126/science.aat5031/q4",
+      "discovery/10.1016/j.xcrm.2023.101158/q4",
+      "discovery/10.1038/s41467-019-12464-3/q1",
+      "discovery/10.1016/j.celrep.2024.114247/q2",
+      "discovery/10.1016/j.celrep.2024.114247/q4",
+      "discovery/10.1016/j.celrep.2024.114247/q5",
+      "discovery/10.3389/fdmed.2021.806294/q5",
+      "discovery/10.1111/cas.15979/q5",
+      "discovery/10.1038/s42255-022-00531-x/q2",
+      "discovery/10.1038/s42255-022-00531-x/q5",
+      "discovery/10.1177/00220345221147908/q5",
+      "discovery/10.1038/s41586-019-0903-2/q4",
+      "discovery/10.3389/fcvm.2020.00052/q3",
+      "discovery/10.1002/pros.24020/q2",
+      "discovery/10.3390/genes15030298/q3",
+      "discovery/10.3390/genes15030298/q5",
+      "discovery/10.1038/s42003-024-06225-2/q3"
+    ],
+    "replicate-aware-single-cell-contrast": [
+      "discovery/10.1172/jci.insight.176963/q4",
+      "discovery/10.1038/s41586-021-03710-0/q3",
+      "discovery/10.1164/rccm.202207-1384OC/q3",
+      "discovery/10.1126/science.aat5031/q2",
+      "discovery/10.1038/s41467-019-12464-3/q2",
+      "discovery/10.1182/bloodadvances.2023011445/q1",
+      "discovery/10.1182/bloodadvances.2023011445/q2",
+      "discovery/10.3389/fdmed.2021.806294/q2",
+      "discovery/10.1038/s41467-024-45165-7/q5",
+      "discovery/10.1038/s44161-022-00183-w/q1",
+      "discovery/10.1038/s44161-022-00183-w/q3",
+      "discovery/10.1111/cas.15979/q2",
+      "discovery/10.1016/j.stem.2023.12.013/q1",
+      "discovery/10.1038/s42255-022-00531-x/q3",
+      "discovery/10.1177/00220345221147908/q2",
+      "discovery/10.1172/jci.insight.178499/q2",
+      "discovery/10.1172/jci.insight.178499/q3",
+      "discovery/10.1016/j.celrep.2022.111838/q5",
+      "discovery/10.1038/s42003-024-06225-2/q2",
+      "discovery/10.1016/j.devcel.2020.11.010/q1"
+    ],
+    "sample-level-signal-detection": [
+      "discovery/10.1038/s41586-021-03710-0/q1"
+    ],
+    "cell-communication-hypotheses": [
+      "discovery/10.1038/s41586-021-03710-0/q4",
+      "discovery/10.1002/ctm2.1356/q3",
+      "discovery/10.15252/embj.2019104063/q2",
+      "discovery/10.1126/science.aat5031/q3",
+      "discovery/10.1016/j.cell.2019.08.008/q4",
+      "discovery/10.3389/fdmed.2021.806294/q3",
+      "discovery/10.1177/00220345221147908/q4",
+      "discovery/10.1016/j.celrep.2022.111838/q3"
+    ],
+    "single-cell-contrast-enrichment": [
+      "discovery/10.1038/s41586-021-03710-0/q5",
+      "discovery/10.1165/rcmb.2021-0555OC/q4",
+      "discovery/10.1016/j.xcrm.2023.101158/q2",
+      "discovery/10.1182/bloodadvances.2023011445/q4",
+      "discovery/10.1016/j.celrep.2024.114247/q3",
+      "discovery/10.1038/s41467-024-45165-7/q2",
+      "discovery/10.1172/jci.insight.178499/q4",
+      "discovery/10.1038/s42003-024-06225-2/q4"
+    ],
+    "cell-type-genetic-risk-association": [
+      "discovery/10.1038/s41467-019-12780-8/q1",
+      "discovery/10.1038/s41467-019-12780-8/q5",
+      "discovery/10.1016/j.cell.2020.08.013/q5"
+    ],
+    "subtype-marker-evidence": [
+      "discovery/10.1038/s41467-019-12780-8/q2",
+      "discovery/10.1165/rcmb.2021-0555OC/q2",
+      "discovery/10.1038/s41467-019-11036-9/q3",
+      "discovery/10.1002/ctm2.1356/q2",
+      "discovery/10.1002/ctm2.1356/q4",
+      "discovery/10.1084/jem.20191130/q2",
+      "discovery/10.1084/jem.20191130/q4",
+      "discovery/10.1084/jem.20191130/q5",
+      "discovery/10.1038/s41586-021-03569-1/q3",
+      "discovery/10.1096/fj.202300601RRR/q2",
+      "discovery/10.1096/fj.202300601RRR/q3",
+      "discovery/10.1111/cas.15979/q4",
+      "discovery/10.1016/j.immuni.2020.03.019/q1",
+      "discovery/10.1016/j.jcmgh.2022.02.007/q2",
+      "discovery/10.1038/s41586-019-0903-2/q2",
+      "discovery/10.3390/genes15030298/q2"
+    ],
+    "single-cell-hierarchical-annotation": [
+      "discovery/10.1165/rcmb.2021-0555OC/q1",
+      "discovery/10.1038/s41467-019-11036-9/q2",
+      "discovery/10.1016/j.celrep.2023.111994/q1",
+      "discovery/10.1164/rccm.202207-1384OC/q1",
+      "discovery/10.1038/s42003-020-0922-4/q1",
+      "discovery/10.1016/j.cell.2019.08.008/q2",
+      "discovery/10.1038/s41586-021-03569-1/q1",
+      "discovery/10.1016/j.celrep.2024.114247/q1",
+      "discovery/10.1096/fj.202300601RRR/q1",
+      "discovery/10.1038/s42255-022-00531-x/q1",
+      "discovery/10.1177/00220345221147908/q1",
+      "discovery/10.1177/00220345221147908/q3",
+      "discovery/10.1016/j.jcmgh.2022.02.007/q1",
+      "discovery/10.1038/s41586-019-0903-2/q1",
+      "discovery/10.1016/j.celrep.2022.111838/q4",
+      "discovery/10.1016/j.cell.2020.08.013/q1",
+      "annotation/Adipose",
+      "annotation/Blood",
+      "annotation/Bone_marrow",
+      "annotation/Breast",
+      "annotation/Eye",
+      "annotation/Heart",
+      "annotation/Intestine",
+      "annotation/Kidney",
+      "annotation/Liver",
+      "annotation/Ovary",
+      "annotation/Pancreas",
+      "annotation/Salivary_gland",
+      "annotation/Skin",
+      "annotation/Testis",
+      "annotation/Trachea"
+    ],
+    "donor-level-clinical-association": [
+      "discovery/10.1101/2024.01.23.576878/q5",
+      "discovery/10.1016/j.cell.2019.08.008/q1",
+      "discovery/10.1016/j.cell.2019.08.008/q3"
+    ],
+    "single-cell-trajectory-hypotheses": [
+      "discovery/10.1164/rccm.202207-1384OC/q4",
+      "discovery/10.1016/j.immuni.2020.03.019/q3",
+      "discovery/10.1126/sciimmunol.abd1554/q4",
+      "discovery/10.3389/fcvm.2020.00052/q2",
+      "discovery/10.1016/j.devcel.2020.11.010/q4"
+    ],
+    "cell-state-anatomical-context": [
+      "discovery/10.1038/s42003-020-0922-4/q5"
+    ],
+    "cross-dataset-cell-state-comparison": [
+      "discovery/10.1038/s41467-019-12464-3/q4",
+      "discovery/10.1016/j.stem.2023.12.013/q4",
+      "discovery/10.1038/s41586-019-0903-2/q5",
+      "discovery/10.3389/fcvm.2020.00052/q5",
+      "discovery/10.1016/j.cell.2020.08.013/q2"
+    ],
+    "cell-type-feature-coexpression": [
+      "discovery/10.15252/embj.20105114/q3",
+      "discovery/10.15252/embj.20105114/q4"
+    ],
+    "regulatory-module-evidence": [
+      "discovery/10.1038/s41467-024-45165-7/q4",
+      "discovery/10.1016/j.immuni.2020.03.019/q5"
+    ],
+    "lineage-potential-evidence": [
+      "discovery/10.1016/j.immuni.2020.03.019/q2"
+    ],
+    "transcriptome-and-functional-assay": [
+      "discovery/10.1126/sciimmunol.abd1554/q5",
+      "discovery/10.1016/j.stem.2023.12.013/q3",
+      "discovery/10.1002/pros.24020/q1"
+    ]
+  },
+  "scoring_review": {
+    "source": "Task2.ipynb",
+    "scope": "score_answers and accuracy_by_type source reviewed; not executed.",
+    "behavior": "Exact set match receives full credit. For multiple-answer questions a nonempty strict subset receives half credit, and a set containing an incorrect option receives zero. Single-answer questions require exact set equality.",
+    "limits": "The source splits answer strings without normalizing whitespace, repeats or letter validity. Its answer-choice reward does not verify biological artifacts; adaptation needs an explicit deterministic evidence contract.",
+    "task1": "Hierarchy-aware annotation metric advertised; implementation not inspected."
+  },
+  "tasks": [
+    {
+      "task_id": "discovery/10.1038/s41598-022-17832-6/q1",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Xu et al. (2022) Sci Rep",
+      "source_doi": "10.1038/s41598-022-17832-6",
+      "source_question_number": 1,
+      "source_worksheet_row": 2,
+      "source_question_sha256": "cefcd8739cfe432df0d5b0023d4ee2b02718ff58ee166aea610b636e4333e84b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41598-022-17832-6/q2",
+      "task_kind": "study-question",
+      "workflow_family": "compartment-expression-contrast",
+      "source_study": "Xu et al. (2022) Sci Rep",
+      "source_doi": "10.1038/s41598-022-17832-6",
+      "source_question_number": 2,
+      "source_worksheet_row": 2,
+      "source_question_sha256": "e9c049a9e4023cbae64d7d7d0ea7899f3754ca3d295843210281523b579341f1",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41598-022-17832-6/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Xu et al. (2022) Sci Rep",
+      "source_doi": "10.1038/s41598-022-17832-6",
+      "source_question_number": 3,
+      "source_worksheet_row": 2,
+      "source_question_sha256": "a0bd0de3c68e5af2c4f7db45a63b5c628a15281e95dd6f7a267999c462bcbc33",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41598-022-17832-6/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Xu et al. (2022) Sci Rep",
+      "source_doi": "10.1038/s41598-022-17832-6",
+      "source_question_number": 4,
+      "source_worksheet_row": 2,
+      "source_question_sha256": "a149ee5ba6afa1ce7e1be9fa9e728d1aa6df4e62f06faebc717b7c9e521c43ff",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41598-022-17832-6/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Xu et al. (2022) Sci Rep",
+      "source_doi": "10.1038/s41598-022-17832-6",
+      "source_question_number": 5,
+      "source_worksheet_row": 2,
+      "source_question_sha256": "36681d13c7c847fd87cc3ac216660c71e09baf517a492a2ac8b0972b180e3360",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.176963/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Rabadam et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.176963",
+      "source_question_number": 1,
+      "source_worksheet_row": 3,
+      "source_question_sha256": "30ee9740f05d2a3cd9f2ffcf3d558e4a1cefe406f3236f6490117d9ac2bf9dd2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.176963/q2",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Rabadam et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.176963",
+      "source_question_number": 2,
+      "source_worksheet_row": 3,
+      "source_question_sha256": "5efe29ac664d748586f354d096553d44c784bdaf9034468a9696fec07edb5186",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.176963/q3",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Rabadam et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.176963",
+      "source_question_number": 3,
+      "source_worksheet_row": 3,
+      "source_question_sha256": "30e683fd74fe1e2c10c7d52f8f4ee994aee61ca35537073867df107877b921a7",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.176963/q4",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Rabadam et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.176963",
+      "source_question_number": 4,
+      "source_worksheet_row": 3,
+      "source_question_sha256": "ba70f6870645c0efdc63f1bc81c041610d6011cbf40da8122f8e6e68906bfe56",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03710-0/q1",
+      "task_kind": "study-question",
+      "workflow_family": "sample-level-signal-detection",
+      "source_study": "Yang et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03710-0",
+      "source_question_number": 1,
+      "source_worksheet_row": 4,
+      "source_question_sha256": "addfc5276dd1874300e3a2b71fecbb97115a11f73889caf42c831b1520d61889",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03710-0/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Yang et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03710-0",
+      "source_question_number": 2,
+      "source_worksheet_row": 4,
+      "source_question_sha256": "7ad8d9cd2b962ca4def48482492a68079add5f205280da66062b366566cf6378",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03710-0/q3",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Yang et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03710-0",
+      "source_question_number": 3,
+      "source_worksheet_row": 4,
+      "source_question_sha256": "cb98d0254621bc7ccc6213b527d7e5970aadb9d0c7284f8bc9061be19d3c2d96",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03710-0/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Yang et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03710-0",
+      "source_question_number": 4,
+      "source_worksheet_row": 4,
+      "source_question_sha256": "f1399ecde6c1c5ac5ebcee6882ed959c8721223560a6e336490fe690c815ad0b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03710-0/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Yang et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03710-0",
+      "source_question_number": 5,
+      "source_worksheet_row": 4,
+      "source_question_sha256": "af9373a7b4ae1919ee5872d13a2f512a78f0579c71350f28bdc3dfc96edbdebe",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12780-8/q1",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-genetic-risk-association",
+      "source_study": "Menon et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12780-8",
+      "source_question_number": 1,
+      "source_worksheet_row": 5,
+      "source_question_sha256": "331752ef36504894e562187a4a8ad779f5e4b095ec6a9219d57a78c642b705fc",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12780-8/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Menon et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12780-8",
+      "source_question_number": 2,
+      "source_worksheet_row": 5,
+      "source_question_sha256": "95f48a802e9d20c72186457aa44084999e508f27b705e11e36cfd99f025dd790",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12780-8/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Menon et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12780-8",
+      "source_question_number": 3,
+      "source_worksheet_row": 5,
+      "source_question_sha256": "4354c9c35465a571c7790243c74b807787c531dc4a9852215e27746fdbda0fee",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12780-8/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Menon et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12780-8",
+      "source_question_number": 4,
+      "source_worksheet_row": 5,
+      "source_question_sha256": "4ce3f6d9a6d8f1e22049e382a2732dd96ccfe3228aba69dda3372116996c9f78",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12780-8/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-genetic-risk-association",
+      "source_study": "Menon et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12780-8",
+      "source_question_number": 5,
+      "source_worksheet_row": 5,
+      "source_question_sha256": "da59a6b17079512808e88f5ac89fde46b7240bbec8d84e4496c98896a2779b17",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1165/rcmb.2021-0555OC/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Watanabe et al. (2022) Am J Respir Cell Mol Biol",
+      "source_doi": "10.1165/rcmb.2021-0555OC",
+      "source_question_number": 1,
+      "source_worksheet_row": 6,
+      "source_question_sha256": "a6ac2310abd103ed7ec7fbdddc32263ff897751651d2b06f26317095f316f893",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1165/rcmb.2021-0555OC/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Watanabe et al. (2022) Am J Respir Cell Mol Biol",
+      "source_doi": "10.1165/rcmb.2021-0555OC",
+      "source_question_number": 2,
+      "source_worksheet_row": 6,
+      "source_question_sha256": "9ea02cfcb705865dba1f5e3c5cddd5f4d81b08456e37008d70e855f9ec7cdeab",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1165/rcmb.2021-0555OC/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Watanabe et al. (2022) Am J Respir Cell Mol Biol",
+      "source_doi": "10.1165/rcmb.2021-0555OC",
+      "source_question_number": 3,
+      "source_worksheet_row": 6,
+      "source_question_sha256": "4cbddde7326f2d709edc02b20f45a7024c13fd2f09225ed000729657a241ab4e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1165/rcmb.2021-0555OC/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Watanabe et al. (2022) Am J Respir Cell Mol Biol",
+      "source_doi": "10.1165/rcmb.2021-0555OC",
+      "source_question_number": 4,
+      "source_worksheet_row": 6,
+      "source_question_sha256": "1da31b5afdf6e6368b19a0745723a1ee110d4e46606e0ced7f097aa18fe54239",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1101/2024.01.23.576878/q2",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Guerrero-Murillo et al. (2024) bioRxiv",
+      "source_doi": "10.1101/2024.01.23.576878",
+      "source_question_number": 2,
+      "source_worksheet_row": 7,
+      "source_question_sha256": "80967c290f518bd7a7ddbf9648675e1e7d02f62c4c9cb4229aa18078583c8022",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1101/2024.01.23.576878/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Guerrero-Murillo et al. (2024) bioRxiv",
+      "source_doi": "10.1101/2024.01.23.576878",
+      "source_question_number": 3,
+      "source_worksheet_row": 7,
+      "source_question_sha256": "7f6cb41ef890326be9b7166404cbb798984d50b099e88981597058974a7e4b2f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1101/2024.01.23.576878/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Guerrero-Murillo et al. (2024) bioRxiv",
+      "source_doi": "10.1101/2024.01.23.576878",
+      "source_question_number": 4,
+      "source_worksheet_row": 7,
+      "source_question_sha256": "582788e09183e5f75849f32b879e480294313ffd22b19ec9b4a9cedf920433d4",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1101/2024.01.23.576878/q5",
+      "task_kind": "study-question",
+      "workflow_family": "donor-level-clinical-association",
+      "source_study": "Guerrero-Murillo et al. (2024) bioRxiv",
+      "source_doi": "10.1101/2024.01.23.576878",
+      "source_question_number": 5,
+      "source_worksheet_row": 7,
+      "source_question_sha256": "602f3ec6267aecf5141a91addab986104e11ea1c6377cff2913831a8af116a7d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-11036-9/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Fan et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-11036-9",
+      "source_question_number": 1,
+      "source_worksheet_row": 8,
+      "source_question_sha256": "c923899b7d642f8088bc748336055d5dae507db608656077c02e47145a873b68",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-11036-9/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Fan et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-11036-9",
+      "source_question_number": 2,
+      "source_worksheet_row": 8,
+      "source_question_sha256": "b218aede48127ab6f3eb404f2837ac11f014675b58b5f78517efa32d0c6dec23",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-11036-9/q3",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Fan et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-11036-9",
+      "source_question_number": 3,
+      "source_worksheet_row": 8,
+      "source_question_sha256": "979a95aecf1b9a0d6270de93cdc9a9e997b95bd531c0ee1a80713a9340853988",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-11036-9/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Fan et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-11036-9",
+      "source_question_number": 5,
+      "source_worksheet_row": 8,
+      "source_question_sha256": "c569d8a31f969e9aa85271b36f7fc22bfde23aeb6bb32b308c5c6006d8566bf2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/ctm2.1356/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Whitfield et al. (2023) Clinical &amp; Translational Med",
+      "source_doi": "10.1002/ctm2.1356",
+      "source_question_number": 1,
+      "source_worksheet_row": 9,
+      "source_question_sha256": "80bc2085c09b3b389bdec6203490f996efb7bac69ae072f7ca787cc64359916a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/ctm2.1356/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Whitfield et al. (2023) Clinical &amp; Translational Med",
+      "source_doi": "10.1002/ctm2.1356",
+      "source_question_number": 2,
+      "source_worksheet_row": 9,
+      "source_question_sha256": "45198e32f4e369fda1bc353eaf230b57fc86e03d2f5c2f948eb6ee73f5e6670e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/ctm2.1356/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Whitfield et al. (2023) Clinical &amp; Translational Med",
+      "source_doi": "10.1002/ctm2.1356",
+      "source_question_number": 3,
+      "source_worksheet_row": 9,
+      "source_question_sha256": "117a55a5267d1168996fc0d5e7568fa0741d577cf8c58681e8a5ac24ca3fd5ef",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/ctm2.1356/q4",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Whitfield et al. (2023) Clinical &amp; Translational Med",
+      "source_doi": "10.1002/ctm2.1356",
+      "source_question_number": 4,
+      "source_worksheet_row": 9,
+      "source_question_sha256": "e6dc714eb15a1065e507cf5eae960160e4ffa1a0e811ba4c30c9a005211b2db3",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/ctm2.1356/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Whitfield et al. (2023) Clinical &amp; Translational Med",
+      "source_doi": "10.1002/ctm2.1356",
+      "source_question_number": 5,
+      "source_worksheet_row": 9,
+      "source_question_sha256": "93c96ec595451157d676a2703c3e9fa15ba6a81690d7de1a6ee3bc5234047cdf",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2023.111994/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Wiedemann et al. (2023) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2023.111994",
+      "source_question_number": 1,
+      "source_worksheet_row": 10,
+      "source_question_sha256": "76266c28ec04a1040fe411bd8537c5064f141b7b61a12b3092ae17c1479c74b6",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2023.111994/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Wiedemann et al. (2023) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2023.111994",
+      "source_question_number": 3,
+      "source_worksheet_row": 10,
+      "source_question_sha256": "ce72d0c33759b07e255933d12e0b4b0c95000df465a4de68e234408a29fa2612",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2023.111994/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Wiedemann et al. (2023) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2023.111994",
+      "source_question_number": 4,
+      "source_worksheet_row": 10,
+      "source_question_sha256": "e54334eea259494e071a910190da99e32960d7ca0a95a3f1534ce80e7bc7c669",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2023.111994/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Wiedemann et al. (2023) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2023.111994",
+      "source_question_number": 5,
+      "source_worksheet_row": 10,
+      "source_question_sha256": "d65b46021c15d29513d4f0a7150d2e14b14230f2b3771a1c15e053609c82b8f3",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1084/jem.20191130/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Wang et al. (2020) Journal of Experimental Medicine",
+      "source_doi": "10.1084/jem.20191130",
+      "source_question_number": 1,
+      "source_worksheet_row": 11,
+      "source_question_sha256": "e79fac49e9a39702dcd5ed7952f9ad9ab97bdd9eae4a76df3a2b64117089f616",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1084/jem.20191130/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Wang et al. (2020) Journal of Experimental Medicine",
+      "source_doi": "10.1084/jem.20191130",
+      "source_question_number": 2,
+      "source_worksheet_row": 11,
+      "source_question_sha256": "a8560fdd5189b4f9f5bd01d45cf1855a7d656accb047d94078b1ef2192904fa8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1084/jem.20191130/q4",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Wang et al. (2020) Journal of Experimental Medicine",
+      "source_doi": "10.1084/jem.20191130",
+      "source_question_number": 4,
+      "source_worksheet_row": 11,
+      "source_question_sha256": "9a8b6e1aee7deffd25c35ecfc33530ebcddc1b3b5f10079086e51bd08ad2cf39",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1084/jem.20191130/q5",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Wang et al. (2020) Journal of Experimental Medicine",
+      "source_doi": "10.1084/jem.20191130",
+      "source_question_number": 5,
+      "source_worksheet_row": 11,
+      "source_question_sha256": "46551c74c134932f9becef0da115513da48387ae010864fd37b314eb0b27ed34",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.2019104063/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Wu et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.2019104063",
+      "source_question_number": 1,
+      "source_worksheet_row": 12,
+      "source_question_sha256": "586ac872f5819017645c422688f938cf1992c643c8b0703f1be38bd545d4ec93",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.2019104063/q2",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Wu et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.2019104063",
+      "source_question_number": 2,
+      "source_worksheet_row": 12,
+      "source_question_sha256": "190a85f8bc1c5148bb872fcfd72931224e1d9e14cc3e1c88f08c884f2cafb3fc",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.2019104063/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Wu et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.2019104063",
+      "source_question_number": 3,
+      "source_worksheet_row": 12,
+      "source_question_sha256": "9a7c53f43faa3ae0ac97d92c2ea0e671e9420d39033527c3c3a41501952b4ab1",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.2019104063/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Wu et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.2019104063",
+      "source_question_number": 4,
+      "source_worksheet_row": 12,
+      "source_question_sha256": "4f5c00f83be60b36c0ba33a451294519195a4ececcdaa6017303f6099495649f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.2019104063/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Wu et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.2019104063",
+      "source_question_number": 5,
+      "source_worksheet_row": 12,
+      "source_question_sha256": "5b10779459f1ad851a607cee5e507d8839d929bf35bc6a9490da3e735217cf58",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1164/rccm.202207-1384OC/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Rustam et al. (2023) Am J Respir Crit Care Med",
+      "source_doi": "10.1164/rccm.202207-1384OC",
+      "source_question_number": 1,
+      "source_worksheet_row": 13,
+      "source_question_sha256": "82605ad214c997a64fceadd3d4764600a61613f377596c5b30d09d6a64626857",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1164/rccm.202207-1384OC/q2",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Rustam et al. (2023) Am J Respir Crit Care Med",
+      "source_doi": "10.1164/rccm.202207-1384OC",
+      "source_question_number": 2,
+      "source_worksheet_row": 13,
+      "source_question_sha256": "ea6413b96995e3065be58ff0ff565d21a4e01c726d3e839d44e7ce5f832a6c07",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1164/rccm.202207-1384OC/q3",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Rustam et al. (2023) Am J Respir Crit Care Med",
+      "source_doi": "10.1164/rccm.202207-1384OC",
+      "source_question_number": 3,
+      "source_worksheet_row": 13,
+      "source_question_sha256": "b1ba74506a195a261772003990107196f411c3d5e430bb50700bf3694f22bcdc",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1164/rccm.202207-1384OC/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-trajectory-hypotheses",
+      "source_study": "Rustam et al. (2023) Am J Respir Crit Care Med",
+      "source_doi": "10.1164/rccm.202207-1384OC",
+      "source_question_number": 4,
+      "source_worksheet_row": 13,
+      "source_question_sha256": "6cc2ad03fb34c6696c959e070983ab96427972cb46592a800b7ce0f024245d05",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1164/rccm.202207-1384OC/q5",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Rustam et al. (2023) Am J Respir Crit Care Med",
+      "source_doi": "10.1164/rccm.202207-1384OC",
+      "source_question_number": 5,
+      "source_worksheet_row": 13,
+      "source_question_sha256": "5e3e77cc27b6bfb6145a6597183addfee0d38476528fc53eea1e59f9d65b1995",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-020-0922-4/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Sol\u00e9-Boldo et al. (2020) Commun Biol",
+      "source_doi": "10.1038/s42003-020-0922-4",
+      "source_question_number": 1,
+      "source_worksheet_row": 14,
+      "source_question_sha256": "95e0d3483ab515f7292687ea9c6c43e2264ab788b6e770ac08890ddeb85a7c78",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-020-0922-4/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Sol\u00e9-Boldo et al. (2020) Commun Biol",
+      "source_doi": "10.1038/s42003-020-0922-4",
+      "source_question_number": 2,
+      "source_worksheet_row": 14,
+      "source_question_sha256": "40386b662d208978837728ca5798542a05463d265071812192cb698090379c51",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-020-0922-4/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Sol\u00e9-Boldo et al. (2020) Commun Biol",
+      "source_doi": "10.1038/s42003-020-0922-4",
+      "source_question_number": 3,
+      "source_worksheet_row": 14,
+      "source_question_sha256": "57f6ec14cbd507694db09d03e0a0bfe76a14d6dd3921ad89f78b4ef1d939f724",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-020-0922-4/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Sol\u00e9-Boldo et al. (2020) Commun Biol",
+      "source_doi": "10.1038/s42003-020-0922-4",
+      "source_question_number": 4,
+      "source_worksheet_row": 14,
+      "source_question_sha256": "e3b0ba8cbfd7e681c66e45cbb883b60d2e41815ba918085d81318a69a38d9c15",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-020-0922-4/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cell-state-anatomical-context",
+      "source_study": "Sol\u00e9-Boldo et al. (2020) Commun Biol",
+      "source_doi": "10.1038/s42003-020-0922-4",
+      "source_question_number": 5,
+      "source_worksheet_row": 14,
+      "source_question_sha256": "822e95b85031debef97a51be47d826816c102e798d08ac91ca12c807eba9ef3d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/science.aat5031/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Stewart et al. (2019) Science",
+      "source_doi": "10.1126/science.aat5031",
+      "source_question_number": 1,
+      "source_worksheet_row": 15,
+      "source_question_sha256": "bc1b6badd3ab7be5f5e6e4996b5429c429be17aa3f5aa5bffde6486f47ea92e3",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/science.aat5031/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Stewart et al. (2019) Science",
+      "source_doi": "10.1126/science.aat5031",
+      "source_question_number": 2,
+      "source_worksheet_row": 15,
+      "source_question_sha256": "6b27ae74bc1e8f0120895be5a1299987c56341bb78978f8e93dd65df4a79cb47",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/science.aat5031/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Stewart et al. (2019) Science",
+      "source_doi": "10.1126/science.aat5031",
+      "source_question_number": 3,
+      "source_worksheet_row": 15,
+      "source_question_sha256": "072c2e084f4c888f83cc0556df6872a978d47bb71a2c300a374d311f97ef34e6",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/science.aat5031/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Stewart et al. (2019) Science",
+      "source_doi": "10.1126/science.aat5031",
+      "source_question_number": 4,
+      "source_worksheet_row": 15,
+      "source_question_sha256": "cf0981f1fead9fd6e9fbbb628cae6557159630c8990f65546638e90421ce790d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/science.aat5031/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Stewart et al. (2019) Science",
+      "source_doi": "10.1126/science.aat5031",
+      "source_question_number": 5,
+      "source_worksheet_row": 15,
+      "source_question_sha256": "75fbada8cbd519eaf8130fb37ca1634f8a6583883c29abed6ff22fc604f6ec39",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.xcrm.2023.101158/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Strati et al. (2023) Cell Reports Medicine",
+      "source_doi": "10.1016/j.xcrm.2023.101158",
+      "source_question_number": 1,
+      "source_worksheet_row": 16,
+      "source_question_sha256": "d7818fddb1365e04732736cf8da09a4d0cbc90c6f06ba11dc5fabda4b387d1e0",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.xcrm.2023.101158/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Strati et al. (2023) Cell Reports Medicine",
+      "source_doi": "10.1016/j.xcrm.2023.101158",
+      "source_question_number": 2,
+      "source_worksheet_row": 16,
+      "source_question_sha256": "483c1539b37ed774db22b75e12b15148a96af9377a1b11c7dd76674badbefc84",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.xcrm.2023.101158/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Strati et al. (2023) Cell Reports Medicine",
+      "source_doi": "10.1016/j.xcrm.2023.101158",
+      "source_question_number": 4,
+      "source_worksheet_row": 16,
+      "source_question_sha256": "38041d8c8b1e4650ad8e8d51009c8195ebdcaa8ee7ce32881020509fa8e7a96f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.xcrm.2023.101158/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Strati et al. (2023) Cell Reports Medicine",
+      "source_doi": "10.1016/j.xcrm.2023.101158",
+      "source_question_number": 5,
+      "source_worksheet_row": 16,
+      "source_question_sha256": "270cfa87e25d104867f942a24eb01c0db1cc703172876fa0c3c47680c1f8604a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12464-3/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Szabo et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12464-3",
+      "source_question_number": 1,
+      "source_worksheet_row": 17,
+      "source_question_sha256": "7fb461e790ab83a48900d65e39209490209f3c1388e51777f44b4d57bbc38e95",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12464-3/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Szabo et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12464-3",
+      "source_question_number": 2,
+      "source_worksheet_row": 17,
+      "source_question_sha256": "6b4b597240425362e059599a6505a93096cf04429a4ea626c7d81b93f65eb96a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12464-3/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Szabo et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12464-3",
+      "source_question_number": 3,
+      "source_worksheet_row": 17,
+      "source_question_sha256": "c4d002821ea06a386f5066c47077cbaab974e57dd71d2c9d445fb0aee454bbda",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12464-3/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cross-dataset-cell-state-comparison",
+      "source_study": "Szabo et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12464-3",
+      "source_question_number": 4,
+      "source_worksheet_row": 17,
+      "source_question_sha256": "a29304d4882e464790bcadd0f5b4400b8151559a77f2a61038d67b9afafba75a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-019-12464-3/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Szabo et al. (2019) Nat Commun",
+      "source_doi": "10.1038/s41467-019-12464-3",
+      "source_question_number": 5,
+      "source_worksheet_row": 17,
+      "source_question_sha256": "0f738f267b179b55f82832935afab607511a81d529e771d65688b8e536125fd8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1182/bloodadvances.2023011445/q1",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Heimlich et al. (2024) Blood Advances",
+      "source_doi": "10.1182/bloodadvances.2023011445",
+      "source_question_number": 1,
+      "source_worksheet_row": 18,
+      "source_question_sha256": "647727c22b052efdee916b1e6ed32c565004c727e815ab5c9781311a9b6af872",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1182/bloodadvances.2023011445/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Heimlich et al. (2024) Blood Advances",
+      "source_doi": "10.1182/bloodadvances.2023011445",
+      "source_question_number": 2,
+      "source_worksheet_row": 18,
+      "source_question_sha256": "2b3ae8385fa8f3e44dd321bf2ba5147c598b1f7a4812501caaebf5a3a79ec763",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1182/bloodadvances.2023011445/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Heimlich et al. (2024) Blood Advances",
+      "source_doi": "10.1182/bloodadvances.2023011445",
+      "source_question_number": 4,
+      "source_worksheet_row": 18,
+      "source_question_sha256": "c0ebfaced8e8e4ed07dd8131fad0e1a8d8741c61063a4ea47f3b3db0946e5c5f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1182/bloodadvances.2023011445/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Heimlich et al. (2024) Blood Advances",
+      "source_doi": "10.1182/bloodadvances.2023011445",
+      "source_question_number": 5,
+      "source_worksheet_row": 18,
+      "source_question_sha256": "8c3fad7896ae926ae8627dfc410743993f6b97496e84c1a0e3208866accfc91f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.20105114/q1",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Lukassen et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.20105114",
+      "source_question_number": 1,
+      "source_worksheet_row": 19,
+      "source_question_sha256": "e517097016314fdbebc7c76d4069b3f31da78667dd0fc55f6ff7d5ea4bd4ba41",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.20105114/q2",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Lukassen et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.20105114",
+      "source_question_number": 2,
+      "source_worksheet_row": 19,
+      "source_question_sha256": "933c5fd6771a9ed9b2a0622ce002debcd33cedaede8303c583df55494a408935",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.20105114/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-feature-coexpression",
+      "source_study": "Lukassen et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.20105114",
+      "source_question_number": 3,
+      "source_worksheet_row": 19,
+      "source_question_sha256": "1011c18e983c293171a1558391a1a2ef6459036ce4e258698ba79c3870dc0a4b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.20105114/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-feature-coexpression",
+      "source_study": "Lukassen et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.20105114",
+      "source_question_number": 4,
+      "source_worksheet_row": 19,
+      "source_question_sha256": "ffef5d163e36ed92614cbe0aa0783e467d10e5579b268fd35bd5d61263f0c518",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.15252/embj.20105114/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Lukassen et al. (2020) The EMBO Journal",
+      "source_doi": "10.15252/embj.20105114",
+      "source_question_number": 5,
+      "source_worksheet_row": 19,
+      "source_question_sha256": "b0567fed13a87fdae9f2707e0c5875d22209f9731fd302b3a3d8865d6445d95c",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2019.08.008/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-level-clinical-association",
+      "source_study": "Martin et al. (2019) Cell",
+      "source_doi": "10.1016/j.cell.2019.08.008",
+      "source_question_number": 1,
+      "source_worksheet_row": 20,
+      "source_question_sha256": "cdc58214eebf66ff2964e8f502b8b0144d36ddf6df1539f68d14b087a8d58612",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2019.08.008/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Martin et al. (2019) Cell",
+      "source_doi": "10.1016/j.cell.2019.08.008",
+      "source_question_number": 2,
+      "source_worksheet_row": 20,
+      "source_question_sha256": "92677996e13001eaf7cf3b72007b6be645e1a98d9b78e8ee4be5e3e45eeceae4",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2019.08.008/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-level-clinical-association",
+      "source_study": "Martin et al. (2019) Cell",
+      "source_doi": "10.1016/j.cell.2019.08.008",
+      "source_question_number": 3,
+      "source_worksheet_row": 20,
+      "source_question_sha256": "89dd9dd72066d95854007ca8768d655c18e6eeef97af5c62d9309431f7768bad",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2019.08.008/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Martin et al. (2019) Cell",
+      "source_doi": "10.1016/j.cell.2019.08.008",
+      "source_question_number": 4,
+      "source_worksheet_row": 20,
+      "source_question_sha256": "9e59d7afe8b9b0aaa31be37a943d31dc8fc927201e4be6daf96952ec608228b8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2019.08.008/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Martin et al. (2019) Cell",
+      "source_doi": "10.1016/j.cell.2019.08.008",
+      "source_question_number": 5,
+      "source_worksheet_row": 20,
+      "source_question_sha256": "6e8b2e9dee6c432fa45506e62ab6fe50d36df9ee7280fb5fe46e9d498d8d24a2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03569-1/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Melms et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03569-1",
+      "source_question_number": 1,
+      "source_worksheet_row": 21,
+      "source_question_sha256": "ba275c830cebe4a2a74930e852365b7862b168b6eb2c6c1947460248a3e002e1",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03569-1/q2",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Melms et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03569-1",
+      "source_question_number": 2,
+      "source_worksheet_row": 21,
+      "source_question_sha256": "b7ee691d5b45a7f0cbe6775635d3e3f57e2323440e4eadeb5b431aa6f906a945",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03569-1/q3",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Melms et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03569-1",
+      "source_question_number": 3,
+      "source_worksheet_row": 21,
+      "source_question_sha256": "d37b5342395d9c9686e25c280285f41a06b52bc86db6da0c75bae8dfb8b771c0",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03569-1/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Melms et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03569-1",
+      "source_question_number": 4,
+      "source_worksheet_row": 21,
+      "source_question_sha256": "bb206f0768f14224d9c1c0fe30834a0333df9a029cc4ba503b584549655b9718",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-021-03569-1/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Melms et al. (2021) Nature",
+      "source_doi": "10.1038/s41586-021-03569-1",
+      "source_question_number": 5,
+      "source_worksheet_row": 21,
+      "source_question_sha256": "f63c10800893df7dcd44d17bff11f2ab646be87600dd468b2a6c850644ed8523",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2024.114247/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Moerkens et al. (2024) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2024.114247",
+      "source_question_number": 1,
+      "source_worksheet_row": 22,
+      "source_question_sha256": "059e49260f22adaf7a90eaa867234af62016012b91db0036631c048a6bef8831",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2024.114247/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Moerkens et al. (2024) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2024.114247",
+      "source_question_number": 2,
+      "source_worksheet_row": 22,
+      "source_question_sha256": "57888f87f2db8efeb89d4b22887f0c5d9ba890a24ecf165f57f3651f913f7f96",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2024.114247/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Moerkens et al. (2024) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2024.114247",
+      "source_question_number": 3,
+      "source_worksheet_row": 22,
+      "source_question_sha256": "c973eeac7e9e21d3d0f771848fc5ed62eff3972f25767cc1260c29773aa9fdaf",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2024.114247/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Moerkens et al. (2024) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2024.114247",
+      "source_question_number": 4,
+      "source_worksheet_row": 22,
+      "source_question_sha256": "b1f4f71e81ec8a006be084b0c4730a6f62e00a5ca7b76de18a5acada7d6c2b37",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2024.114247/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Moerkens et al. (2024) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2024.114247",
+      "source_question_number": 5,
+      "source_worksheet_row": 22,
+      "source_question_sha256": "a13be62e9eef50b7004705279617a8986fd27361c83d59f485a04de805513419",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fdmed.2021.806294/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Opasawatchai et al. (2022) Front. Dent. Med",
+      "source_doi": "10.3389/fdmed.2021.806294",
+      "source_question_number": 1,
+      "source_worksheet_row": 23,
+      "source_question_sha256": "ee93cff8a3c7dc29a5ed13a366dbd4a6f2413c168b9bfea7ffe5d6bea20ef785",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fdmed.2021.806294/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Opasawatchai et al. (2022) Front. Dent. Med",
+      "source_doi": "10.3389/fdmed.2021.806294",
+      "source_question_number": 2,
+      "source_worksheet_row": 23,
+      "source_question_sha256": "eca389ededdc6bbddfe90ff6243f91d3baf86d2e1d6b047e2b30432731ae0797",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fdmed.2021.806294/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Opasawatchai et al. (2022) Front. Dent. Med",
+      "source_doi": "10.3389/fdmed.2021.806294",
+      "source_question_number": 3,
+      "source_worksheet_row": 23,
+      "source_question_sha256": "841191b4f91b78f668f68e7241554fc61447cf6b087140307a35b50c9be0de05",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fdmed.2021.806294/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Opasawatchai et al. (2022) Front. Dent. Med",
+      "source_doi": "10.3389/fdmed.2021.806294",
+      "source_question_number": 4,
+      "source_worksheet_row": 23,
+      "source_question_sha256": "8207aff014cb166581606d71c66fbbf3f2dfb25a722f4ccc1026d563bfb29ff6",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fdmed.2021.806294/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Opasawatchai et al. (2022) Front. Dent. Med",
+      "source_doi": "10.3389/fdmed.2021.806294",
+      "source_question_number": 5,
+      "source_worksheet_row": 23,
+      "source_question_sha256": "99f8cb37251b72f3f15c2a151371912fbce000c0104b781f0c3faf3f062ea7bb",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-024-45165-7/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Phan et al. (2024) Nat Commun",
+      "source_doi": "10.1038/s41467-024-45165-7",
+      "source_question_number": 1,
+      "source_worksheet_row": 24,
+      "source_question_sha256": "109825126d89940431527a9e0f2412d330e3f055a658eb49ee15105dba4c122e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-024-45165-7/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Phan et al. (2024) Nat Commun",
+      "source_doi": "10.1038/s41467-024-45165-7",
+      "source_question_number": 2,
+      "source_worksheet_row": 24,
+      "source_question_sha256": "d2663d6978a0ea843219335b614f565965c54d571f0a03a19a7e76c2e2bb051d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-024-45165-7/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Phan et al. (2024) Nat Commun",
+      "source_doi": "10.1038/s41467-024-45165-7",
+      "source_question_number": 3,
+      "source_worksheet_row": 24,
+      "source_question_sha256": "4826b95d2f2ebc9b55afc1cb2a46949e7c4bf74d3bcb7b9ba415c4973058a610",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-024-45165-7/q4",
+      "task_kind": "study-question",
+      "workflow_family": "regulatory-module-evidence",
+      "source_study": "Phan et al. (2024) Nat Commun",
+      "source_doi": "10.1038/s41467-024-45165-7",
+      "source_question_number": 4,
+      "source_worksheet_row": 24,
+      "source_question_sha256": "58b5358733ca7cfdcd22d7c7c5c8a20ac86fe1dfe7ae00ad57a80d7845a09ee3",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41467-024-45165-7/q5",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Phan et al. (2024) Nat Commun",
+      "source_doi": "10.1038/s41467-024-45165-7",
+      "source_question_number": 5,
+      "source_worksheet_row": 24,
+      "source_question_sha256": "a9190e73302d24509d3f6f310f3b511aecebd5fbc5e32422ab7e8f46f085067b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1096/fj.202300601RRR/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Mimpen et al. (2024) The FASEB Journal",
+      "source_doi": "10.1096/fj.202300601RRR",
+      "source_question_number": 1,
+      "source_worksheet_row": 25,
+      "source_question_sha256": "167658646b793c6e8e392d473adde288e1a34540d69946117c93a840dff2db93",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1096/fj.202300601RRR/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Mimpen et al. (2024) The FASEB Journal",
+      "source_doi": "10.1096/fj.202300601RRR",
+      "source_question_number": 2,
+      "source_worksheet_row": 25,
+      "source_question_sha256": "78e2fb31426e784a167d4af9b17848c7cd606238031e4a47d8ccd7c6d94a93e6",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1096/fj.202300601RRR/q3",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Mimpen et al. (2024) The FASEB Journal",
+      "source_doi": "10.1096/fj.202300601RRR",
+      "source_question_number": 3,
+      "source_worksheet_row": 25,
+      "source_question_sha256": "947d3ade4ebf440b0e5e55b94ec5c18fafe6e92a4bad4690822c8c54ff2580f9",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1096/fj.202300601RRR/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Mimpen et al. (2024) The FASEB Journal",
+      "source_doi": "10.1096/fj.202300601RRR",
+      "source_question_number": 4,
+      "source_worksheet_row": 25,
+      "source_question_sha256": "317ba55c103ac5f25c66bcfe0414d5132fccd994582ed4be848d74366adb7f4b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s44161-022-00183-w/q1",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Knight-Schrijver et al. (2022) Nat Cardiovasc Res",
+      "source_doi": "10.1038/s44161-022-00183-w",
+      "source_question_number": 1,
+      "source_worksheet_row": 26,
+      "source_question_sha256": "5d37c94d754d080c62af2d8450a4ad411c88fc950ebdc9e5bc646cf696c25b65",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s44161-022-00183-w/q2",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Knight-Schrijver et al. (2022) Nat Cardiovasc Res",
+      "source_doi": "10.1038/s44161-022-00183-w",
+      "source_question_number": 2,
+      "source_worksheet_row": 26,
+      "source_question_sha256": "d8ccc471105638d22f1b9f5cace71e1c095d657e33dfa29a7b10d93aba93585f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s44161-022-00183-w/q3",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Knight-Schrijver et al. (2022) Nat Cardiovasc Res",
+      "source_doi": "10.1038/s44161-022-00183-w",
+      "source_question_number": 3,
+      "source_worksheet_row": 26,
+      "source_question_sha256": "5ec5147412fb7e79b36e59c7c0853814344eeeda383774fd2597d6ff00b691a7",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s44161-022-00183-w/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Knight-Schrijver et al. (2022) Nat Cardiovasc Res",
+      "source_doi": "10.1038/s44161-022-00183-w",
+      "source_question_number": 4,
+      "source_worksheet_row": 26,
+      "source_question_sha256": "9b5b874269ce91d5b08d83461cd31448522bd3c41fd8cd91eba8b156dda13730",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s44161-022-00183-w/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Knight-Schrijver et al. (2022) Nat Cardiovasc Res",
+      "source_doi": "10.1038/s44161-022-00183-w",
+      "source_question_number": 5,
+      "source_worksheet_row": 26,
+      "source_question_sha256": "dfe64df31c9c90a6ef0e5619ef6b61fb904d07ea66aeaeaf40ae8c65412783a0",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1111/cas.15979/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Kurkalang et al. (2023) Cancer Science",
+      "source_doi": "10.1111/cas.15979",
+      "source_question_number": 1,
+      "source_worksheet_row": 27,
+      "source_question_sha256": "a69a855c5e07fd4ac840f3c21bfd0de72822f55a49b49c2f58d15698805142ec",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1111/cas.15979/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Kurkalang et al. (2023) Cancer Science",
+      "source_doi": "10.1111/cas.15979",
+      "source_question_number": 2,
+      "source_worksheet_row": 27,
+      "source_question_sha256": "403cd49ca18e2f6693ca24ebef2dfa890c4db2ecdec9ace774b9c8227f9fd965",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1111/cas.15979/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Kurkalang et al. (2023) Cancer Science",
+      "source_doi": "10.1111/cas.15979",
+      "source_question_number": 3,
+      "source_worksheet_row": 27,
+      "source_question_sha256": "21812b7b67bcf9f6beca80727b636cfe1a857697ff671020935fcf356964a634",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1111/cas.15979/q4",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Kurkalang et al. (2023) Cancer Science",
+      "source_doi": "10.1111/cas.15979",
+      "source_question_number": 4,
+      "source_worksheet_row": 27,
+      "source_question_sha256": "3ad7d959a06c5dc985923d84c1ffea2dd9097b9c158dbf9eab6836e69285f6d2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1111/cas.15979/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Kurkalang et al. (2023) Cancer Science",
+      "source_doi": "10.1111/cas.15979",
+      "source_question_number": 5,
+      "source_worksheet_row": 27,
+      "source_question_sha256": "98679e380e46545276341cc8d813efa84b6a32ec0c8897ce88ebbebb5c9acf16",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.immuni.2020.03.019/q1",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Lavaert et al. (2020) Immunity",
+      "source_doi": "10.1016/j.immuni.2020.03.019",
+      "source_question_number": 1,
+      "source_worksheet_row": 28,
+      "source_question_sha256": "218af60d537200f3f34d0f41c3230ce8e01e5c5990c04e540dd4e6d48e48e82f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.immuni.2020.03.019/q2",
+      "task_kind": "study-question",
+      "workflow_family": "lineage-potential-evidence",
+      "source_study": "Lavaert et al. (2020) Immunity",
+      "source_doi": "10.1016/j.immuni.2020.03.019",
+      "source_question_number": 2,
+      "source_worksheet_row": 28,
+      "source_question_sha256": "872d224dcf5cf5216c23f9c53ac25868f3332dd571603dfac552a7342ff5063b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.immuni.2020.03.019/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-trajectory-hypotheses",
+      "source_study": "Lavaert et al. (2020) Immunity",
+      "source_doi": "10.1016/j.immuni.2020.03.019",
+      "source_question_number": 3,
+      "source_worksheet_row": 28,
+      "source_question_sha256": "147f461f3cd9be5d3b25bf8dc6173971c3de34b46d6be566fe3e1f31d7228a6f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.immuni.2020.03.019/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Lavaert et al. (2020) Immunity",
+      "source_doi": "10.1016/j.immuni.2020.03.019",
+      "source_question_number": 4,
+      "source_worksheet_row": 28,
+      "source_question_sha256": "3838f233b445c74fa8e1ee05083b4d8018adc3d73ff89b925931adff48c4d0a5",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.immuni.2020.03.019/q5",
+      "task_kind": "study-question",
+      "workflow_family": "regulatory-module-evidence",
+      "source_study": "Lavaert et al. (2020) Immunity",
+      "source_doi": "10.1016/j.immuni.2020.03.019",
+      "source_question_number": 5,
+      "source_worksheet_row": 28,
+      "source_question_sha256": "c08d86af97be38cdac4b6d80799e366ff067a0cfc50618cd7d0d7aa7d3084a0b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/sciimmunol.abd1554/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Lee et al. (2020) Sci. Immunol.",
+      "source_doi": "10.1126/sciimmunol.abd1554",
+      "source_question_number": 1,
+      "source_worksheet_row": 29,
+      "source_question_sha256": "59865d7c84cfd1d8896e23f1d1def55fa781731a4f21ff7d834bbe3e52365f56",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/sciimmunol.abd1554/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Lee et al. (2020) Sci. Immunol.",
+      "source_doi": "10.1126/sciimmunol.abd1554",
+      "source_question_number": 2,
+      "source_worksheet_row": 29,
+      "source_question_sha256": "fc4ac926686dcb010e22dfda6ac1f31fea0f57be2f309a0cc0462e47aa782bc8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/sciimmunol.abd1554/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Lee et al. (2020) Sci. Immunol.",
+      "source_doi": "10.1126/sciimmunol.abd1554",
+      "source_question_number": 3,
+      "source_worksheet_row": 29,
+      "source_question_sha256": "a67941d12b13e31b6451cf56c43dd3d9ac2eff4030dc4a07910178de53adf986",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/sciimmunol.abd1554/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-trajectory-hypotheses",
+      "source_study": "Lee et al. (2020) Sci. Immunol.",
+      "source_doi": "10.1126/sciimmunol.abd1554",
+      "source_question_number": 4,
+      "source_worksheet_row": 29,
+      "source_question_sha256": "fa03f07fc6766bfd25c697c2ff9529ade7c38f53bed702ffa0ec3b30f89350c9",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1126/sciimmunol.abd1554/q5",
+      "task_kind": "study-question",
+      "workflow_family": "transcriptome-and-functional-assay",
+      "source_study": "Lee et al. (2020) Sci. Immunol.",
+      "source_doi": "10.1126/sciimmunol.abd1554",
+      "source_question_number": 5,
+      "source_worksheet_row": 29,
+      "source_question_sha256": "bb84c690b0d8c28bd16c6feea88e3ea07a8b6df522d5927b57d1ed4554191517",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Li et al. (2024) Cell Stem Cell",
+      "source_doi": "10.1016/j.stem.2023.12.013",
+      "source_question_number": 1,
+      "source_worksheet_row": 30,
+      "source_question_sha256": "8fbfc9ef7a1158d1e26bc6aca6e942fbaeed27b99c57c97d9b11ff753a5993ca",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.stem.2023.12.013/q2",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Li et al. (2024) Cell Stem Cell",
+      "source_doi": "10.1016/j.stem.2023.12.013",
+      "source_question_number": 2,
+      "source_worksheet_row": 30,
+      "source_question_sha256": "e03aa63983f9a1c004e8c927f15efdf5ded5d6c85d9bae1f010c07848176662e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.stem.2023.12.013/q3",
+      "task_kind": "study-question",
+      "workflow_family": "transcriptome-and-functional-assay",
+      "source_study": "Li et al. (2024) Cell Stem Cell",
+      "source_doi": "10.1016/j.stem.2023.12.013",
+      "source_question_number": 3,
+      "source_worksheet_row": 30,
+      "source_question_sha256": "46257a320b7f039bb38b00876ea7662e65e2eb7673c090221c5a0720bfe7dcba",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.stem.2023.12.013/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cross-dataset-cell-state-comparison",
+      "source_study": "Li et al. (2024) Cell Stem Cell",
+      "source_doi": "10.1016/j.stem.2023.12.013",
+      "source_question_number": 4,
+      "source_worksheet_row": 30,
+      "source_question_sha256": "3cbafb607a6e6ed5f560488a42167197bb379e55572afe7637cf2da76336c2eb",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.stem.2023.12.013/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Li et al. (2024) Cell Stem Cell",
+      "source_doi": "10.1016/j.stem.2023.12.013",
+      "source_question_number": 5,
+      "source_worksheet_row": 30,
+      "source_question_sha256": "3b6672e2bc9b7fbc50dcdb734e894ad4f1aa03ccf751bb6c68a1782d28853d8d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42255-022-00531-x/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Fasolino et al. (2022) Nat Metab",
+      "source_doi": "10.1038/s42255-022-00531-x",
+      "source_question_number": 1,
+      "source_worksheet_row": 31,
+      "source_question_sha256": "d18f5c39189a565b81d2462a79d0b7da1724b061f57e22fd0a3b5309533847b2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42255-022-00531-x/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Fasolino et al. (2022) Nat Metab",
+      "source_doi": "10.1038/s42255-022-00531-x",
+      "source_question_number": 2,
+      "source_worksheet_row": 31,
+      "source_question_sha256": "4cdaec5935da4a209f725bfad8aacb1273b2c954b15231f15430bf3343c1197a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Fasolino et al. (2022) Nat Metab",
+      "source_doi": "10.1038/s42255-022-00531-x",
+      "source_question_number": 3,
+      "source_worksheet_row": 31,
+      "source_question_sha256": "445f5df6cf6003fead5d88b0fc6b2db56ab1f4b8abce92acb892b450d8059939",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42255-022-00531-x/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Fasolino et al. (2022) Nat Metab",
+      "source_doi": "10.1038/s42255-022-00531-x",
+      "source_question_number": 4,
+      "source_worksheet_row": 31,
+      "source_question_sha256": "3433c2044d5f994c8e504c0c7d2ea41865b94c3fbbb3c7335b02e241806d7cf1",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42255-022-00531-x/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Fasolino et al. (2022) Nat Metab",
+      "source_doi": "10.1038/s42255-022-00531-x",
+      "source_question_number": 5,
+      "source_worksheet_row": 31,
+      "source_question_sha256": "156a5bcdc3e94e0c3003e2ae38a3f17803ac440103df13e409b003a7ab84a73a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1177/00220345221147908/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Horeth et al. (2023) J Dent Res",
+      "source_doi": "10.1177/00220345221147908",
+      "source_question_number": 1,
+      "source_worksheet_row": 32,
+      "source_question_sha256": "9dfcf82b96a532e473c0f0a6503bab831e6724d245187960fea4b49a4cbeaaf9",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1177/00220345221147908/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Horeth et al. (2023) J Dent Res",
+      "source_doi": "10.1177/00220345221147908",
+      "source_question_number": 2,
+      "source_worksheet_row": 32,
+      "source_question_sha256": "a2b32f24e17c202f2fd965fbc8a5e83ba76091e2c69fe62748e4610280fb4d71",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1177/00220345221147908/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Horeth et al. (2023) J Dent Res",
+      "source_doi": "10.1177/00220345221147908",
+      "source_question_number": 3,
+      "source_worksheet_row": 32,
+      "source_question_sha256": "d02292d81fecdca60d4037e5a67de46637102ee49738bccbb064f35906bf0da8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1177/00220345221147908/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Horeth et al. (2023) J Dent Res",
+      "source_doi": "10.1177/00220345221147908",
+      "source_question_number": 4,
+      "source_worksheet_row": 32,
+      "source_question_sha256": "d0cc8d17cdb9fd219def673a0e8b63e9892a80250ca7b5d190eaed143645b8c5",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1177/00220345221147908/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Horeth et al. (2023) J Dent Res",
+      "source_doi": "10.1177/00220345221147908",
+      "source_question_number": 5,
+      "source_worksheet_row": 32,
+      "source_question_sha256": "478c91c2e51703c27bfd943040c0698509cd32ccfdc2aad907df35ba001059b0",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
+      "source_doi": "10.1016/j.jcmgh.2022.02.007",
+      "source_question_number": 1,
+      "source_worksheet_row": 33,
+      "source_question_sha256": "a85d9d22a5bd7d4f6152599baf1a2d3838197a087516137c42ee4fb183ea6d10",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
+      "source_doi": "10.1016/j.jcmgh.2022.02.007",
+      "source_question_number": 2,
+      "source_worksheet_row": 33,
+      "source_question_sha256": "983944e1873765831e6136ad4cf84345e6fc2df31554f1aad573f6c8df366b5c",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
+      "source_doi": "10.1016/j.jcmgh.2022.02.007",
+      "source_question_number": 3,
+      "source_worksheet_row": 33,
+      "source_question_sha256": "4d7723468bd8a12b2bf67ee2413dac92fc13f4a407b9fc619d1f103577090e00",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q4",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
+      "source_doi": "10.1016/j.jcmgh.2022.02.007",
+      "source_question_number": 4,
+      "source_worksheet_row": 33,
+      "source_question_sha256": "530724b18f4dca82b0dce8a32fc04d1f0cc7568a32762d774a24980aa99a401e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
+      "source_doi": "10.1016/j.jcmgh.2022.02.007",
+      "source_question_number": 5,
+      "source_worksheet_row": 33,
+      "source_question_sha256": "cc97a913bbfe9037c3fb443507dfb3d49287e544cbea504c0713425554720b9a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-019-0903-2/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "J\u00e4kel et al. (2019) Nature",
+      "source_doi": "10.1038/s41586-019-0903-2",
+      "source_question_number": 1,
+      "source_worksheet_row": 34,
+      "source_question_sha256": "3f12b7b1fd2fbb3694bc3ed90fa46a8d14209b9e0c0aae15e039b45e97538b4c",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-019-0903-2/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "J\u00e4kel et al. (2019) Nature",
+      "source_doi": "10.1038/s41586-019-0903-2",
+      "source_question_number": 2,
+      "source_worksheet_row": 34,
+      "source_question_sha256": "3ea06a7e9ef4df9958608f8bf6106106c562c61e9b67984c68d65e8a6c73b12b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-019-0903-2/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "J\u00e4kel et al. (2019) Nature",
+      "source_doi": "10.1038/s41586-019-0903-2",
+      "source_question_number": 3,
+      "source_worksheet_row": 34,
+      "source_question_sha256": "c1a545bc863109e617f31cb94a5bb3e011ef700d3e4474311559bb36db5e96f2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-019-0903-2/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "J\u00e4kel et al. (2019) Nature",
+      "source_doi": "10.1038/s41586-019-0903-2",
+      "source_question_number": 4,
+      "source_worksheet_row": 34,
+      "source_question_sha256": "447a5f7e070f0c7cdd5203af7a929b37ca60364d5a711b8205880b4628993d3e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s41586-019-0903-2/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cross-dataset-cell-state-comparison",
+      "source_study": "J\u00e4kel et al. (2019) Nature",
+      "source_doi": "10.1038/s41586-019-0903-2",
+      "source_question_number": 5,
+      "source_worksheet_row": 34,
+      "source_question_sha256": "b5944fd69bec97667a19d65653d0771578e89b35bab84d8449693c4f710e6160",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fcvm.2020.00052/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-trajectory-hypotheses",
+      "source_study": "Xiang et al. (2020) Front. Cardiovasc. Med.",
+      "source_doi": "10.3389/fcvm.2020.00052",
+      "source_question_number": 2,
+      "source_worksheet_row": 35,
+      "source_question_sha256": "71dbe5276fc9acb61e3f98bc6f7d8c1d997c496e66b9fd7b713ec92646a83e7c",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fcvm.2020.00052/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Xiang et al. (2020) Front. Cardiovasc. Med.",
+      "source_doi": "10.3389/fcvm.2020.00052",
+      "source_question_number": 3,
+      "source_worksheet_row": 35,
+      "source_question_sha256": "d079882e6e1e8778d49b2dab5e1687e2b84e3c19cc5a699c81380bfed3153878",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fcvm.2020.00052/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-gene-module",
+      "source_study": "Xiang et al. (2020) Front. Cardiovasc. Med.",
+      "source_doi": "10.3389/fcvm.2020.00052",
+      "source_question_number": 4,
+      "source_worksheet_row": 35,
+      "source_question_sha256": "b8e715b296b4687f9a9ea93cb37b71a11ac2ea81f57c6bfba90155dfab5206c0",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3389/fcvm.2020.00052/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cross-dataset-cell-state-comparison",
+      "source_study": "Xiang et al. (2020) Front. Cardiovasc. Med.",
+      "source_doi": "10.3389/fcvm.2020.00052",
+      "source_question_number": 5,
+      "source_worksheet_row": 35,
+      "source_question_sha256": "ff14cf868b16313e9f2c8ba124ce6263795c05f8a4c850199b45aa3fa0ba51c2",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/pros.24020/q1",
+      "task_kind": "study-question",
+      "workflow_family": "transcriptome-and-functional-assay",
+      "source_study": "Joseph et al. (2020) Prostate",
+      "source_doi": "10.1002/pros.24020",
+      "source_question_number": 1,
+      "source_worksheet_row": 36,
+      "source_question_sha256": "6b32b70980ac6c12529ce10021e13ce2aaecaabc4e9f16b552f82c5aa182eaa5",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/pros.24020/q2",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Joseph et al. (2020) Prostate",
+      "source_doi": "10.1002/pros.24020",
+      "source_question_number": 2,
+      "source_worksheet_row": 36,
+      "source_question_sha256": "d6aec1f47eef3434c7ff9f27d3cb678ee3476e7013e1e8f9950dc39cf41d1ecc",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/pros.24020/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Joseph et al. (2020) Prostate",
+      "source_doi": "10.1002/pros.24020",
+      "source_question_number": 3,
+      "source_worksheet_row": 36,
+      "source_question_sha256": "bfd31192d97993e04095f28b9ef54c7653cad76f3c368e56f37dd8d97740db77",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/pros.24020/q4",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Joseph et al. (2020) Prostate",
+      "source_doi": "10.1002/pros.24020",
+      "source_question_number": 4,
+      "source_worksheet_row": 36,
+      "source_question_sha256": "6c58a99a03675c124fc8dcd78d652df0d791bf0f7b1df8a6f20bcbf5e93d5c8c",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1002/pros.24020/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Joseph et al. (2020) Prostate",
+      "source_doi": "10.1002/pros.24020",
+      "source_question_number": 5,
+      "source_worksheet_row": 36,
+      "source_question_sha256": "9e841b18c84c7e1dd4d3611ee86b9c2e8e4a48af339d89332a9fa5f82cc1e9bd",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3390/genes15030298/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Bhattacharya et al. (2024) Genes",
+      "source_doi": "10.3390/genes15030298",
+      "source_question_number": 1,
+      "source_worksheet_row": 37,
+      "source_question_sha256": "d6f0225a5b3714fc92fa0879ba6a4170ecb483c5f892c73e35a66a36afc00d02",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3390/genes15030298/q2",
+      "task_kind": "study-question",
+      "workflow_family": "subtype-marker-evidence",
+      "source_study": "Bhattacharya et al. (2024) Genes",
+      "source_doi": "10.3390/genes15030298",
+      "source_question_number": 2,
+      "source_worksheet_row": 37,
+      "source_question_sha256": "b0bcfe50870cd80b156c6fcc298f19a59e15a8ff27e0028607cae66daa0e0d86",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3390/genes15030298/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Bhattacharya et al. (2024) Genes",
+      "source_doi": "10.3390/genes15030298",
+      "source_question_number": 3,
+      "source_worksheet_row": 37,
+      "source_question_sha256": "4ff9f01c0c278b42f0af26fa61cdd006b17ccd663601b5ada12d897967e36380",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.3390/genes15030298/q5",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "Bhattacharya et al. (2024) Genes",
+      "source_doi": "10.3390/genes15030298",
+      "source_question_number": 5,
+      "source_worksheet_row": 37,
+      "source_question_sha256": "465d8d2d9c6e08e9eb90ccb310e897d3dacca8337f65c57300956d7c41bf0cc5",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.178499/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Binvignat et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.178499",
+      "source_question_number": 1,
+      "source_worksheet_row": 38,
+      "source_question_sha256": "439a3176a992349725a25d6ce7d05e64ab052d7a59ef243834db49072fd4b2ef",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.178499/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Binvignat et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.178499",
+      "source_question_number": 2,
+      "source_worksheet_row": 38,
+      "source_question_sha256": "bb46d73d15ebeb4ba73806c028ac08df52ed4def598f7ee134126e800196d41b",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.178499/q3",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Binvignat et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.178499",
+      "source_question_number": 3,
+      "source_worksheet_row": 38,
+      "source_question_sha256": "68f3d132a626165fc7ca68f136a7e8e04f3fa311c7fabfe6d9a82929fe708600",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.178499/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "Binvignat et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.178499",
+      "source_question_number": 4,
+      "source_worksheet_row": 38,
+      "source_question_sha256": "5bffc7bcd7229163c93d95c6642b6ea0231f0dd03527951bfc1233525445d50f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1172/jci.insight.178499/q5",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Binvignat et al. (2024) JCI Insight",
+      "source_doi": "10.1172/jci.insight.178499",
+      "source_question_number": 5,
+      "source_worksheet_row": 38,
+      "source_question_sha256": "2bd6cf72eb12cc4745145a8de00a303eab0011d66605fa97efa88c8f57a879ff",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2022.111838/q1",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Lengyel et al. (2022) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2022.111838",
+      "source_question_number": 1,
+      "source_worksheet_row": 39,
+      "source_question_sha256": "23513af058a7428cb93e65942066351622aec99b622c62080da668e8136f4c7d",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2022.111838/q2",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Lengyel et al. (2022) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2022.111838",
+      "source_question_number": 2,
+      "source_worksheet_row": 39,
+      "source_question_sha256": "07b17c442d6ff64e033716e1145d0a32ab5f5607e7357c166726af3d9302f249",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2022.111838/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-communication-hypotheses",
+      "source_study": "Lengyel et al. (2022) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2022.111838",
+      "source_question_number": 3,
+      "source_worksheet_row": 39,
+      "source_question_sha256": "c5b82332e17f759e574334b2e75c5c4587aabbc0ebebb51209b686ae40b944e4",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2022.111838/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Lengyel et al. (2022) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2022.111838",
+      "source_question_number": 4,
+      "source_worksheet_row": 39,
+      "source_question_sha256": "da1482b4c685f4a2df7c957e0f5cbd1dcb857290652dd74b993c89e079c0228a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Lengyel et al. (2022) Cell Reports",
+      "source_doi": "10.1016/j.celrep.2022.111838",
+      "source_question_number": 5,
+      "source_worksheet_row": 39,
+      "source_question_sha256": "889b268ef4e7a95dac60877c59e903b53f43acda6f662c4e5a9146cd7d41b752",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2020.08.013/q1",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_study": "Cowan et al. (2020) Cell",
+      "source_doi": "10.1016/j.cell.2020.08.013",
+      "source_question_number": 1,
+      "source_worksheet_row": 40,
+      "source_question_sha256": "cb55601bfd5b46c2e03a5f3336d4296000d01743bc1c89b1060c80bed2b0798a",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2020.08.013/q2",
+      "task_kind": "study-question",
+      "workflow_family": "cross-dataset-cell-state-comparison",
+      "source_study": "Cowan et al. (2020) Cell",
+      "source_doi": "10.1016/j.cell.2020.08.013",
+      "source_question_number": 2,
+      "source_worksheet_row": 40,
+      "source_question_sha256": "1d180545de6b9b239b952cf1fe7799a0d26b80e948792e5aea2c2de1c8df6752",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2020.08.013/q3",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "Cowan et al. (2020) Cell",
+      "source_doi": "10.1016/j.cell.2020.08.013",
+      "source_question_number": 3,
+      "source_worksheet_row": 40,
+      "source_question_sha256": "117ea974d528739f544dae3992e5216a4e64b3f231ffb9e23f6e92be32968f9f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.cell.2020.08.013/q5",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-genetic-risk-association",
+      "source_study": "Cowan et al. (2020) Cell",
+      "source_doi": "10.1016/j.cell.2020.08.013",
+      "source_question_number": 5,
+      "source_worksheet_row": 40,
+      "source_question_sha256": "f1c4d86bd248e6c2c7e509eb927a8e8a1768928f8df077ac56a2a55dfb642068",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-024-06225-2/q1",
+      "task_kind": "study-question",
+      "workflow_family": "cell-type-expression-localization",
+      "source_study": "de Vrij et al. (2024) Commun Biol",
+      "source_doi": "10.1038/s42003-024-06225-2",
+      "source_question_number": 1,
+      "source_worksheet_row": 41,
+      "source_question_sha256": "ccc4e7265a00b6dba978797397e5a3168950f57dc63dc18e11109f53282ad86f",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "de Vrij et al. (2024) Commun Biol",
+      "source_doi": "10.1038/s42003-024-06225-2",
+      "source_question_number": 2,
+      "source_worksheet_row": 41,
+      "source_question_sha256": "050faed88bc9eb2ff70e903ccff0b1ca20afa732fccf9c9621f27aa6bc56dfa4",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-024-06225-2/q3",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-state-characterization",
+      "source_study": "de Vrij et al. (2024) Commun Biol",
+      "source_doi": "10.1038/s42003-024-06225-2",
+      "source_question_number": 3,
+      "source_worksheet_row": 41,
+      "source_question_sha256": "d64ecb005c167b8415869c2bffc2172894cab808e2303beeec931877547e63b8",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-contrast-enrichment",
+      "source_study": "de Vrij et al. (2024) Commun Biol",
+      "source_doi": "10.1038/s42003-024-06225-2",
+      "source_question_number": 4,
+      "source_worksheet_row": 41,
+      "source_question_sha256": "97dc494b51727ebde0698f3145ca14fbb85ccb00a303dc041d6f0b3a82e2e9df",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1038/s42003-024-06225-2/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "de Vrij et al. (2024) Commun Biol",
+      "source_doi": "10.1038/s42003-024-06225-2",
+      "source_question_number": 5,
+      "source_worksheet_row": 41,
+      "source_question_sha256": "bfd33285b5fe12a91abb54a156ed11419850a60357863bffc229403e19979a63",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
+      "task_kind": "study-question",
+      "workflow_family": "replicate-aware-single-cell-contrast",
+      "source_study": "Elmentaite et al. (2020) Developmental Cell",
+      "source_doi": "10.1016/j.devcel.2020.11.010",
+      "source_question_number": 1,
+      "source_worksheet_row": 42,
+      "source_question_sha256": "1f3d95a5534841087b06d99c6ba8ae5330d3666531286c6f65348b6a4469556e",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.devcel.2020.11.010/q2",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Elmentaite et al. (2020) Developmental Cell",
+      "source_doi": "10.1016/j.devcel.2020.11.010",
+      "source_question_number": 2,
+      "source_worksheet_row": 42,
+      "source_question_sha256": "824f67b64938fb4eb5d4366759a51ee0d5a9634fc6edec5458985954bc844023",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.devcel.2020.11.010/q3",
+      "task_kind": "study-question",
+      "workflow_family": "donor-aware-cell-composition",
+      "source_study": "Elmentaite et al. (2020) Developmental Cell",
+      "source_doi": "10.1016/j.devcel.2020.11.010",
+      "source_question_number": 3,
+      "source_worksheet_row": 42,
+      "source_question_sha256": "b114060ab7da7d3903a61881abdded991830b7d2d379b08f3b84a78ebc66be44",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.devcel.2020.11.010/q4",
+      "task_kind": "study-question",
+      "workflow_family": "single-cell-trajectory-hypotheses",
+      "source_study": "Elmentaite et al. (2020) Developmental Cell",
+      "source_doi": "10.1016/j.devcel.2020.11.010",
+      "source_question_number": 4,
+      "source_worksheet_row": 42,
+      "source_question_sha256": "3638020add019f913f099bfd7f237a3548310402486729bb1417f40bc48fd9ef",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "discovery/10.1016/j.devcel.2020.11.010/q5",
+      "task_kind": "study-question",
+      "workflow_family": "data-and-literature-evidence-synthesis",
+      "source_study": "Elmentaite et al. (2020) Developmental Cell",
+      "source_doi": "10.1016/j.devcel.2020.11.010",
+      "source_question_number": 5,
+      "source_worksheet_row": 42,
+      "source_question_sha256": "d4aa3dedce1a78000a79784a0d6024bca46e53a5487a8c874b767c2ca1ce6dac",
+      "source_metadata_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
+      "source_tags": [
+        "single-cell",
+        "discovery"
+      ]
+    },
+    {
+      "task_id": "annotation/Adipose",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Adipose_raw.h5ad",
+      "related_processed_path": "Task1_data/Adipose.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Blood",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Blood_raw.h5ad",
+      "related_processed_path": "Task1_data/Blood.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Bone_marrow",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Bone_marrow_raw.h5ad",
+      "related_processed_path": "Task1_data/Bone_marrow.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Breast",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Breast_raw.h5ad",
+      "related_processed_path": "Task1_data/Breast.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Eye",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Eye_raw.h5ad",
+      "related_processed_path": "Task1_data/Eye.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Heart",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Heart_raw.h5ad",
+      "related_processed_path": "Task1_data/Heart.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Intestine",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Intestine_raw.h5ad",
+      "related_processed_path": "Task1_data/Intestine.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Kidney",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Kidney_raw.h5ad",
+      "related_processed_path": "Task1_data/Kidney.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Liver",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Liver_raw.h5ad",
+      "related_processed_path": "Task1_data/Liver.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Ovary",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Ovary_raw.h5ad",
+      "related_processed_path": "Task1_data/Ovary.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Pancreas",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Pancreas_raw.h5ad",
+      "related_processed_path": "Task1_data/Pancreas.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Salivary_gland",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Salivary_gland_raw.h5ad",
+      "related_processed_path": "Task1_data/Salivary_gland.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Skin",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Skin_raw.h5ad",
+      "related_processed_path": "Task1_data/Skin.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Testis",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Testis_raw.h5ad",
+      "related_processed_path": "Task1_data/Testis.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    },
+    {
+      "task_id": "annotation/Trachea",
+      "task_kind": "annotation-dataset",
+      "workflow_family": "single-cell-hierarchical-annotation",
+      "source_dataset_path": "Task1_data/Trachea_raw.h5ad",
+      "related_processed_path": "Task1_data/Trachea.h5ad",
+      "source_metadata_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
+      "source_tags": [
+        "single-cell",
+        "annotation"
+      ],
+      "assessment": "Dataset identity and broad annotation workflow from the release README and file manifest only; per-dataset schema and Task1 scoring implementation remain uninspected."
+    }
+  ]
+}
