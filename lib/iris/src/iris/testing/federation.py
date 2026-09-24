@@ -3,6 +3,7 @@
 
 """In-process federation boundary used by controller behavior tests."""
 
+from collections.abc import Mapping
 from contextlib import ExitStack
 
 from connectrpc.code import Code
@@ -19,7 +20,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName, WellKnownAttribute
+from iris.cluster.types import JobName, WellKnownAttribute, availability_key
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import MockController, make_controller_state, make_direct_job_request
@@ -71,8 +72,16 @@ class UnreachablePeerConnection(InProcessPeerConnection):
         raise ConnectError(Code.NOT_FOUND, "no such job")
 
 
-class FullGpuPeerConnection(InProcessPeerConnection):
-    """Reachable peer advertising an H100 backend with no free chips."""
+class GpuPeerConnection(InProcessPeerConnection):
+    """Reachable peer advertising an H100 backend with ``free_h100`` free chips.
+
+    Advertises the ``availability:h100`` marker a real backend derives from its
+    configured variant, so a CPU job submitted with ``--reserve H100`` matches it.
+    """
+
+    def __init__(self, service: ControllerServiceImpl, free_h100: int = 0):
+        super().__init__(service)
+        self.free_h100 = free_h100
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         summary = controller_pb2.Controller.BackendSummary(
@@ -80,12 +89,17 @@ class FullGpuPeerConnection(InProcessPeerConnection):
             advertised_attributes={
                 WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
                 WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=["h100"]),
+                availability_key("h100"): controller_pb2.StringList(values=["true"]),
             },
         )
         summary.availability.version = AVAILABILITY_METRIC_VERSION
         summary.availability.observation_epoch_ms = 1
-        summary.availability.amounts["h100"] = 0
+        summary.availability.amounts["h100"] = self.free_h100
         return [summary]
+
+
+class FullGpuPeerConnection(GpuPeerConnection):
+    """Reachable peer advertising an H100 backend with no free chips."""
 
 
 class BatchOccupiedGpuPeerConnection(FullGpuPeerConnection):
@@ -132,12 +146,23 @@ def attach_federation(
     parent_service: ControllerServiceImpl,
     connection: InProcessPeerConnection,
 ) -> FederationManager:
-    """Attach a one-peer federation manager to ``parent_service``."""
-    peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
-    peer.probe()
+    """Attach a one-peer federation manager (peer id ``cw``) to ``parent_service``."""
+    return attach_federation_peers(parent_service, {"cw": connection})
+
+
+def attach_federation_peers(
+    parent_service: ControllerServiceImpl,
+    connections: Mapping[str, InProcessPeerConnection],
+) -> FederationManager:
+    """Attach a federation manager over ``peer_id -> connection`` to ``parent_service``."""
+    peers = []
+    for peer_id, connection in connections.items():
+        peer = FederationPeer(peer_id, PeerConfig(controller_address=f"http://{peer_id}:10000"), connection)
+        peer.probe()
+        peers.append(peer)
     store = ControllerFederationStore(parent_service._db)
     manager = FederationManager(
-        [peer],
+        peers,
         threads=get_thread_container(),
         store=store,
         bundles=parent_service._bundle_store,

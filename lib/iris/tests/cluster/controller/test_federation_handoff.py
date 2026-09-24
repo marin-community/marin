@@ -19,6 +19,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import content_id
+from iris.cluster.constraints import availability_constraint
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.federation_store import ControllerFederationStore
@@ -51,6 +52,9 @@ from iris.testing.federation import (
     FullGpuPeerConnection as _FullGpuPeerConnection,
 )
 from iris.testing.federation import (
+    GpuPeerConnection as _GpuPeerConnection,
+)
+from iris.testing.federation import (
     InProcessPeerConnection as _InProcessPeerConnection,
 )
 from iris.testing.federation import (
@@ -61,6 +65,9 @@ from iris.testing.federation import (
 )
 from iris.testing.federation import (
     attach_federation as _attach_federation,
+)
+from iris.testing.federation import (
+    attach_federation_peers as _attach_federation_peers,
 )
 from iris.testing.federation import (
     cluster_pinned_request as _cluster_pinned_request,
@@ -693,6 +700,35 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
             controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
         ).job
         assert status.pending_reason == "Queued for a federation peer to report free capacity"
+
+
+def test_a_cpu_reservation_is_handed_to_the_peer_with_more_free_gpus(tmp_path, log_client):
+    """A CPU job submitted with ``--reserve H100`` goes to the peer with free H100s.
+
+    The reservation is a bare ``availability:h100`` marker, so it admits both peers and
+    states no amount. Before #9396 the pass had no number to compare and the peer-id
+    tie-break took every such job to the alphabetically first peer. The job holds no
+    GPUs: it reserves nothing, and its own GPU children are placed later.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        busy_service, _ = _make_service(stack, "busy", tmp_path, log_client)
+        idle_service, _ = _make_service(stack, "idle", tmp_path, log_client)
+        busy = _GpuPeerConnection(busy_service, free_h100=7)
+        idle = _GpuPeerConnection(idle_service, free_h100=160)
+        manager = _attach_federation_peers(parent_service, {"cw-busy": busy, "cw-idle": idle})
+        parent_service._controller.backend.job_feasibility = Mock(return_value="no local GPU backend")
+
+        request = make_direct_job_request("cpu-reserve", replicas=1)
+        request.constraints.append(availability_constraint("H100").to_proto())
+        response = parent_service.launch_job(request, None)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, JobName.from_wire(response.job_id))
+        assert handle.handoff_state == int(HandoffState.HANDED_OFF)
+        assert handle.peer_id == "cw-idle"
+        assert (busy.launch_calls, idle.launch_calls) == (0, 1)
 
 
 @pytest.mark.parametrize(

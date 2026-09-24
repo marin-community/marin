@@ -394,6 +394,24 @@ def peer_availability_gate(device: job_pb2.DeviceConfig, replicas: int) -> list[
     ]
 
 
+def availability_preference_tokens(constraints: Sequence[Constraint], gate: Sequence[Constraint]) -> tuple[str, ...]:
+    """Accelerator tokens a job prefers free capacity of, without requiring any.
+
+    A ``--reserve`` spec becomes an ``availability:<variant>`` EXISTS marker: hard
+    eligibility for a zone where the accelerator can be found, with no numeric
+    requirement. A CPU coordinator that later launches GPU children carries only that
+    marker, so peer placement has nothing to compare and falls to its own tie-break.
+    These tokens give it a preference ordering instead: a peer with more free capacity
+    for the token ranks first, and the job still allocates nothing.
+
+    Tokens ``gate`` already counts are excluded — the job's own requirement there is a
+    hard threshold that placement fits against, and a preference would double-count it.
+    """
+    gated = {c.key.removeprefix(AVAILABLE_PREFIX) for c in gate}
+    preferred = {c.key.removeprefix(AVAILABILITY_PREFIX) for c in constraints if is_availability_key(c.key)}
+    return tuple(sorted(preferred - gated))
+
+
 def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 

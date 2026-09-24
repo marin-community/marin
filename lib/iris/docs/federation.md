@@ -55,6 +55,22 @@ all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
 
+A reservation carries no amount, so it orders peers instead of gating them. `--reserve H100`
+on a CPU job emits an `availability:h100` *EXISTS* marker and no `available:h100` gate. The
+marker decides which peers are eligible. Among the eligible ones, placement prefers the backend
+with the most `h100` its band can reach, by the same effective-capacity rule the gate uses:
+free chips plus whatever lower-priority work holds. The job reserves nothing and allocates
+nothing, so the preference ranks peers and guarantees no capacity to the GPU children it
+launches later. It also never blocks: a job whose only capacity signal is a preference is
+handed to an eligible peer even when every one of them reports zero free. A backend the parent
+has no metric for still sorts behind every backend it can measure, and a backend that reports
+no amount for the token counts as zero.
+
+Peers that still score the same are ordered per job, by a hash of the job id and the peer id.
+Successive submissions read against one unchanged availability report therefore split across
+those peers instead of all selecting the first by name. The ordering is deterministic, so a
+placement is reproducible from the job id and the peer set.
+
 Three properties keep placement honest without pretending to be exact:
 
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
@@ -84,9 +100,10 @@ constraints from `--reserve`.
 
 Peers advertise configured accelerator variants, availability markers,
 preemptibility, and regions. A CPU job with `--reserve H100` can use an H100 peer
-without a cluster pin or free GPUs. A `preemptible=false` constraint requires
-on-demand or reserved capacity. CPU jobs with one task, at most one core, and at
-most 4 GiB default to `preemptible=false`.
+without a cluster pin or free GPUs, and prefers the eligible peer with the most H100
+capacity. A `preemptible=false` constraint requires on-demand or reserved capacity.
+CPU jobs with one task, at most one core, and at most 4 GiB default to
+`preemptible=false`.
 
 Peer attributes combine all scaling groups, so a match does not guarantee that
 one group can satisfy every constraint. Preferred routing constraints also act
