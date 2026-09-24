@@ -4,7 +4,7 @@
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
-    "primary": "Recursively select the least-served feasible scientific area, family and competency. Count distinct accepted tasks by one primary competency; retain blocked scope visibly. Benchmark endpoint counts are provenance only.",
+    "primary": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided.",
     "deduplication": "Deduplicate authored task/input hashes and biological lineages. Retain benchmark aliases as provenance only.",
     "counting": "A shared tool, component mapping, broad family label or uninspected identifier contributes no completed-task credit. Conditional candidate counts are upper bounds until all data and endpoint requirements pass.",
     "constraints": [
@@ -19,12 +19,12 @@
       "Lower incremental authoring and validation cost."
     ],
     "secondary": "Repository, format and operation coverage support the chosen competencies; package use alone earns no competency credit.",
-    "refresh": "After each task review, recompute unique validated primary assignments at every hierarchy level and record reservations and blocked competencies separately.",
-    "scope_limit": "The draft taxonomy is versioned and incomplete; benchmark size and historical endpoint gains do not set quotas.",
+    "refresh": "After each accepted or rejected task, reassess missing benchmark-derived operations and scientific decisions. Keep exact evidence and partial mappings; no new taxonomy or weighted quota is adopted.",
+    "scope_limit": "Current taxonomy and allocation illustrations are provisional; paper counts and demand weights remain undecided.",
     "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
   "selected_candidate": null,
-  "selection_reason": "Generation paused for competency taxonomy and public communication review; no task assigned.",
+  "selection_reason": "Resume the prepared count/shrinkage/enrichment workflow; its native reference completed successfully. Validate the complete task before promoting coverage.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1209,19 +1209,19 @@
     },
     "next_actions": [
       {
-        "id": "review-competency-taxonomy",
-        "work": "Review scientific area/family/competency boundaries, source derivation and candidate assignments. Generation remains paused."
+        "id": "resume-task-creation",
+        "work": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided."
       },
       {
-        "id": "prepare-balanced-generation",
-        "work": "After review, select one feasible task per least-served branch and freeze real inputs and executable assessment contracts. Track blockers without removing gaps."
+        "id": "taxonomy-review-later",
+        "work": "Preserve preliminary ideas in docs/experiments/bio-tasks.md. Categorization and weighting do not block current task creation."
       }
     ],
     "task_protocol": "Harbor only; see workflow_portfolio.json assignment_contract.execution_protocol.",
     "scoring_scope": "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
   },
   "portfolio_plan": "workflow_plan.json",
-  "authoring_phase": "paused-for-competency-review",
+  "authoring_phase": "benchmark-guided-task-creation",
   "portfolio_review_progress": {
     "source_releases": 32,
     "inventory_records": 5133,
@@ -1233,14 +1233,14 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "0030248f79654334ab68af13191731d9fbd1bad54ddd6d93e3834f41b03f4a41",
+    "portfolio_sha256": "f40e63086d2bf4813759d1e756722bbd4b7d11cc9a9eaf60746f4f63596b0827",
     "limit": "Broad question planning and all 30 original consolidation reviews are complete with explicit source/endpoint dispositions; 25 combinations remain conditional. Resolve selected-task input, method and acceptance gaps before implementation, and source-specific evidence gaps before coverage claims. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
   },
   "next_preparation": {
     "proposed_task_id": "count-contrast-enrichment",
-    "status": "paused; previous preparation candidate retained as evidence",
+    "status": "resumed; inspect completed native references and package bounded connected tasks",
     "selection_basis": "The observed mouse counts, sample identities and source-audited GO/native methods support preparation of an explicitly adapted expression/enrichment workflow. Biological-context differences alone do not block workflow coverage. The 17-record conditional group remains an endpoint inventory, not validated gain; complete methods and outputs still require checks.",
     "source_designs": [
       "workflow_designs/bixbench.json",

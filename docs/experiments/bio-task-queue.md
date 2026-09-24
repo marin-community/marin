@@ -1,13 +1,12 @@
 # Biology competency authoring queue
 
-**Generation is paused for organization and taxonomy review.** The
-[competency taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
-and [public explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
-now define the primary planning unit. Select underrepresented scientific areas,
-then families and competencies within them. One primary competency per accepted
-task determines allocation; benchmark record counts do not. This file retains
-source research and existing validation evidence, not a live implementation order.
-Model training and trace generation are outside the task-generation scope.
+Task generation has resumed using missing competencies and connected workflows
+from eligible ID benchmarks. The [taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
+and [explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
+remain provisional; no uniform or demand-weighted allocation policy is settled.
+[Preliminary ideas](bio-tasks.md#preliminary-taxonomy-and-weighting-ideas) preserve
+the categorization and weighting discussion for later review. Model training and
+trace generation remain outside task-generation scope.
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
 accounts for all **5,133 inventoried task, protocol or dataset-definition records
@@ -46,7 +45,7 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-**Current phase: review the competency hierarchy and public communication.** The broad question portfolio
+**Current phase: create benchmark-guided tasks.** The broad question portfolio
 and consolidation pass are complete with explicit source and endpoint gaps. All
 5,133 inventoried records have one primary disposition, and all 702 cards have a
 scientific question, input requirements, proposed outputs and a verification
@@ -55,9 +54,8 @@ The portfolio's `planning_readiness` audit records the evidence and its limits.
 
 Count-contrast enrichment was the preparation target before this pause; its
 existing evidence remains below. The ortholog input candidate remains deferred
-because the documented archive-download link returns 401. Neither candidate is
-currently assigned. Resume selection through the competency hierarchy after review,
-then freeze inputs, methods, artifacts and executable acceptance before implementation.
+because the documented archive-download link returns 401. Count/enrichment preparation has resumed. Freeze inputs, methods, artifacts and
+executable acceptance before promoting a task; keep ortholog access blockers visible.
 
 The [machine-readable queue](../../experiments/post_training/bio_tasks/workflow_queue.json)
 retains source endpoint links and prior conditional gains as provenance. Those gains
@@ -579,7 +577,7 @@ Screening declared source metadata in all 32 ID inventories and all 244 PromptBi
 definitions found no GSE60450 identifiers, but generic unnamed inputs still have
 uncertain lineage. These checks add no validated benchmark coverage.
 
-Planning now balances the competency hierarchy among feasible candidates.
+Planning currently prioritizes missing benchmark-derived competencies and workflows.
 Benchmark aliases and assay variants remain provenance, not independent allocation
 credit. Runtime feasibility and source readiness break ties within underrepresented
 branches; blocked competencies remain visible.

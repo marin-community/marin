@@ -88,7 +88,8 @@
         "real-rnaseq-normalized-contrast",
         "real-rnaseq-differential-expression",
         "real-rnaseq-go-enrichment",
-        "real-rnaseq-population-interaction"
+        "real-rnaseq-population-interaction",
+        "real-rnaseq-shrinkage-enrichment-audit"
       ],
       "source_url": "https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R",
       "tool_execution": {

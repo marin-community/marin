@@ -34,12 +34,12 @@
   "release_ready_assignments": [],
   "policy": {
     "primary_unit": "competency",
-    "allocation": "Recursively select the least-served feasible area, then family, then competency; break ties by explicit stable order. Count distinct validated tasks with one primary competency. Record reservations separately and blocked leaves visibly. Benchmark counts never weight allocation.",
+    "allocation": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided.",
     "scaling": "Vary independent real biological inputs, study designs and scientific decisions under a versioned recipe and verifier. Reject duplicate or cosmetically relabeled instances. No fixed instance count or dataset-size ceiling.",
     "coverage": "A validated task witnesses a bounded competency outcome; it does not establish mastery of its whole scientific area. Track leaf breadth, distinct task counts and biological lineages separately.",
     "promotion": "Record exact task/environment/verifier hashes, passing Harbor oracle, empty and scientifically wrong output failures, scientific scope review and provenance/rights review before validated competency credit. Release readiness additionally requires the complete release contract.",
-    "pause": "Generation paused while the taxonomy and public communication are refined.",
-    "hierarchy": "The hierarchy is a primary navigation/allocation view of overlapping science. Competency IDs are independent of parents. Genetics and genomics are distinct question families with permitted secondary links; single-cell and spatial are independent facets. Gene regulation and evolution cross areas."
+    "hierarchy": "The hierarchy is a primary navigation/allocation view of overlapping science. Competency IDs are independent of parents. Genetics and genomics are distinct question families with permitted secondary links; single-cell and spatial are independent facets. Gene regulation and evolution cross areas.",
+    "authoring_status": "Task generation resumed; taxonomy and weighting review remain open."
   },
   "references": [
     "https://github.com/marin-community/marin/pull/9232",
@@ -3227,6 +3227,7 @@
       "Protein abundance and metabolomics remain a compound draft outcome; splitting and independent domain coverage still need review.",
       "Community ecology and phylogenetics branches are thin; current leaf count reflects inspected task designs rather than completeness of these fields.",
       "Primary homes do not preclude secondary scientific-topic links; task-specific assignments still require review."
-    ]
+    ],
+    "discussion_notes": "docs/experiments/bio-tasks.md#preliminary-taxonomy-and-weighting-ideas"
   }
 }

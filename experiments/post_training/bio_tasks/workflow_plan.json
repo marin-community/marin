@@ -2,9 +2,9 @@
   "schema_version": 1,
   "updated_at": "2026-09-24T22:26:00.604392+00:00",
   "basis_revision": "952929c306",
-  "scope": "Provisional-ID agentic benchmarks supply competency provenance; preserve every OOD exclusion. Generation is paused for taxonomy and public communication review.",
+  "scope": "Eligible ID agentic benchmarks supply missing competencies and workflow patterns; preserve every OOD exclusion. Task creation has resumed while categorization and weighting remain provisional.",
   "authoring_unit": "A coherent, verifiable Harbor task with one primary competency. Reuse a recipe only for meaningful independent observed inputs or scientific decisions; no fixed instance quota.",
-  "coverage_goal": "Uniform hierarchical competency coverage; see competencies.json. Preserve source endpoints, aliases and context adaptations as derivation evidence rather than the primary objective.",
+  "coverage_goal": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided.",
   "count_policy": "Only the 50 explicitly related BixBench-Verified-50 records are collapsed for unique counts. Other shared-task, insight, study, protocol and source-ID fields remain as relation evidence, not inferred equivalence. No disposition or group label is coverage credit.",
   "source_inventory_files": [
     {
@@ -13521,10 +13521,10 @@
       "shared_external_question_cards": 7
     }
   ],
-  "authoring_phase": "paused-for-competency-review",
+  "authoring_phase": "benchmark-guided-task-creation",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "0030248f79654334ab68af13191731d9fbd1bad54ddd6d93e3834f41b03f4a41",
+    "sha256": "f40e63086d2bf4813759d1e756722bbd4b7d11cc9a9eaf60746f4f63596b0827",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

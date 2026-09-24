@@ -1,0 +1,57 @@
+{
+  "status": "native-reference-and-independent-arithmetic-passed; fresh-task-oracle-pending",
+  "source_revision": "ea66e88c73465d8d35703429669cace87e10c62b",
+  "archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+  "task_recipe": "real-rnaseq-shrinkage-enrichment-audit",
+  "reference_script": "prepare_enrichment.R",
+  "reference_script_sha256": "9c883191b9ee936a226291205e2ab6c84a32158ea084a250246f73bf21f3b5a0",
+  "reference_runtime": {
+    "exit_code": 0,
+    "seconds": 186.81458878100966,
+    "peak_child_rss_kib": 3687288
+  },
+  "input_hashes": {
+    "environment.explicit.txt": "26c67ac9bd3a134194612d680ee32b9f539ed1ce1cd2f5a4c9a0c79bc69276a9",
+    "inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+    "inputs/samples.tsv": "bf4080c47252a00f830226554f39828f62e7644926d532f7f303b4a94be726c7",
+    "prepare_enrichment.R": "9c883191b9ee936a226291205e2ab6c84a32158ea084a250246f73bf21f3b5a0"
+  },
+  "annotation_database_sha256": {
+    "lib/R/library/org.Mm.eg.db/extdata/org.Mm.eg.sqlite": "663501f1f2de03c1b2d4e30ad407607b65ec299242c9e0f4b3bced7e35c5b424",
+    "lib/R/library/GO.db/extdata/GO.sqlite": "ccdb10199a59103c051dabe04f4f89445be1fb804d7b8889eed4f75b0a9b787b"
+  },
+  "independent_check": {
+    "status": "native-count-ora-audited",
+    "population": "luminal",
+    "native_analysis_exit_code": 0,
+    "input_genes": 27179,
+    "fitted_genes": 16659,
+    "full_annotation_genes": 25730,
+    "membership_rows": 1400728,
+    "views": {
+      "adjusted_tested": {
+        "background": 14624,
+        "selected": 7927,
+        "native_tests": 5898,
+        "significant": 406,
+        "semantic_reduction": "separate native-contribution check"
+      },
+      "raw_genome": {
+        "background": 25730,
+        "selected": 8532,
+        "native_tests": 6437,
+        "significant": 3786,
+        "semantic_reduction": "separate native-contribution check"
+      }
+    },
+    "probability_comparison": "Absolute log difference <1e-8 above 1e-290; lower tails receive only a 1e-280 upper-bound check (or 1e-290 for reference underflow).",
+    "limits": [
+      "Semantic reduction is audited separately; this check covers count statistics and ORA.",
+      "No Harbor task or solver run.",
+      "Wang reduction recomputation and bundled graph reconciliation remain separate checks.",
+      "GSEA not run by this preparation.",
+      "No new validated benchmark mapping."
+    ]
+  },
+  "model_calls": 0
+}

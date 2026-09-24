@@ -38,11 +38,11 @@ Ontology references and the remaining categorization questions.
 Definitions and primary candidate assignments remain provisional. None has yet
 received validated competency credit under this new review policy.
 
-A competency describes an assessable scientific outcome. Benchmarks provide
-provenance and question patterns; benchmark size does not weight generation.
-Choose the least-served feasible area, then family, then competency. Each task has
-one primary competency for allocation. Secondary competency and operation tags do
-not increase allocation credit. Keep blocked leaves and reasons visible. Report
+A competency describes an assessable scientific outcome. Task creation currently
+prioritizes missing competencies and connected workflows identified in eligible ID
+benchmarks, using the existing question portfolio and acceptance contracts.
+The draft hierarchy and its uniform allocation illustration are not a settled
+generation policy. Keep blocked outcomes and reasons visible. Report
 leaf breadth, distinct validated task counts and independent biological lineages
 separately; a task witnessing one outcome does not establish mastery of a field.
 
@@ -50,7 +50,52 @@ Scaling can reuse a recipe with distinct real studies, designs or scientific
 questions. Reject duplicate and cosmetic variants; no fixed instance count or
 dataset-size ceiling applies. The current builder defaults to one example per
 recipe and does not yet automate balanced generation or source acquisition.
-Generation is paused while this taxonomy and communication layer are reviewed.
+Task generation has resumed; taxonomy and weighting review will continue separately.
+
+### Preliminary taxonomy and weighting ideas
+
+These discussion notes are provisional. They do not establish categories, numerical
+weights or quotas for current authoring.
+
+- Keep competency identity separate from its navigation category. A competency is
+  an assessable outcome; biological context, method and modality can vary. For
+  example, replicate-aware differential expression can be exercised in development,
+  infection or cancer without creating three copies of the same competency.
+- Scientific areas remain the preferred top-level navigation, with cross-cutting
+  operations. Single-cell and spatial are independent facets across transcriptomics,
+  epigenomics and other measurements. Gene regulation and evolution also cross
+  branches. Genetics/genomics and phylogenetics/ecology are separated in the current
+  draft, but the complete category list remains open. Review mixed levels such as
+  Systems Biology alongside molecular areas before settling the hierarchy.
+- [bioRxiv subject areas](https://www.biorxiv.org/collection) are a possible external
+  reference. They mix methods (Bioinformatics), systems (Immunology) and disease
+  contexts (Cancer Biology), so adopting them wholesale would preserve overlap.
+  Their paper counts may inform context diversity; assigning competency weights
+  would require a reviewed mapping from papers to the workflows they exercise.
+- Uniform allocation may overrepresent small areas. One alternative guarantees
+  minimum breadth and weights further tasks by expected demand for computational
+  workflows. Possible evidence includes recent papers, active research groups,
+  software usage, recurring benchmark workflows and intended-user priorities.
+  These are overlapping proxies, not independent votes or direct measures of
+  scientific importance. Neither large benchmark inventories nor repository counts
+  should automatically determine allocation.
+- Square-root smoothing of demand and a mixture of uniform and weighted allocation
+  are options to compare. The suggested 20% uniform / 80% weighted mixture was only
+  an illustration; no mixture, smoothing exponent or area weight has been chosen.
+  A category split should divide its existing budget instead of creating new weight.
+- A future explorer could compare target shares, validated task counts and gaps,
+  while retaining unweighted competency breadth. Shared competencies need canonical
+  IDs so multiple navigation links do not duplicate coverage. These would be task
+  generation targets; downstream training mixtures remain outside this project.
+
+If paper counts are used, freeze the source and time window and count distinct new
+preprints rather than revisions. The [bioRxiv API](https://api.biorxiv.org/) supports
+category/date queries and exposes DOI, version and new-paper metadata.
+[OpenAlex topics](https://help.openalex.org/data/topics/) and
+[Bioconductor download statistics](https://bioconductor.org/packages/stats/) provide
+other candidate signals; their topic assignments and IP-based usage counts need
+interpretation. The next taxonomy review should compare these options before
+changing the categories or activating an allocation policy.
 
 Rebuild the explorer from versioned metadata without generating or solving tasks:
 
@@ -376,8 +421,7 @@ Booleans and numeric strings are rejected. All checks must pass for reward 1.
 A bad reference produces `invalid_task` and removes reward files; file-access
 failures produce `infra_error`. Solver answer errors receive reward 0.
 
-Teacher collection and successful-trace export are not part of this command.
-The program's five-attempt GLM-5.3 protocol remains a later phase in the issue.
+Teacher collection, successful-trace export and training are outside this project.
 Task-dataset completion is based on ID workflow coverage, private executable oracles,
 validated environments and scientific contracts, and screened biological provenance. No teacher or
 training job is launched when building or inspecting this corpus.

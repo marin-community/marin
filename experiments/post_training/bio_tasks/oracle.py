@@ -23,6 +23,7 @@ from experiments.post_training.bio_tasks.solvers.real_assembly import solve_asse
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clusters
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
+from experiments.post_training.bio_tasks.solvers.real_enrichment import solve_enrichment
 from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as REAL_GENOMES_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_interaction import solve_interaction
@@ -49,6 +50,7 @@ OUTPUT_SOLVERS = {
     "real-proteome-clustering": solve_clusters,
     "real-rnaseq-population-interaction": solve_interaction,
     "real-phix-assembly": solve_assembly,
+    "real-rnaseq-shrinkage-enrichment-audit": solve_enrichment,
 }
 
 

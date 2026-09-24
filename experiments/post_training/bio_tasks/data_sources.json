@@ -241,6 +241,78 @@
           "transformation": "Unchanged output from pinned sources/prepare_interaction.R on all twelve observed GSE60450 libraries; gzip mtime 0.",
           "preparation_output_sha256": "e7b8d363adb0e0daee4f1ad91e19697a2b6d1fc0f02bccb48722ee291fe072fe",
           "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/b2b8d99ebab2dc7a866fa7b5147141d4d7c07b0c9013357f2abfbcd0b71b1daf/outputs.tar.zst"
+        },
+        "gse60450-luminal-shrinkage-gene-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "722046298bda3ddc7314257631d66efb36218383d6884f03053896d2d357223d",
+          "vendored_sha256": "2dbb3b6c9a6de31a2f58d17a852013d36157336e06f945c14da1f95e0203e1a7",
+          "content_bytes": 2521585,
+          "vendored_bytes": 1208398,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-size-factors.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "ca00297478985bd589a77e200666a57b77b1cb06a7a23a092ddba550ec555488",
+          "vendored_sha256": "a671dd9f072f04d4a87dc6a056a6cc24d4c241343f8dbf1ea871020d4bca9b3f",
+          "content_bytes": 327,
+          "vendored_bytes": 188,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-adjusted_tested-ora.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "85414ce8a0ba1866e352b86abc525e72051d5434b176179c76b9033ec4ceee8b",
+          "vendored_sha256": "93e513097b6a587a8e6596c9b0c63081333f3bf79310fd7954879f7bd34d88f9",
+          "content_bytes": 2501413,
+          "vendored_bytes": 756009,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-raw_genome-ora.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "cee5039e597f69c7f0f09ae380530c6e4eaf071b9db408a3af738051fa941584",
+          "vendored_sha256": "923a92ce4448bbaf8a42a8ed763e2de3c446ef01d1edc3f885bb0dd780d8e811",
+          "content_bytes": 2607007,
+          "vendored_bytes": 805576,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-adjusted_tested-background.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "ad4cdfef38a83368d0f249b91220210cad20d18c5e6321d46740cee91d755fcf",
+          "vendored_sha256": "970eae9d8a5b0178b95789a256c308a7a59e701da2a5f5d067edbee304d486e9",
+          "content_bytes": 93611,
+          "vendored_bytes": 41908,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-adjusted_tested-selected.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "9ed539197f03fc960db773e96cb852d8a811ad30383a8fc830538c8897b0b652",
+          "vendored_sha256": "73dce0401dcdd9bb113df3b56c63d13d9bcccd1bc28625633fb9fdcbca4489cc",
+          "content_bytes": 50231,
+          "vendored_bytes": 23042,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-raw_genome-background.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "71243dbe4fff22f02a26a12f22f70ca36de507bde87ef994b5e2bacb97744a74",
+          "vendored_sha256": "fe00a003c98b20bfbb480ecd8c09fbf42d8d9992929b409d9b0734bb184a0905",
+          "content_bytes": 179277,
+          "vendored_bytes": 61663,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
+        },
+        "gse60450-luminal-shrinkage-raw_genome-selected.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "a46e1451f719020a5cfb1d9f19b4c85afe457048edb87601e3a27f4c4ee8137c",
+          "vendored_sha256": "3fb64121a68bbb90263efbced8b6b8c00d7caedff45dcba76fabe7ff8df961a2",
+          "content_bytes": 54093,
+          "vendored_bytes": 24715,
+          "preparation_archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
+          "transformation": "Unchanged table from pinned prepare_enrichment.R; gzip metadata normalized. Luminal lactating-versus-virgin coefficient, independent filtering and apeglm; separate native and Python arithmetic checks."
         }
       },
       "reference_preparation": {

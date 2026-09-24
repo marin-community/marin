@@ -12,12 +12,13 @@ import time
 from pathlib import Path
 
 from experiments.post_training.bio_tasks.build import identity, oracle_archive, validate_instance
-from experiments.post_training.bio_tasks.generators.real_rnaseq import RECIPES
+from experiments.post_training.bio_tasks.generators.real_rnaseq import RECIPES as DEFAULT_RECIPES
+from experiments.post_training.bio_tasks.recipes import RECIPES
 
 logger = logging.getLogger(__name__)
 
 
-def validate(output: Path, lock: Path, source_revision: str, seed: int, instances: int) -> dict:
+def validate(output: Path, lock: Path, source_revision: str, seed: int, instances: int, recipe_ids: list[str]) -> dict:
     """Check native model fits, full artifacts and rejected controls for each recipe."""
     if instances < 1:
         raise ValueError("At least one validation instance is required")
@@ -25,7 +26,10 @@ def validate(output: Path, lock: Path, source_revision: str, seed: int, instance
     lock_bytes = lock.read_bytes()
     packages = json.loads(lock_bytes)
     report = {"schema_version": 1, "source_revision": source_revision, "checks": []}
-    for recipe in RECIPES:
+    selected = [recipe for recipe in RECIPES if recipe.id in recipe_ids]
+    if not recipe_ids or len(selected) != len(recipe_ids):
+        raise ValueError("Select distinct registered recipe IDs")
+    for recipe in selected:
         check = {
             "repository_index": 5,
             "repository": "DESeq2",
@@ -100,9 +104,10 @@ def main() -> None:
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--instances", type=int, required=True)
+    parser.add_argument("--recipes", nargs="+", default=[recipe.id for recipe in DEFAULT_RECIPES])
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    validate(args.output, args.lock, args.source_revision, args.seed, args.instances)
+    validate(args.output, args.lock, args.source_revision, args.seed, args.instances, args.recipes)
 
 
 if __name__ == "__main__":

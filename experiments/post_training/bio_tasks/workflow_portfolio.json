@@ -10600,7 +10600,7 @@
       "predicted_validated_gain": null
     }
   ],
-  "ordering_policy": "Historical source-question review order only. Generation is paused for competency taxonomy review. On resumption, recursively balance scientific areas, families and competencies using one primary competency per accepted task. Source endpoint counts are provenance, not allocation weights.",
+  "ordering_policy": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided.",
   "planning_completion_checklist": [
     "Every inventoried source record has an exact question, known-alias, exclusion or explicit unavailable-endpoint disposition.",
     "Every question appears exactly once in the portfolio; all proposed merges preserve every member endpoint by reference.",
