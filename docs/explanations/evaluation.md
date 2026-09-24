@@ -70,11 +70,12 @@ raw record.
 
 ### Speculative serving
 
-Pipeline evaluations depend on a `TargetModelArtifact` and can optionally depend on a
-`DraftModelArtifact`. The experiment steps resolve both artifacts into plain model configurations
-before submitting the shared Evalchemy or Harbor runner. The inference worker resolves the draft URI
-through Marin's model-preparation path before it starts vLLM. Evaluation and inference library code
-receives model URIs and serving settings, not artifact or step objects.
+Pipeline evaluations declare their target and optional draft producer steps as dependencies. The
+evaluation step resolves their paths into a plain `ModelConfig` before submitting the shared
+Evalchemy or Harbor runner. Checked-in model configurations need no producer step. The inference
+worker resolves the draft URI through Marin's model-preparation path before it starts vLLM.
+Evaluation and inference library code receives model URIs and serving settings, not artifact or step
+objects.
 
 The target `ModelConfig` records its model identity, tokenizer URI, and tokenizer revision. The
 optional `ServeConfig.speculative` records the draft URI, artifact identity, method, and proposal

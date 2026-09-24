@@ -48,8 +48,7 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators(monkeypatch) -
     assert workflow.pretrain in workflow.sft.deps
     assert workflow.sft in workflow.rl.deps
     assert workflow.gsm8k in workflow.rl.deps
-    assert len(workflow.evaluation.deps) == 1
-    assert workflow.evaluation.deps[0].deps == (workflow.rl,)
+    assert workflow.evaluation.deps == (workflow.rl,)
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
     assert workflow.rl.name == f"users/alice/checkpoints/{iceball_micro.ICEBALL_MODEL_NAME}-rl"
     rl_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))

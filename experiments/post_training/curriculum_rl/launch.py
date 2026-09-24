@@ -65,7 +65,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_target_model_step
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
 logger = logging.getLogger(__name__)
 
@@ -708,17 +708,13 @@ def build_arm(
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy_prefix}{spec.name}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
-    evaluation_model = skyrl_target_model_step(
-        rl,
-        _evaluation_serving(policy, preset, evaluation_model_name),
-        name=f"models/evaluation/{evaluation_model_name}",
-        version=evaluation_version,
-    )
+    evaluation_model = _evaluation_serving(policy, preset, evaluation_model_name)
     evaluation = eval_step(
         evaluation_model,
         preset.evals,
-        model_name=evaluation_model_name,
         version=evaluation_version,
+        deps=(rl,),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,

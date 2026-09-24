@@ -39,7 +39,8 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_target_model_step
+from experiments.evaluation.pipeline import eval_step
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -340,18 +341,20 @@ def test_evaluation_uses_the_validated_training_tokenizer(tmp_path, monkeypatch)
             result=terminal.result_payload(),
         )
     )
-    model = skyrl_target_model_step(
-        rl,
-        ModelConfig(
-            name="iceball-micro",
-            location=SKYRL_POLICY_LOCATION,
-            tokenizer="Qwen/Qwen3-0.6B-Base",
-            resource_hint=ResourceHint(gpu={"GB200": 1}),
-        ),
-        name="models/evaluation/iceball-micro",
-        version="2026.08.01",
+    model = ModelConfig(
+        name="iceball-micro",
+        location=SKYRL_POLICY_LOCATION,
+        tokenizer="Qwen/Qwen3-0.6B-Base",
+        resource_hint=ResourceHint(gpu={"GB200": 1}),
     )
-    config = materialized_config(model, str(tmp_path))
+    evaluation = eval_step(
+        model,
+        "gsm8k-smoke",
+        version="2026.08.01",
+        deps=(rl,),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, model),
+    )
+    config = materialized_config(evaluation, str(tmp_path))
 
     assert config.model.location == terminal.policy_export_uri
     assert config.model.tokenizer == terminal.tokenizer_uri

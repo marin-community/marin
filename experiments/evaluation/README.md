@@ -159,22 +159,18 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`. Build a target handle with
-`catalog_model_step("qwen3-1.7b", version="2026.07.19")`, then pass it to
-`eval_step(target, "smoke", model_name="qwen3-1.7b", version="2026.07.19")`. The step submits the
+`pipeline.py` exposes the same run as an `ArtifactStep`. Pass a checked-in `ModelConfig` directly to
+`eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")`. The step submits the
 same CPU orchestrator used by the CLI and writes eval outputs to the launcher's shared `evals` root;
 its artifact path contains the pipeline cache record. The slice
 override is a runtime arg, so changing it does not change the artifact identity.
 
-Use `target_model_step` for an HF-format target produced or adopted by another step. It records a
-`TargetModelArtifact` with the resolved model URI, producer identity, and serving configuration.
-SkyRL experiments build the same artifact from their terminal policy through
-`skyrl_target_model_step`. Use
-`draft_model_step(source, name=..., version=..., method=SpeculativeMethod.EAGLE3,
-num_speculative_tokens=...)` to turn a produced or adopted draft source into a
-`DraftModelArtifact`. Pass its handle through `eval_step(..., speculative=draft)`. The control arm
-omits `speculative`; initial and trained draft arms pass different handles to the same function.
-The pipeline loads both typed artifacts before the generic evaluation runner starts.
+For produced models, pass the producer handles in `deps` and resolve their locations in
+`resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
+The resolver returns a plain `ModelConfig` with the target URI and identity; a drafted arm also
+sets `ServeConfig.speculative` with the resolved draft URI, identity, method, and proposal length.
+Control, initial-draft, and trained-draft arms use the same `eval_step` function. SkyRL experiments
+resolve terminal policy metadata in their experiment resolver. No extra model-metadata step runs.
 
 The resulting `EvaluationResult.results_paths` tuple points at the sealed FineStore archives in run
 order. Downstream offline rollout processing should depend on this typed result instead of rebuilding

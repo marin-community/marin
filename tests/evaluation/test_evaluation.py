@@ -52,7 +52,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, materialized_config, resolve
+from marin.execution.lazy import ArtifactStep, artifact_identity, materialized_config
 from marin.external_dependencies import EVALCHEMY
 from marin.inference.config import (
     EffectiveServing,
@@ -79,10 +79,8 @@ from experiments.evaluation.launch import (
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import (
     EvalStepConfig,
-    draft_model_step,
     eval_step,
     run_eval_pipeline_step,
-    target_model_step,
 )
 
 # Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
@@ -452,38 +450,40 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monk
         draft_source = ArtifactStep.adopt("models/draft", "2026.09.23", source=str(source_path))
     else:
         draft_source = _artifact_step("models/draft")
-    draft = draft_model_step(
-        draft_source,
-        name="models/draft-serving",
-        version="2026.09.23",
-        method=SpeculativeMethod.EAGLE3,
-        num_speculative_tokens=3,
+    model = ModelConfig(
+        name="target",
+        location="<artifact-model>",
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-revision",
+        resource_hint=ResourceHint(hbm_gb=40),
     )
-    resolved_draft = resolve(draft)
-    assert resolved_draft.url() == draft_source.path(str(tmp_path))
-    assert resolved_draft.config().model.identity == f"models/draft@2026.09.23:{draft_source.fingerprint()}"
-    model = target_model_step(
-        target_source,
-        ModelConfig(
-            name="target",
-            location="<artifact-model>",
-            tokenizer="org/tokenizer",
-            tokenizer_revision="tokenizer-revision",
-            resource_hint=ResourceHint(hbm_gb=40),
-        ),
-        name="models/target-serving",
-        version="2026.09.23",
-        relative_path="hf",
-    )
-    resolved_target = resolve(model)
-    assert resolved_target.url() == f"{tmp_path}/models/target/2026.09.23/hf"
-    control = eval_step(model, "gsm8k-smoke", model_name="target", version="2026.09.23")
+
+    def resolve_target(ctx):
+        return replace(
+            model,
+            location=f"{ctx.artifact_path(target_source)}/hf",
+            identity=artifact_identity(target_source),
+        )
+
+    def resolve_drafted(ctx):
+        target = resolve_target(ctx)
+        speculative = SpeculativeServingConfig(
+            method=SpeculativeMethod.EAGLE3,
+            model=ResolvedModelLocator(
+                uri=ctx.artifact_path(draft_source),
+                identity=artifact_identity(draft_source),
+            ),
+            num_speculative_tokens=3,
+        )
+        return replace(target, serve=replace(target.serve, speculative=speculative))
+
+    control = eval_step(model, "gsm8k-smoke", version="2026.09.23", deps=(target_source,), resolve_model=resolve_target)
     drafted = eval_step(
         model,
         "gsm8k-smoke",
-        model_name="target",
         version="2026.09.23.1",
-        speculative=draft,
+        deps=(target_source, draft_source),
+        resolve_model=resolve_drafted,
     )
     control_config = materialized_config(control, str(tmp_path))
     drafted_config = materialized_config(drafted, str(tmp_path))

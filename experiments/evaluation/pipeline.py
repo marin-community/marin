@@ -22,7 +22,8 @@ The demo pipeline below runs the smoke suite for one small model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
@@ -32,8 +33,6 @@ from marin.evaluation.records import read_record, record_path
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
-from marin.inference.config import ResolvedModelLocator, SpeculativeMethod, SpeculativeServingConfig
-from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.evals import resolve_eval_keys
 from experiments.evaluation.launch import (
@@ -65,10 +64,10 @@ class EvalStepConfig:
 
 @dataclass(frozen=True)
 class EvalStepFingerprint:
-    """Identity summary used before the target and draft value records exist."""
+    """Identity summary for a model and its declared producer artifacts."""
 
-    model: str
-    speculative: str | None
+    model: ModelConfig
+    dependencies: tuple[str, ...]
     evals: str
     limit: int | None
     version: str
@@ -81,136 +80,6 @@ class EvaluationResult(Artifact):
     records_prefix: str
     run_ids: tuple[str, ...]
     results_paths: tuple[str, ...]
-
-
-class TargetModelArtifact(Artifact):
-    """Resolved serving metadata for a target model produced by a pipeline step."""
-
-    model: ModelConfig
-
-    def url(self) -> str:
-        return self.model.location
-
-    def config(self) -> ModelConfig:
-        return self.model
-
-
-@dataclass(frozen=True)
-class TargetModelStepConfig:
-    artifact_path: str
-    model: ModelConfig
-
-
-def run_target_model_step(config: TargetModelStepConfig) -> TargetModelArtifact:
-    return TargetModelArtifact(path=config.artifact_path, model=config.model)
-
-
-def catalog_model_step(name: str, *, version: str) -> ArtifactStep[TargetModelArtifact]:
-    """Record a checked-in model configuration as a typed pipeline dependency."""
-    model = models()[name]
-    return ArtifactStep(
-        name=f"models/evaluation/{name}",
-        version=version,
-        artifact_type=TargetModelArtifact,
-        run=run_target_model_step,
-        build_config=lambda ctx: TargetModelStepConfig(artifact_path=ctx.output_path, model=model),
-    )
-
-
-def target_model_step(
-    source: ArtifactStep,
-    model: ModelConfig,
-    *,
-    name: str,
-    version: str,
-    relative_path: str = "",
-) -> ArtifactStep[TargetModelArtifact]:
-    """Record a produced or adopted HF model's resolved URI and serving metadata."""
-
-    def build_config(ctx: StepContext) -> TargetModelStepConfig:
-        location = ctx.artifact_path(source)
-        if relative_path:
-            location = prefix_join(location, relative_path)
-        return TargetModelStepConfig(
-            artifact_path=ctx.output_path,
-            model=replace(model, location=location, identity=artifact_identity(source)),
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=version,
-        artifact_type=TargetModelArtifact,
-        run=run_target_model_step,
-        build_config=build_config,
-        deps=(source,),
-    )
-
-
-class DraftModelArtifact(Artifact):
-    """A resolved draft model that an evaluation step can load from its dependency record."""
-
-    model: ResolvedModelLocator
-    method: SpeculativeMethod
-    num_speculative_tokens: int
-
-    def url(self) -> str:
-        return self.model.uri
-
-    def config(self) -> SpeculativeServingConfig:
-        return SpeculativeServingConfig(
-            method=self.method,
-            model=self.model,
-            num_speculative_tokens=self.num_speculative_tokens,
-        )
-
-
-@dataclass(frozen=True)
-class DraftModelStepConfig:
-    artifact_path: str
-    model: ResolvedModelLocator
-    method: SpeculativeMethod
-    num_speculative_tokens: int
-
-
-def run_draft_model_step(config: DraftModelStepConfig) -> DraftModelArtifact:
-    return DraftModelArtifact(
-        path=config.artifact_path,
-        model=config.model,
-        method=config.method,
-        num_speculative_tokens=config.num_speculative_tokens,
-    )
-
-
-def draft_model_step(
-    source: ArtifactStep,
-    *,
-    name: str,
-    version: str,
-    method: SpeculativeMethod,
-    num_speculative_tokens: int,
-    relative_path: str = "",
-) -> ArtifactStep[DraftModelArtifact]:
-    """Adapt a produced or adopted draft source into a typed evaluation dependency."""
-
-    def build_config(ctx: StepContext) -> DraftModelStepConfig:
-        uri = ctx.artifact_path(source)
-        if relative_path:
-            uri = prefix_join(uri, relative_path)
-        return DraftModelStepConfig(
-            artifact_path=ctx.output_path,
-            model=ResolvedModelLocator(uri=uri, identity=artifact_identity(source)),
-            method=method,
-            num_speculative_tokens=num_speculative_tokens,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=version,
-        artifact_type=DraftModelArtifact,
-        run=run_draft_model_step,
-        build_config=build_config,
-        deps=(source,),
-    )
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
@@ -244,37 +113,32 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
 
 
 def eval_step(
-    model: ArtifactStep[TargetModelArtifact],
+    model: ModelConfig,
     evals: str,
     *,
-    model_name: str,
     version: str,
-    speculative: ArtifactStep[DraftModelArtifact] | None = None,
+    deps: tuple[ArtifactStep, ...] = (),
+    resolve_model: Callable[[StepContext], ModelConfig] | None = None,
     limit: int | None = None,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
+    """Evaluate a model with Evalchemy and Harbor.
 
-    deps = (model,) if speculative is None else (model, speculative)
+    Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
+    Checked-in models use ``model`` directly without a producer step.
+    """
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
+        resolved_model = resolve_model(ctx) if resolve_model is not None else model
         if ctx.is_fingerprint:
             return EvalStepFingerprint(
-                model=artifact_identity(model),
-                speculative=artifact_identity(speculative) if speculative is not None else None,
+                model=resolved_model,
+                dependencies=tuple(artifact_identity(dep) for dep in deps),
                 evals=evals,
                 limit=limit,
                 version=version,
-            )
-        resolved_model = ctx.resolved(model).config()
-        if resolved_model.name != model_name:
-            raise ValueError(f"evaluation model name {model_name!r} differs from resolved model {resolved_model.name!r}")
-        if speculative is not None:
-            resolved_model = replace(
-                resolved_model,
-                serve=replace(resolved_model.serve, speculative=ctx.resolved(speculative).config()),
             )
         return EvalStepConfig(
             model=resolved_model,
@@ -288,7 +152,7 @@ def eval_step(
         )
 
     return ArtifactStep(
-        name=f"evals/{model_name}/{evals}",
+        name=f"evals/{model.name}/{evals}",
         version=version,
         artifact_type=EvaluationResult,
         run=run_eval_pipeline_step,
@@ -303,8 +167,7 @@ def eval_step(
 
 
 def main() -> None:
-    model = catalog_model_step("qwen3-1.7b", version="2026.07.19")
-    step = eval_step(model, "smoke", model_name="qwen3-1.7b", version="2026.07.19")
+    step = eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")
     StepRunner().run([step.lower()])
 
 
