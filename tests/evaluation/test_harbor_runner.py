@@ -596,6 +596,27 @@ def test_validate_harbor_resume_root_accepts_confirmed_long_dataset(tmp_path):
     validate_harbor_resume_root(str(output_dir), config)
 
 
+def test_validate_harbor_resume_root_accepts_long_dataset_from_job_archive(tmp_path):
+    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
+    output_dir = tmp_path / "results"
+    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
+    job_dir.mkdir(parents=True)
+    (job_dir / "config.json").write_text(json.dumps({"archive": {"dataset": config.record_dataset}}))
+
+    validate_harbor_resume_root(str(output_dir), config)
+
+
+def test_validate_harbor_resume_root_rejects_mismatched_job_archive(tmp_path):
+    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
+    output_dir = tmp_path / "results"
+    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
+    job_dir.mkdir(parents=True)
+    (job_dir / "config.json").write_text(json.dumps({"archive": {"dataset": "other-dataset"}}))
+
+    with pytest.raises(ValueError, match="requires dataset 'terminal-bench/terminal-bench-2-1'"):
+        validate_harbor_resume_root(str(output_dir), config)
+
+
 def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
     executor = replace(
         _harbor_executor("recover-unscored", n_benchmark=2),

@@ -205,6 +205,17 @@ def _read_resume_json(path: StoragePath, output_dir: str) -> object:
         raise ValueError(f"Harbor results root {output_dir!r} has an unreadable {path.name}") from exc
 
 
+def _archive_dataset_from_job_config(path: StoragePath, output_dir: str) -> str | None:
+    config = _read_resume_json(path, output_dir)
+    if not isinstance(config, Mapping):
+        return None
+    archive = config.get("archive")
+    if not isinstance(archive, Mapping):
+        return None
+    dataset = archive.get("dataset")
+    return dataset if isinstance(dataset, str) else None
+
+
 def _raise_resume_identity_mismatch(output_dir: str, config: ValidatedHarborConfig, existing: str) -> None:
     raise ValueError(
         f"Harbor results root {output_dir!r} {existing}; this launch requires dataset "
@@ -232,8 +243,17 @@ def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) 
             _raise_resume_identity_mismatch(output_dir, config, f"contains completed dataset {completed_dataset!r}")
 
     job_configs = tuple((_jobs_dir(output_dir) / "*/config.json").glob())
+    archived_datasets = {
+        dataset for path in job_configs if (dataset := _archive_dataset_from_job_config(path, output_dir)) is not None
+    }
+    if archived_datasets and archived_datasets != {config.record_dataset}:
+        _raise_resume_identity_mismatch(
+            output_dir,
+            config,
+            f"contains archived datasets {tuple(sorted(archived_datasets))!r}",
+        )
     safe_dataset = _safe_job_dataset(config.record_dataset)
-    if len(safe_dataset) > _JOB_DATASET_LENGTH and completed_dataset is None:
+    if len(safe_dataset) > _JOB_DATASET_LENGTH and completed_dataset is None and not archived_datasets:
         raise ValueError(
             f"Harbor results root {output_dir!r} predates exact dataset identity metadata, and dataset "
             f"{config.record_dataset!r} is too long to verify from its job names. Omit "
