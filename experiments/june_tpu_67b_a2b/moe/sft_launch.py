@@ -31,6 +31,7 @@ the training sequence length cannot drift apart.
 """
 
 import dataclasses
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -224,7 +225,8 @@ class GrugModel:
             init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")
         else:
             init_from_path = self.init_from
-        run_id = spec.name.split("/")[-1]
+        run_key = f"{spec.name}@{spec.version}"
+        run_id = f"{spec.name.rsplit('/', 1)[-1]}-{hashlib.sha256(run_key.encode()).hexdigest()[:12]}"
         tracker = WandbConfig(
             project=spec.wandb_project,
             tags=list(self.wandb_tags),
