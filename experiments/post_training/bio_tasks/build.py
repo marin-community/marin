@@ -40,6 +40,7 @@ SOURCE_DIR = Path(__file__).parent
 HARBOR_REVISION = "d072bef08e54050880b484eb81d892944d1d82fb"
 MAX_DISTINCT_INSTANCE_ATTEMPTS = 64
 MATRIX_VERIFICATION_TIMEOUT = 300
+INPUT_PREVIEW_BYTES = 8000
 PARQUET_SCHEMA = pa.schema(
     [
         ("path", pa.string()),
@@ -393,15 +394,23 @@ def instance_provenance(instance: Instance) -> dict:
 
 def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskFiles, validation: dict) -> None:
     inputs = "".join(
-        f"<details><summary>{html.escape(name)}</summary><pre>{html.escape(text[:8000])}</pre>" "</details>"
+        f"<details><summary>{html.escape(name)}</summary><pre>{html.escape(text[:INPUT_PREVIEW_BYTES])}</pre>"
+        "</details>"
         for name, text in instance.inputs.items()
     )
-    inputs += "".join(
-        f"<details><summary>{html.escape(name)} ({asset.size_bytes:,} bytes)</summary>"
-        f"<p>SHA-256: <code>{asset.sha256}</code>. Original file bytes are preserved in the offline task bundle.</p>"
-        "</details>"
-        for name, asset in instance.input_files.items()
-    )
+    for name, asset in instance.input_files.items():
+        content = files.files[f"setup_files/inputs/{name}"]
+        if name.endswith(".gz"):
+            with gzip.GzipFile(fileobj=io.BytesIO(content)) as source:
+                preview = source.read(INPUT_PREVIEW_BYTES)
+        else:
+            preview = content[:INPUT_PREVIEW_BYTES]
+        text = "Binary input; preview unavailable." if b"\0" in preview else preview.decode(errors="replace")
+        inputs += (
+            f"<details><summary>{html.escape(name)} ({asset.size_bytes:,} bytes)</summary>"
+            f"<p>SHA-256: <code>{asset.sha256}</code>. Original file bytes are preserved in the offline task bundle.</p>"
+            f"<p>Preview: up to {INPUT_PREVIEW_BYTES:,} decoded bytes.</p><pre>{html.escape(text)}</pre></details>"
+        )
     sections = {
         "Biological data provenance": json.dumps(
             {
