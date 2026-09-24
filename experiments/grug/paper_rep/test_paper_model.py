@@ -14,11 +14,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import Pbatch, compact_grug_mesh
 
 from experiments.grug.paper_rep.model import (
     GrugModelConfig,
     Transformer,
+    rms_norm,
     split_prelude_core_coda,
 )
 
@@ -165,26 +167,27 @@ def test_boundary_operator_changes_the_forward():
     assert jnp.isfinite(hidden_boundary).all()
 
 
-def test_boundary_operator_core_entry_is_alpha_times_e():
-    """With K=1 the state entering the core is alpha*e (h_0 = 0, RMSNorm(0) = 0)."""
-    cfg = _boundary_config(prelude_len=2, coda_len=2, injection_scale=0.707)
+@pytest.mark.parametrize("prelude_len", [0, 2])
+def test_boundary_operator_core_entry_matches_alpha_times_prelude(prelude_len: int):
+    """Compare the model with Eq. 2's core entry, including an empty prelude."""
+    cfg = _boundary_config(prelude_len=prelude_len, coda_len=0, injection_scale=0.707)
+    model = _model_with_nonzero_sublayers(cfg)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        hidden = model(_TOKENS)
-    assert hidden.shape == (1, 16, cfg.hidden_dim)
-    assert jnp.isfinite(hidden).all()
-    # Post-embed norm, pre-core norm, final norm are all unit-RMS (param-free).
-    rms = jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)), axis=-1))
-    np.testing.assert_allclose(np.asarray(rms), np.ones_like(np.asarray(rms)), rtol=1e-3, atol=1e-3)
+        mask = AttentionMask.causal()
+        prelude_output = rms_norm(model.token_embed.at[_TOKENS].get(out_sharding=Pbatch), cfg.layer_norm_eps)
+        for block in model.blocks[:prelude_len]:
+            prelude_output = block(prelude_output, mask)
+        core_output = cfg.injection_scale * prelude_output
+        skipped_injection = prelude_output
+        for block in model.blocks[prelude_len:]:
+            core_output = block(core_output, mask)
+            skipped_injection = block(skipped_injection, mask)
+        expected = rms_norm(core_output, cfg.layer_norm_eps)
+        actual = model(_TOKENS)
+        skipped_injection = rms_norm(skipped_injection, cfg.layer_norm_eps)
 
-
-def test_zero_prelude_uses_embedded_input_as_e():
-    """prelude_len=0: e is the post-embedding state; the core starts from alpha*e."""
-    cfg = _boundary_config(prelude_len=0, coda_len=2)
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        hidden = model(_TOKENS)
-    assert jnp.isfinite(hidden).all()
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-4, atol=1e-4)
+    assert not jnp.allclose(actual, skipped_injection, rtol=1e-3, atol=1e-3)
 
 
 def test_swiglu_and_qk_norm_forward_runs():

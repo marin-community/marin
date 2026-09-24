@@ -1,18 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""FineWeb (GPT-2 tokenized) data for the arXiv 2609.19107 replication.
+"""GPT-2-tokenized FineWeb training and validation datasets.
 
-The paper pretrains on FineWeb with the GPT-2 tokenizer (vocab 50,257 padded
-to 50,304). No GPT-2-tokenized FineWeb cache exists in the project's storage,
-so this module declares the download + tokenize steps for the FineWeb
-``sample/10BT`` slice (~10B tokens) plus one held-out validation file from
-the full corpus. These materialize once; training launchers then depend on the
-resulting caches.
+The paper replication uses FineWeb with the GPT-2 tokenizer (vocab 50,257
+padded to 50,304). These handles declare the download and tokenization steps
+for the ``sample/10BT`` slice (~10B tokens) and one held-out validation file
+from the full corpus. Existing caches are shared by all training arms.
 """
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 # Pinned FineWeb revision (HuggingFaceFW/fineweb, resolved 2026-09-19).
@@ -29,7 +27,7 @@ _VAL_SAMPLE_COUNT = 400_000
 _VAL_FILE = "data/CC-MAIN-2024-10/000_00000.parquet"
 
 
-def fineweb_10bt_train() -> ArtifactStep[TokenizedCache]:
+def fineweb_10bt_gpt2_dataset() -> ArtifactStep[TokenizedCache]:
     """FineWeb sample/10BT, GPT-2 tokenized — the replication training corpus.
 
     Deviation from the paper (documented in the variant README): the paper
@@ -51,7 +49,7 @@ def fineweb_10bt_train() -> ArtifactStep[TokenizedCache]:
     )
 
 
-def fineweb_validation() -> ArtifactStep[TokenizedCache]:
+def fineweb_validation_gpt2_dataset() -> ArtifactStep[TokenizedCache]:
     """Held-out FineWeb documents (one full-corpus crawl file), GPT-2 tokenized."""
     raw = hf_download(
         "raw/fineweb-val",
@@ -71,4 +69,5 @@ def fineweb_validation() -> ArtifactStep[TokenizedCache]:
     )
 
 
-__all__ = ["fineweb_10bt_train", "fineweb_validation"]
+if __name__ == "__main__":
+    dataset_main({"train": fineweb_10bt_gpt2_dataset(), "validation": fineweb_validation_gpt2_dataset()})

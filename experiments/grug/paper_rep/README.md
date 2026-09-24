@@ -71,7 +71,7 @@ Interpretation choices (documented deviations):
 
 Data materializes once (the tokenized caches are shared by all arms; each arm
 consumes the same 1B tokens with the same seed, so arms differ only in
-model/recipe):
+model/recipe). The cache handles are in `experiments/datasets/fineweb_gpt2.py`:
 
 ```bash
 source ~/.envvars.local
@@ -81,9 +81,10 @@ source ~/.envvars.local
         --version dev --run --arm vanilla
 ```
 
-`--arm` ∈ {`vanilla`, `op1`, `op1-vanilla-recipe`} or `data` (materialize the
-caches without training). Training lands on a preemptible v4-16 (the v4-8
-pools were degraded at launch time; 16 devices divide the batch evenly and
+Full-length `--arm` choices are `vanilla`, `op1`, and
+`op1-vanilla-recipe`. `data` materializes the caches without training; the
+screening arm names are listed below. Training lands on a preemptible v4-16
+(the v4-8 pools were degraded at launch time; 16 devices divide the batch evenly and
 leave the global batch and data order unchanged); each arm is well under an
 hour. Evals (`GrugEvalConfig`) run every 500 steps on the held-out FineWeb
 file with the current (non-EMA) weights.
@@ -157,9 +158,28 @@ it alone reproduces 84% of the own-recipe gap and is worse than the full
 own recipe at the first eval. Warmup is neutral in both directions (wu0
 is not worse than base; restoring warmup does not repair the own recipe),
 and the optimizer cluster (ELRM/HLRM/WD/WDR/β2) is neutral on its own.
-The remaining +0.06 is an interaction: the optimizer knobs add a little
-damage when combined with the init cluster.
+The own recipe is +0.059 worse than init-only; the optimizer cluster alone
+adds +0.017, leaving about +0.042 from their interaction.
 
 A second-stage split (`screen-init-embed`: WTE/UIS only;
-`screen-init-depth`: RM/OM only) refines the attribution to individual
-knobs.
+`screen-init-depth`: RM/OM only) separates embedding/input-matrix init from
+the depth multipliers.
+
+### Second-stage results (2026-09-21)
+
+Both arms completed on preemptible v4-32 with the same 1000-step schedule as
+the first-stage screen. The shared `screen-base` and `screen-init-own` rows
+are repeated for comparison:
+
+| Arm | @250 | @500 | @750 | @1000 | Δ@1000 vs base |
+| --- | --- | --- | --- | --- | --- |
+| [`screen-base`](https://wandb.ai/marin-community/marin/runs/paper_rep_d8_screen_base) | 4.103 | 3.721 | 3.513 | 3.406 | — |
+| [`screen-init-embed`](https://wandb.ai/marin-community/marin/runs/paper_rep_d8_screen_init_embed) | 4.557 | 4.107 | 3.809 | 3.689 | +0.283 |
+| [`screen-init-depth`](https://wandb.ai/marin-community/marin/runs/paper_rep_d8_screen_init_depth) | 4.184 | 3.750 | 3.532 | 3.418 | +0.011 |
+| [`screen-init-own`](https://wandb.ai/marin-community/marin/runs/paper_rep_d8_screen_init_own) | 4.607 | 4.174 | 3.851 | 3.715 | +0.308 |
+
+The WTE/UIS pair accounts for 92% of the init-cluster penalty at step 1000
+(+0.283 of +0.308). RM/OM alone adds +0.011; combining the pairs adds
+another +0.014 beyond their separate effects. This screen identifies the
+WTE/UIS pair, not which of its two values drives the loss gap. These
+1000-step results do not substitute for the full-length comparison above.

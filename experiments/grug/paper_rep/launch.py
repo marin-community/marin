@@ -48,7 +48,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
-from experiments.grug.paper_rep.data import fineweb_10bt_train, fineweb_validation
+from experiments.datasets.fineweb_gpt2 import fineweb_10bt_gpt2_dataset, fineweb_validation_gpt2_dataset
 from experiments.grug.paper_rep.model import GrugModelConfig
 from experiments.grug.paper_rep.recipes import (
     OPERATOR1_RECIPE,
@@ -182,8 +182,8 @@ def paper_rep_arm(
         boundary_operator=boundary_operator,
     )
     optimizer = optimizer_config(recipe)
-    train_cache = fineweb_10bt_train()
-    validation_cache = fineweb_validation()
+    train_cache = fineweb_10bt_gpt2_dataset()
+    validation_cache = fineweb_validation_gpt2_dataset()
 
     def build_config(ctx: StepContext) -> PaperRepLaunchConfig:
         return PaperRepLaunchConfig(
@@ -346,7 +346,7 @@ def materialize_data(*, version: str | None = None) -> list[ArtifactStep[Tokeniz
     training arms depend on the same handles, so they reuse the caches and
     hold their reserved TPU only for training.
     """
-    return [fineweb_10bt_train(), fineweb_validation()]
+    return [fineweb_10bt_gpt2_dataset(), fineweb_validation_gpt2_dataset()]
 
 
 @click.command()
