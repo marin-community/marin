@@ -196,7 +196,7 @@ def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, sp
 
 
 @pytest.mark.parametrize("schema_version", ["0.1", "0.2"])
-def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification, schema_version):
+def test_old_task_spec_schema_is_rejected_on_read(tmp_path, specification, schema_version):
     task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
     path = task / "specification.json"
     payload = json.loads(path.read_text())

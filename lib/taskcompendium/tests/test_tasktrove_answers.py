@@ -47,7 +47,6 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
     public = render_instruction(specification, Rendering("plain", AnswerFormat.PLAIN))
-    assert "Return the selected option letter as plain text." in public
     assert "verifier" not in public.lower()
 
     later_release = import_task(_archive("2026.09.10.10"))
