@@ -8,7 +8,11 @@ verification approaches and unresolved data/endpoint requirements. These are
 proposals; they add **zero validated mappings**. Twelve provisional-ID source leads still
 lack task inventories and remain explicit access or enumeration gaps.
 
-Choose the next coherent task by its expected gain in currently missing, distinct
+**Current phase: finish benchmark-wide question planning before implementing more tasks.**
+Review exact endpoints, consolidate overlapping designs and specify reusable input
+requirements before assigning bounded task-creation work. No candidate is selected.
+
+When authoring resumes, choose the next coherent task by its expected gain in currently missing, distinct
 ID benchmark tasks. Recompute after each completed or rejected candidate.
 Repository coverage is secondary. The
 [machine-readable queue](../../experiments/post_training/bio_tasks/workflow_queue.json)
@@ -64,6 +68,36 @@ refine or split the 147 broad questions and overlap across benchmarks; they are
 neither an independent task count nor a coverage forecast. Cross-benchmark merging
 requires matching estimands, usable independent inputs and complete output contracts.
 Other releases retain their recorded inspection limits in the full plan.
+
+## Broader question portfolio
+
+The [additional benchmark questions](../../experiments/post_training/bio_tasks/workflow_designs/additional_benchmarks.json)
+assign another **493 task/protocol records from 15 releases to 160 proposed question
+cards**. Together with the three earlier design files, 848 records across 18 of the
+30 inventoried ID releases now have explicit question proposals. These counts
+measure planning assignments, not task coverage or independent training questions.
+Each card preserves its source inspection tier; several rely on question stems or
+reviewed workflow stages and still need exact endpoint decisions.
+
+The expansion includes BioAgent, EpiBench, VariantBench, ScienceAgentBench,
+CORE-Bench, DiscoveryBench, all three TxBench releases, SpatialBench and its long
+protocol, scBench and its long protocol, sc-HeurekaBench and BAISBench. It records
+exact target IDs, observed-input requirements, required stages, artifacts,
+deterministic checks and source-specific scientific decisions. No implementation
+worker has been assigned.
+
+Connected components share a question where the input and analysis support it:
+six single-cell QC/representation families form one analysis, spatial coordinates
+and expression-space QC share another, and caller-to-peptide analysis retains both
+somatic-variant entry points. Cross-benchmark consolidation candidates remain
+explicit; sharing a workstream does not establish interchangeable methods or data.
+
+The remaining portfolio review should prioritize the larger BioML-bench,
+Biomni-Eval1, PromptBio-Bench and BioKGBench inventories, then the remaining public
+analysis releases. SciGym's system IDs and sources without public task content
+need an explicit feasibility disposition rather than invented questions. All
+unresolved records remain in the denominator. Finish this review and consolidate
+questions before choosing implementation work.
 
 ## Solver diagnostics
 
@@ -174,29 +208,45 @@ IDs need exact resource and evidence contracts. Open-ended scientific plans need
 an executable acceptance rule that preserves their meaning; a generic JSON template
 cannot supply one. Gated prompts and unavailable source inputs remain unresolved.
 
-The initial ranking below compares only seven assessed candidates. Counts are
-conditional targets and can shrink after data or endpoint review. Related protocol
-versions add no ranking credit. Review the full portfolio before choosing an
-implementation, and use data suitability and effort to break ties.
+The current ranking compares eight assessed candidates. Counts are conditional
+targets and can shrink after data or endpoint review. Related protocol versions add
+no ranking credit. Data suitability and effort break ties.
 
 | Order | Connected workflow | Distinct missing targets | Principal gap before authoring |
 |---:|---|---:|---|
-| 1 | Multi-locus ortholog alignment and evolutionary-signal comparison | 46 | Independent matched orthologs across two clades; native PhyKIT definitions and aggregation checks |
-| 2 | Replicated single/double perturbations across media, with directional pathway overlap | 11 | Independent intervention study with the required factorial design and frozen pathway annotations |
-| 3 | Single-cell QC, normalization, embedding and group diagnostics | 8 | Native h5ad, mitochondrial annotation and endpoint-specific representation checks |
-| 4 | Observed bacterial reads through alignment and variant comparison | 8 | Independent isolate reads and the required trimming/alignment/calling pipeline |
-| 5 | Prespecified binary clinical-response models | 7 | Independent response cohort with the required covariates |
-| 6 | Transcript structure and strand-aware reference audit | 6 | Complete matching eukaryotic reference and annotation |
-| 7 | Native BAM read-structure and eligibility audit | 2 | Overlaps the broader resequencing candidate; remove these targets if it completes first |
+| 1 | Branch summaries across matched observed ortholog trees | 35 | Full endpoint contracts and source provenance; preliminary native metrics pass |
+| 2 | Informative sites, composition and saturation across matched alignments | 11 | Native gap/masking definitions, source provenance and runtime |
+| 3 | Replicated single/double perturbations across media, with directional pathway overlap | 11 | Independent intervention study with the required factorial design and frozen pathway annotations |
+| 4 | Single-cell QC, normalization, embedding and group diagnostics | 8 | Native h5ad, mitochondrial annotation and endpoint-specific representation checks |
+| 5 | Observed bacterial reads through alignment and variant comparison | 8 | Independent isolate reads and the required trimming/alignment/calling pipeline |
+| 6 | Prespecified binary clinical-response models | 7 | Independent response cohort with the required covariates |
+| 7 | Transcript structure and strand-aware reference audit | 6 | Complete matching eukaryotic reference and annotation |
+| 8 | Native BAM read-structure and eligibility audit | 2 | Overlaps the broader resequencing candidate; remove these targets if it completes first |
 
-The multi-locus candidate's 46 targets have 13 related BixBench-Verified-50 records,
-which require separate protocol checks but add no rank credit. An additional
-endpoint needs naturally observed alignments with more than 70% gaps and receives
-no credit until suitable data are confirmed. The pinned Medusozoa author mirror
-has 20 verified alignment/tree pairs; 16 meet the provisional clade-size requirement
-but represent only seven original orthogroups. Native PhyKIT metric definitions and
-aggregation remain under review. The existing single-gene COX1 task does not
-establish multi-locus coverage.
+The [multi-locus source manifest](../../experiments/post_training/bio_tasks/workflow_designs/multilocus_source.json)
+pins 30 distinct original orthogroups from the published Medusozoa study. Each has
+at least 12 Hydrozoa and eight Scyphozoa tips, and each alignment's complete tip set
+matches its published tree. Selection inspected 43 original groups using taxon
+counts, without selecting for metric outcomes. The 60 selected files total 1.45 MB.
+These observations replace the earlier seven-orthogroup feasibility sample.
+
+Tree and alignment endpoints now have separate candidates. One additional alignment
+endpoint requires naturally observed alignments with more than 70% gaps and earns
+no ranking credit until suitable observations are confirmed. The tree task proposes
+midpoint rooting as a geometric convention and checks every preserved pairwise distance.
+It distinguishes PhyKIT's self-including long-branch score from the self-excluded
+statistic. Matched loci across clades are paired observations; an unpaired rank-test
+p-value cannot establish a biological clade difference.
+
+Dryad explicitly licenses the deposit CC0, but exact mirror-file membership remains
+unverified because the small tree archive download returns HTTP 403. The manifest
+records both the deposit archive hashes and the mirror file hashes. Candidate
+validation proceeds; redistribution and benchmark-study independence remain open.
+The local native metric check passes 60 trees, 1,184 tip rows and 15,336 pair rows
+with DendroPy rooting. The earlier TRC check detected a Biopython midpoint-rooting
+distance change and remains recorded as failed. The source manifest retains the
+reproducer, package versions and independent checks. No native audit or source
+manifest alone adds task or coverage credit.
 
 Keep each task scientifically coherent, based on independent observed inputs,
 offline and executable within 30 minutes. Promote a mapping only after required

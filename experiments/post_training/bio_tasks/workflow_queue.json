@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T14:04:24.136958+00:00",
-  "basis_revision": "cda940f675d7d81252cabd76d6b11dfd6696c15e",
+  "updated_at": "2026-09-24T14:38:49.733432+00:00",
+  "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
     "primary": "At each selection, maximize the number of currently missing distinct ID task workflows the next coherent task is expected to complete.",
@@ -23,13 +23,41 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "Question-level endpoint designs now cover the review scope of all 355 BixBench, CompBioBench and BiomniBench-DA records. These are proposals with unresolved inputs and method contracts; no new executable coverage. The approved model-free Harbor interface check passed all three expected cases, including login-terminal PATH. Select the next recipe after independent-input feasibility and cross-benchmark design overlap are assessed.",
+  "selection_reason": "User requested benchmark-wide question planning before further individual implementation. Keep the eight assessed candidate target sets as conditional planning evidence, but select no task until the full portfolio and cross-benchmark endpoint mappings are reviewed.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
-      "title": "Compare alignment quality and evolutionary signal across matched orthologs",
-      "status": "source-partially-validated-awaiting-portfolio-review",
+      "title": "Compare branch summaries across observed matched ortholog trees",
+      "status": "native-metrics-checked-implementation-paused",
       "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q7"
+        },
         {
           "benchmark": "BixBench",
           "task_id": "bix-11-q1"
@@ -53,34 +81,6 @@
         {
           "benchmark": "BixBench",
           "task_id": "bix-11-q6"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-12-q2"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-12-q3"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-12-q4"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-12-q5"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-12-q6"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-21-q2"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-25-q1"
         },
         {
           "benchmark": "BixBench",
@@ -168,71 +168,18 @@
         },
         {
           "benchmark": "BixBench",
-          "task_id": "bix-4-q1"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q2"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q3"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q4"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q5"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q6"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-4-q7"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-45-q1"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-45-q2"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-45-q5"
-        },
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-45-q6"
-        },
-        {
-          "benchmark": "BixBench",
           "task_id": "bix-60-q1"
         }
       ],
-      "missing_distinct_task_targets": 46,
+      "missing_distinct_task_targets": 35,
       "validated_new_task_mappings": 0,
       "related_protocol_records": [
-        {
-          "benchmark": "BixBench-Verified-50",
-          "task_id": "bix-12-q2",
-          "canonical_benchmark": "BixBench",
-          "canonical_task_id": "bix-12-q2",
-          "relation": "identical-question",
-          "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
-        },
         {
           "benchmark": "BixBench-Verified-50",
           "task_id": "bix-11-q1",
           "canonical_benchmark": "BixBench",
           "canonical_task_id": "bix-11-q1",
-          "relation": "revised-question",
+          "relation": "identical-question",
           "additional_rank_credit": 0,
           "protocol_validation": "Still requires separate endpoint and artifact checks."
         },
@@ -250,7 +197,7 @@
           "task_id": "bix-28-q3",
           "canonical_benchmark": "BixBench",
           "canonical_task_id": "bix-28-q3",
-          "relation": "revised-question",
+          "relation": "identical-question",
           "additional_rank_credit": 0,
           "protocol_validation": "Still requires separate endpoint and artifact checks."
         },
@@ -259,15 +206,6 @@
           "task_id": "bix-34-q2",
           "canonical_benchmark": "BixBench",
           "canonical_task_id": "bix-34-q2",
-          "relation": "identical-question",
-          "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
-        },
-        {
-          "benchmark": "BixBench-Verified-50",
-          "task_id": "bix-12-q5",
-          "canonical_benchmark": "BixBench",
-          "canonical_task_id": "bix-12-q5",
           "relation": "identical-question",
           "additional_rank_credit": 0,
           "protocol_validation": "Still requires separate endpoint and artifact checks."
@@ -292,36 +230,9 @@
         },
         {
           "benchmark": "BixBench-Verified-50",
-          "task_id": "bix-12-q4",
-          "canonical_benchmark": "BixBench",
-          "canonical_task_id": "bix-12-q4",
-          "relation": "identical-question",
-          "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
-        },
-        {
-          "benchmark": "BixBench-Verified-50",
-          "task_id": "bix-12-q6",
-          "canonical_benchmark": "BixBench",
-          "canonical_task_id": "bix-12-q6",
-          "relation": "identical-question",
-          "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
-        },
-        {
-          "benchmark": "BixBench-Verified-50",
           "task_id": "bix-38-q1",
           "canonical_benchmark": "BixBench",
           "canonical_task_id": "bix-38-q1",
-          "relation": "identical-question",
-          "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
-        },
-        {
-          "benchmark": "BixBench-Verified-50",
-          "task_id": "bix-45-q1",
-          "canonical_benchmark": "BixBench",
-          "canonical_task_id": "bix-45-q1",
           "relation": "identical-question",
           "additional_rank_credit": 0,
           "protocol_validation": "Still requires separate endpoint and artifact checks."
@@ -338,88 +249,47 @@
       ],
       "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
       "required_stages": [
-        "Resolve observed single-copy ortholog groups across two biological clades and retain gene/taxon identity.",
-        "Align each group, infer or reuse provenance-pinned gene trees, and declare rooting, gaps, taxon eligibility and branch policies.",
-        "Compute PhyKIT treeness, RCV, informative sites, saturation, branch distances, evolutionary rates, tree length and root-to-tip dispersion.",
-        "Retain per-tip and per-pair measurements, then aggregate within genes before comparing gene distributions.",
-        "Join matched orthologs across clades; calculate differences, ratios, thresholds, quantiles and explicitly parameterized Mann-Whitney tests."
+        "Select distinct observed orthogroups and retain published tree, taxon and clade provenance.",
+        "Prune two clades and midpoint-root as an explicit geometric convention; preserve every retained patristic distance.",
+        "Run pinned PhyKIT tree-length, treeness, evolutionary-rate, DVMC, long-branch and patristic-distance metrics; audit native definitions independently.",
+        "Retain all per-tip, per-pair, per-locus and grouped outputs, paired orthogroup differences and descriptive rank comparisons.",
+        "Specify thresholds, quantiles and named-locus lookups without selecting observations for a desired answer."
       ],
       "required_artifacts": [
-        "observed sequences and ortholog/taxon manifest",
-        "complete aligned FASTA and Newick per eligible gene",
-        "per-site, per-tip and per-pair measurements as applicable",
-        "per-gene metric table",
-        "group and paired-gene endpoint tables"
+        "published Newick inputs and taxon manifest",
+        "rooted/pruned trees with root-distance checks",
+        "complete per-tip and pairwise distance tables",
+        "per-locus and grouped metric tables",
+        "paired orthogroup differences and ratios",
+        "endpoint table with explicit thresholds and denominators"
       ],
-      "data_readiness": "The existing COX1 example supplies one gene and is insufficient. Independent multi-locus observations and supported ortholog assignments must be frozen before authoring.",
+      "data_readiness": "30 distinct original orthogroups, each with >=12 Hydrozoa and >=8 Scyphozoa; selected from 43 inspected original groups without metric-outcome selection. Full aligned FASTA and Newick tip sets agree. Exact mirror-to-CC0-deposit member identity and benchmark-study independence remain unverified.",
       "blockers": [
-        "Find and check independent observed groups; do not reuse the benchmark fungal/animal fixtures or treat inference methods as biological replicates.",
-        "Inspect and execute the pinned PhyKIT functions, including rooting behavior, four-decimal outputs and undefined ratios.",
-        "Named-gene endpoints must retain a gene lookup on independently chosen orthologs; this covers their workflow pattern, not original biological answers.",
-        "Define finite coverage rules for missing taxa, zero denominators, ties and empty sets without inventing observations.",
-        "Demonstrate the complete connected task finishes within 30 minutes."
+        "Resolve provenance/redistribution evidence for exact selected mirror bytes and source-study independence.",
+        "Audit full endpoint and aggregation contracts; preliminary native metric/path checks pass.",
+        "Freeze complete task endpoint tables, including ratios, thresholds and named independent loci.",
+        "Package input-reading oracle and deterministic verifier; demonstrate offline container execution within 30 minutes."
       ],
       "effort_tiebreak": "High: new multi-locus source preparation and package-specific metric checks; reuses existing alignment/tree execution.",
-      "validation_evidence": [],
-      "conditional_extra_targets": [
-        {
-          "benchmark": "BixBench",
-          "task_id": "bix-25-q4"
-        }
+      "validation_evidence": [
+        "workflow_designs/multilocus_source.json:native_audit"
       ],
-      "conditional_extra_reason": "The endpoint requires naturally observed alignments exceeding 70% gaps. It adds no rank credit until such data are verified; no artificial gaps will be inserted.",
+      "conditional_extra_targets": [],
       "source_assessments": [
         {
-          "source": "Dryad:10.5061/dryad.6q573n6dc",
-          "url": "https://datadryad.org/dataset/doi:10.5061/dryad.6q573n6dc",
-          "status": "metadata-reviewed-download-blocked",
-          "license_reported": "CC0-1.0",
-          "independent_clades": [
-            "Medusozoa",
-            "Anthozoa"
-          ],
-          "reported_single_copy_loci": 1742,
-          "observed_access_checks": [
-            {
-              "url": "https://datadryad.org/api/v2/files/4868591/download",
-              "http_status": 401
-            },
-            {
-              "url": "https://datadryad.org/downloads/file_stream/4868591",
-              "http_status": 403
-            }
-          ],
-          "downloaded_bytes": 0,
-          "limitation": "Anonymous Dryad download remains blocked. The pinned author mirror has separately validated individual alignments and matching trees."
-        },
-        {
-          "source": "Medusozoa author mirror",
-          "url": "https://github.com/ucsb-oakley-lab/Medusozoa_project/tree/8567586becd3016ae5b49c355298a0a71b523916",
-          "source_revision": "8567586becd3016ae5b49c355298a0a71b523916",
-          "status": "bounded-files-validated",
-          "verified_git_blobs": 44,
-          "downloaded_bytes": 1625844,
-          "alignment_tree_pairs": 20,
-          "unique_tip_sets_match": true,
-          "clades": [
-            "Hydrozoa",
-            "Scyphozoa"
-          ],
-          "pairs_with_at_least_six_taxa_per_clade": 16,
-          "distinct_original_orthogroups_in_eligible_pairs": 7,
-          "symmetry_filter_reconciliation": {
-            "all_alignments": 1771,
-            "passed": 1742,
-            "failed": 29
-          },
-          "limitation": "Multiple pruned groups share an original orthogroup. Twenty independent original loci remain unverified. Four taxon spellings are unresolved. No native phylogenetic metrics or task execution yet."
+          "source": "Medusozoa author mirror and Dryad deposit",
+          "status": "30-distinct-loci-validated-rights-unresolved",
+          "evidence_file": "workflow_designs/multilocus_source.json",
+          "selected_loci": 30,
+          "selected_alignment_tree_files": 60,
+          "selected_file_bytes": 1454902
         }
       ],
       "definition_review": {
         "package": "PhyKIT",
         "source_revision": "a9af92b60111ac77c9c1c7df3e9695d2d4f62dca",
         "source_version": "2.7.0",
-        "native_execution": "not-run",
+        "native_execution": "Local PhyKIT 2.7.0 check passed on 60 DendroPy-rooted trees; failed Biopython-rooted TRC check retained in source manifest. No task packaged.",
         "findings": [
           {
             "metric": "long_branch_score",
@@ -441,7 +311,146 @@
             "finding": "This pinned implementation computes sample standard deviation of root-to-tip distances without dividing by their mean. Root choice and the exclusion of outgroups must therefore be explicit."
           }
         ]
-      }
+      },
+      "source_readiness_file": "workflow_designs/multilocus_source.json"
+    },
+    {
+      "id": "multi-locus-alignment-signal",
+      "title": "Compare informative sites, composition and saturation across matched observed alignments",
+      "status": "source-validated-native-alignment-metrics-unchecked",
+      "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-21-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-25-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q6"
+        }
+      ],
+      "missing_distinct_task_targets": 11,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q5",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q5",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q4",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q4",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q6",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q6",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-45-q1",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-45-q1",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        }
+      ],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Retain genuine gaps and masked residues in matched published alignments and trees.",
+        "Freeze native PhyKIT informative-site, RCV, saturation and treeness/RCV definitions.",
+        "Compute complete per-locus outputs, eligible denominators and matched-clade comparisons."
+      ],
+      "required_artifacts": [
+        "alignments.tsv: locus, clade, taxa, columns, gaps, informative_sites, informative_fraction, rcv, saturation",
+        "signal.tsv: locus, clade, treeness, rcv, ratio, eligible",
+        "comparisons.tsv: metric, group, n, median, quantile, u, p",
+        "pairs.tsv: locus, metric, clade_difference"
+      ],
+      "data_readiness": "30 distinct original orthogroups, each with >=12 Hydrozoa and >=8 Scyphozoa; selected from 43 inspected original groups without metric-outcome selection. Full aligned FASTA and Newick tip sets agree. Exact mirror-to-CC0-deposit member identity and benchmark-study independence remain unverified.",
+      "blockers": [
+        "Resolve exact selected file provenance/redistribution and benchmark-study independence.",
+        "Audit native gap, X/missing and zero-denominator handling before setting contracts.",
+        "Measure full task runtime and validate complete artifacts; no native alignment execution yet."
+      ],
+      "effort_tiebreak": "High: new multi-locus source preparation and package-specific metric checks; reuses existing alignment/tree execution.",
+      "validation_evidence": [],
+      "conditional_extra_targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-25-q4"
+        }
+      ],
+      "conditional_extra_reason": "The endpoint requires naturally observed alignments exceeding 70% gaps. It adds no rank credit until such data are verified; no artificial gaps will be inserted.",
+      "source_assessments": [
+        {
+          "source": "Medusozoa author mirror and Dryad deposit",
+          "status": "30-distinct-loci-validated-rights-unresolved",
+          "evidence_file": "workflow_designs/multilocus_source.json",
+          "selected_loci": 30,
+          "selected_alignment_tree_files": 60,
+          "selected_file_bytes": 1454902
+        }
+      ],
+      "source_readiness_file": "workflow_designs/multilocus_source.json"
     },
     {
       "id": "factorial-rnaseq-pathway-comparison",
@@ -1226,5 +1235,14 @@
       }
     ]
   },
-  "portfolio_plan": "workflow_plan.json"
+  "portfolio_plan": "workflow_plan.json",
+  "authoring_phase": "question-portfolio-planning",
+  "portfolio_review_progress": {
+    "detailed_question_sources": 18,
+    "detailed_question_assignments": 848,
+    "new_inventory_based_question_cards": 160,
+    "new_source_releases": 15,
+    "source_file": "workflow_designs/additional_benchmarks.json",
+    "limit": "Includes question-stem and inventory-stage planning; does not imply full source-prompt review, completed contracts, independent task count or executable coverage."
+  }
 }

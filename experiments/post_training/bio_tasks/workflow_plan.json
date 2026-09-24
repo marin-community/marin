@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T14:04:24.136958+00:00",
+  "updated_at": "2026-09-24T14:45:54.881042+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -82,7 +82,7 @@
       ],
       "required_artifacts": "Aligned FASTA, rooted Newick where required, taxon/locus exclusions, pairwise and tip distances, per-locus metrics, paired clade comparisons",
       "verification_design": "Check residues and labels; independently recompute distances and aggregation; distinguish native PhyKIT behavior from corrected definitions; compare tree splits and required rooting separately.",
-      "current_gap": "Partial author mirror check: 16 eligible pairs but seven original orthogroups; native PhyKIT not run.",
+      "current_gap": "30 distinct observed loci have matching alignments and trees; local native tree metric/path checks pass with DendroPy rooting. Exact mirror/deposit provenance and complete task endpoints remain unresolved; implementation paused for portfolio planning.",
       "status": "scientific-design-proposal",
       "source_selection": "Use independent observed inputs; pin provenance, rights, biological identities and every subset transformation before implementation. Source leads are not validated data.",
       "target_group_ids": [
@@ -13103,20 +13103,20 @@
   ],
   "implementation_sequence": [
     {
-      "phase": "solver-diagnostic-review",
-      "work": "Inspect the two fixed existing-task GLM traces and deterministic results; preserve original grades. Repair demonstrated interface friction before new task implementation."
+      "phase": "question-portfolio-review",
+      "work": "Complete question-level portfolio planning across all provisional-ID agentic releases, retaining identity-only and inaccessible sources as explicit gaps."
     },
     {
-      "phase": "endpoint-and-data-selection",
-      "work": "Review the full portfolio, resolve target-specific contracts and independent observed sources, then select the highest defensible marginal missing-ID gain. Review numeric, visual, learned and evidence-based output equivalence before promising deterministic grading."
+      "phase": "cross-benchmark-consolidation",
+      "work": "Consolidate equivalent cross-benchmark questions and shared real-data prerequisites without merging distinct estimands or protocol requirements."
     },
     {
-      "phase": "coherent-task-authoring",
-      "work": "Implement one selected connected workflow; record input provenance, native package references, private input-reading oracle and complete artifact checks. Validate positive and discriminating negative cases, Harbor isolation and runtime."
+      "phase": "implementation-assignment",
+      "work": "Review the full portfolio and priority order before assigning bounded implementation packets to subagents."
     },
     {
-      "phase": "recompute-and-repeat",
-      "work": "Promote only actually validated endpoint mappings, remove completed aliases from subsequent gains and select again. Keep dataset train-only; internal prediction holdouts within a task do not create corpus splits."
+      "phase": "authoring-validation-and-coverage",
+      "work": "Implement connected tasks, validate native oracles and deterministic verifiers, then update measured coverage."
     }
   ],
   "decision_constraints": [
@@ -13155,6 +13155,32 @@
       "reviewed_question_ids": 100,
       "proposed_designs": 84,
       "relationship_to_workstream_questions": "Endpoint refinements including non-equivalent supporting components; do not add to the 147 broad questions or count as validated mappings."
+    },
+    {
+      "path": "workflow_designs/additional_benchmarks.json",
+      "sha256": "936bb2d3f22fbe01ebba58145d8488301ec7db5e81804fec4a01a549fa5cd3e2",
+      "benchmark_ids": [
+        "BioAgent",
+        "EpiBench",
+        "VariantBench",
+        "ScienceAgentBench",
+        "CORE-Bench",
+        "DiscoveryBench",
+        "TxBench-Ab",
+        "TxBench-OD",
+        "TxBench-PP",
+        "SpatialBench",
+        "SpatialBench-Long",
+        "scBench",
+        "scBench-Long",
+        "sc-HeurekaBench",
+        "BAISBench"
+      ],
+      "inventory_records_assigned": 493,
+      "proposed_question_cards": 160,
+      "inspection_basis": "Existing versioned inventories and endpoint-stage reviews; per-record source inspection limits preserved. No new full-prompt inspection implied.",
+      "relationship_to_workstream_questions": "These question cards refine or split the existing 147 broad questions. They overlap the three existing detailed-design files and one another across benchmarks; do not sum them into an independent task count or a coverage forecast."
     }
-  ]
+  ],
+  "authoring_phase": "question-portfolio-planning"
 }
