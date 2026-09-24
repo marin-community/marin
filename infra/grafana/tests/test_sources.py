@@ -24,7 +24,7 @@ from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
 from server import create_app
 from starlette.testclient import TestClient
-from wandb_source import WandbSource
+from wandb_source import LoggedPoint, WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
 HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
@@ -444,6 +444,29 @@ def test_wandb_run_history_preserves_parent_and_samples_child_separately():
     rows = _wandb(handler).run_history("fork", metric="train/loss", project="marin_moe")
 
     assert [(row["step"], row["value"]) for row in rows] == [(99, 1.25), (100, 1.20), (101, 1.22)]
+
+
+def test_wandb_recent_points_carry_a_forks_parent_history_and_skip_an_absent_run():
+    key = "eval_dropless/paloma/macro_loss"
+    parent = [{"_step": step, "_timestamp": step * 10.0, key: loss} for step, loss in ((137_999, 2.20), (143_999, 2.19))]
+    child = [{"_step": 146_999, "_timestamp": 1_469_990.0, key: 2.26}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        if variables["run"] != "fork":
+            return httpx.Response(200, json={"data": {"project": {"run": None}}})
+        spec = json.loads(variables["specs"][0])
+        points = [point for point in parent + child if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 146_138}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    source = _wandb(handler)
+
+    assert source.recent_points("fork", metric=key, count=2) == [
+        LoggedPoint(step=143_999, value=2.19, timestamp=1_439_990.0),
+        LoggedPoint(step=146_999, value=2.26, timestamp=1_469_990.0),
+    ]
+    assert source.recent_points("smoke-test", metric=key, count=2) == []
 
 
 def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: list[dict] = ()):

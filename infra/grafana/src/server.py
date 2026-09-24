@@ -116,8 +116,12 @@ from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
+    EVAL_HISTORY_LENGTH,
+    EVAL_LOSS_METRIC,
+    EvalHistory,
     Signals,
     WatchedRun,
+    eval_history,
     health_alert_rows,
     optimizer_alert_rows,
     retry_event_query,
@@ -998,6 +1002,29 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
+    def hero_evaluations(runs: tuple[WatchedRun, ...]) -> dict[str, EvalHistory]:
+        """Each watched run's recent evaluation history from W&B, keyed by run ID.
+
+        A W&B failure skips the evaluation check for that run rather than failing
+        every other health check with it.
+        """
+        evaluations = {}
+        for run_id in sorted({run.run_id for run in runs}):
+            try:
+                points = wandb_cache.get_or_compute(
+                    ("hero_evaluations", run_id),
+                    lambda run_id=run_id: wandb_source.recent_points(
+                        run_id, metric=EVAL_LOSS_METRIC, count=EVAL_HISTORY_LENGTH
+                    ),
+                )
+            except UpstreamError as err:
+                logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
+                continue
+            history = eval_history(points)
+            if history is not None:
+                evaluations[run_id] = history
+        return evaluations
+
     def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
@@ -1072,12 +1099,12 @@ def create_app(
             retry_events = (
                 hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
             )
-            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
+            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, hero_evaluations(runs), now)
 
         return finelog_alert_endpoint(
             "training_health",
             project,
-            lambda now: health_alert_rows((), {}, pa.table({}), now),
+            lambda now: health_alert_rows((), {}, pa.table({}), {}, now),
         )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
