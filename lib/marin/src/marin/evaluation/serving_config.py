@@ -42,6 +42,13 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_SPECULATIVE_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:spec_decode_num_accepted_tokens",
+        "vllm:spec_decode_num_draft_tokens",
+        "vllm:spec_decode_num_drafts",
+    }
+)
 
 # vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
 # loader stages shard buffers on the way to device memory. Both are charged to the serve child's
@@ -203,6 +210,8 @@ def _vllm_engine_config(
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+        extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
+        speculative=serve.speculative,
     )
 
 
@@ -233,6 +242,8 @@ def inference_config_for_model(
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
+    if serve.speculative is not None and accelerator.platform is not Platform.GPU:
+        raise ValueError("speculative serving requires the GPU vLLM backend")
     geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)

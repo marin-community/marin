@@ -275,6 +275,11 @@ class ArtifactStep(Generic[T]):
         )
 
 
+def artifact_identity(step: ArtifactStep) -> str:
+    """Return the immutable recipe identity carried across artifact boundaries."""
+    return f"{step.name}@{step.version}:{step.fingerprint()}"
+
+
 def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
