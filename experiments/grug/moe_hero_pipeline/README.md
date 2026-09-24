@@ -52,11 +52,10 @@ m8 trials produced NaNs, while synchronized trials passed. This is a timing
 workaround with an unresolved root cause. Do not remove it from the validated
 recipe based only on successful small tests.
 
-Use the `pipeline` dependency environment and CUDA toolchain. The measured
-per-worker command, after applying the dependency overlays, was:
+Use the `pipeline` dependency environment and CUDA toolchain. After applying
+the dependency overlays, reproduce the worker configuration with:
 
 ```bash
-JAX_COMPILATION_CACHE_DIR=/tmp/hero-pp-jax-cache \
 XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async \
 XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_CLIENT_MEM_FRACTION=0.91 \
 JAX_ENABLE_PGLE=false XLA_FLAGS=--xla_gpu_enable_command_buffer= \
@@ -67,6 +66,7 @@ uv run --no-sync python -m iris.hooks.multigpu_main --nproc 1 --devices-per-proc
     --microbatches 48 --batch-size 384 --sequence-length 65536 --expert-waves 6 \
     --optimizer muonh --offload-opt-state --offload-activations \
     --park-state-during-warmup --synchronize-devices-after-step \
+    --compilation-cache /tmp/hero-pp-jax-cache \
     --steps 10 --run-id <unique-run-id>
 ```
 
