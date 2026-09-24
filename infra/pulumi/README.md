@@ -324,6 +324,18 @@ already provisioned:
   `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Request this through the central
   `iam_data.yaml` grant workflow; do not mutate the key policy with `gcloud`.
 
+The `marin` GCP stack operator needs both project custom roles:
+
+- `projects/hai-gcp-models/roles/marindev` supplies resource reads, state-bucket object access,
+  KMS encrypt/decrypt, Secret Manager access, and project IAM policy updates.
+- `projects/hai-gcp-models/roles/marinPulumiAdmin` supplies the remaining resource writes and
+  resource-scoped IAM updates for the graph declared by `iac.program._build_gcp`.
+
+`marinPulumiAdmin` is supplemental to `marindev`; it does not duplicate permissions already in
+`marindev`. Several permissions can change IAM policy and therefore grant administrative access
+within the target resource. Grant both roles only to trusted operators of the `marin` stack.
+CoreWeave stacks still require the Kubernetes credentials described in "First-time setup."
+
 ## CI preview
 
 `.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack in parallel and

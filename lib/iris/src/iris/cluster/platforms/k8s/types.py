@@ -38,7 +38,7 @@ IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
-    (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
+    (IRIS_PRIORITY_CLASS_BATCH, 0, "PreemptLowerPriority"),
 )
 
 

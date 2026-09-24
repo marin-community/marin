@@ -70,13 +70,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # This variant has no sequence sharding; context parallelism requires moe_hero_ep.
-    context_axis_size: int = 1
     sharding_dump_path: str | None = None
-
-    def __post_init__(self):
-        if self.context_axis_size != 1:
-            raise ValueError("This Grug variant requires context_axis_size=1; use moe_hero_ep for context parallelism.")
 
 
 @dataclass(frozen=True)
@@ -412,7 +406,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
-        context_axis_size=config.trainer.context_axis_size,
     )
     checkpointer = trainer.checkpointer.create(run_id)
     with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):

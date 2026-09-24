@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -58,6 +58,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from levanter.utils.mesh import MeshConfig
 
 from experiments.grug.checkpointing import (
     LEGACY_STATE_KEY,
@@ -65,6 +66,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -279,6 +281,8 @@ class GrugTrainerConfig:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     data_seed: int | None = None
     log_every: int = 1
+    # None preserves automatic GC; 100 was tested with the full model on EP64.
+    gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
@@ -295,8 +299,8 @@ class GrugTrainerConfig:
     # restarts at step 0.
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -304,7 +308,20 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    # Sequence shards route independently; routing statistics and loss include this axis.
+    context_axis_size: int = 1
     sharding_dump_path: str | None = None
+
+    def __post_init__(self):
+        if self.gc_interval is not None and self.gc_interval <= 0:
+            raise ValueError("GC interval must be positive")
+
+
+def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
+    """Build a trainer mesh that excludes context shards from the batch device count."""
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
+    return MeshConfig(axes={"data": -1, "replica": 1, "model": 1, "context": context_axis_size})
 
 
 @dataclass(frozen=True)
@@ -433,7 +450,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -499,6 +516,19 @@ def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
     return gated
 
 
+def _collect_after_eval(hook: Callable[..., None]) -> Callable[..., None]:
+    @functools.wraps(hook)
+    def wrapped(*args, **kwargs):
+        try:
+            hook(*args, **kwargs)
+        finally:
+            # Eval can leave cycles holding replicated device buffers. Reclaim them
+            # after its frame has returned, before another eval or training step.
+            collect_garbage()
+
+    return wrapped
+
+
 def build_tagged_evaluator(
     *,
     data_config: LmDataConfig,
@@ -519,7 +549,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -947,6 +977,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        context_axis_size=config.trainer.context_axis_size,
     )
     # Armed before the state is built or restored. The watchdog's step and process deadlines only
     # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
@@ -957,7 +988,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
-    with set_mesh(mesh), dashboard:
+    with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
         batch_schedule = trainer.batch_schedule
 
         @jax.jit
@@ -1043,6 +1074,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     expert_axis_size=1,
                     replica_axis_size=mesh.shape["replica_dcn"],
                     model_axis_size=mesh.shape["model"],
+                    context_axis_size=mesh.shape["context"],
                 )
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
@@ -1154,6 +1186,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 eval_hooks.append(dropless_eval_hook)
 
+            if config.trainer.gc_interval is not None:
+                eval_hooks = [_collect_after_eval(hook) for hook in eval_hooks]
+
             if interval is not None and interval > 0:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
@@ -1173,12 +1208,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        current_step = int(state.step)
+        gc_start_step = current_step + GC_WARMUP_STEPS
+
         # Main optimization loop.
         try:
-            while int(state.step) < stop_step:
+            while current_step < stop_step:
+                iteration_start = time.perf_counter()
+                if config.trainer.gc_interval is not None and current_step == gc_start_step:
+                    gc_start = time.perf_counter()
+                    gc_hook = gc_resources.enter_context(coordinated_gc())
+                    state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
+                    levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
-                current_step = int(state.step)
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -1192,13 +1235,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
-                step = int(state.step) - 1
+                current_step = int(state.step)
+                step = current_step - 1
 
                 jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
-                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {current_step}.")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -1237,13 +1281,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                checkpoint_start = time.perf_counter()
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
                         callbacks.ProgressEvent.CHECKPOINT_STARTED,
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
-                        checkpointer.on_step(tree=state, step=int(state.step))
+                        checkpointer.on_step(tree=state, step=current_step)
+
+                checkpoint_duration = time.perf_counter() - checkpoint_start
+                levanter.tracker.log(
+                    {
+                        "throughput/checkpoint_time": checkpoint_duration,
+                        "throughput/iteration_time": time.perf_counter() - iteration_start,
+                    },
+                    step=step,
+                )
 
         except BaseException:
             logger.exception(

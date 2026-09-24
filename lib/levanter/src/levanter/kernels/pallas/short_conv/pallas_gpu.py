@@ -83,7 +83,9 @@ Numerics
 dtype, in the reference's association order. That order is not cosmetic -- the forward is
 left-nested over ascending lags, and JAX transposes it by walking the jaxpr in reverse, so
 ``dx`` accumulates over *descending* lags. Matching both makes the forward and ``dx``
-bit-identical to the reference. ``dw`` is a reduction over 65,536 tokens whose association
+bit-identical to the reference; under sequence sharding the boundary tokens' ``dx`` is the
+sum of two separately rounded partials (see ``short_conv``), so only the forward stays
+bitwise there. ``dw`` is a reduction over 65,536 tokens whose association
 order XLA does not define, so it agrees to fp32 reassociation error and is validated
 against a float64 oracle instead. Setting the flag to ``False`` keeps a single fp32
 accumulator across taps: strictly more accurate, no longer bit-comparable.
@@ -100,7 +102,7 @@ from jaxtyping import Array, Float, Int
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
-from .config import ShortConvBlockSizes
+from .config import OOB_SEGMENT, ShortConvBlockSizes
 from .reference import short_conv_reference
 
 try:  # pragma: no cover - import guard, exercised only by environment
@@ -110,11 +112,6 @@ try:  # pragma: no cover - import guard, exercised only by environment
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     pltriton = None  # type: ignore[assignment]
     _HAS_PALLAS_TRITON = False
-
-#: Sentinel written into the shifted segment ids for positions outside the sequence.
-#: `jnp.pad(segment_ids, ..., constant_values=-1)` in the reference; matching it exactly is
-#: what makes the first `kernel_size - 1` positions of every sequence agree.
-_OOB_SEGMENT = -1
 
 _FORCE_INTERPRET = False
 
@@ -342,7 +339,7 @@ def _head_views(x, segment_ids, block_seq: int, width: int):
     first-block path is the reference's semantics with no special casing inside the kernel.
     """
     pad_vals = jnp.zeros((x.shape[0], width - 1, x.shape[2]), x.dtype)
-    pad_segs = jnp.full((segment_ids.shape[0], width - 1), _OOB_SEGMENT, segment_ids.dtype)
+    pad_segs = jnp.full((segment_ids.shape[0], width - 1), OOB_SEGMENT, segment_ids.dtype)
     return (
         jnp.concatenate([pad_vals, x[:, :block_seq, :]], axis=1),
         jnp.concatenate([pad_segs, segment_ids[:, :block_seq]], axis=1),
@@ -356,7 +353,7 @@ def _tail_views(dy, segment_ids, block_seq: int, width: int):
     ``dx``, so the pad value is zero and its segment id can never match.
     """
     pad_vals = jnp.zeros((dy.shape[0], width - 1, dy.shape[2]), dy.dtype)
-    pad_segs = jnp.full((segment_ids.shape[0], width - 1), _OOB_SEGMENT, segment_ids.dtype)
+    pad_segs = jnp.full((segment_ids.shape[0], width - 1), OOB_SEGMENT, segment_ids.dtype)
     return (
         jnp.concatenate([dy[:, -block_seq:, :], pad_vals], axis=1),
         jnp.concatenate([segment_ids[:, -block_seq:], pad_segs], axis=1),

@@ -27,6 +27,7 @@ from marin.inference.config import (
     IrisConfig,
     RemoteInferenceConfig,
     ServedModelConfig,
+    ServingGeometry,
     VllmEngineConfig,
 )
 from marin.inference.iris import (
@@ -105,7 +106,8 @@ def test_remote_topology_selection() -> None:
         iris_module._broker_config(0, None)
 
 
-def test_remote_inference_uses_controller_minted_federated_capability_url(monkeypatch) -> None:
+@pytest.mark.parametrize("pipeline_size", [1, 2])
+def test_remote_inference_uses_controller_minted_federated_capability_url(monkeypatch, pipeline_size) -> None:
     class _Job:
         job_id = "serve-job"
         iris_job = None
@@ -136,18 +138,27 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
         "_wait_for_endpoint",
         lambda *_args, **_kwargs: (
             "http://10.0.0.1:8000",
-            {"tensor_parallel_size": "1", "backend": "vllm"},
+            {
+                "tensor_parallel_size": "8",
+                "backend": "vllm",
+                "data_parallel_size": "1",
+                "pipeline_parallel_size": str(pipeline_size),
+                "task_count": str(pipeline_size),
+                "max_model_len": "4096",
+            },
         ),
     )
     iris = IrisConfig(
-        worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu"]),
+        worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=pipeline_size),
+        worker_environment=create_environment(docker_image="test"),
+        serving_geometry=ServingGeometry(8, 1, pipeline_size, 8),
     )
 
     with remote_inference(
         RemoteInferenceConfig(
             model=ServedModelConfig(
                 weights="physical-model",
+                tensor_parallel_size=8,
                 api_model="public-model",
                 tokenizer="Qwen/Qwen3-0.6B",
             ),
@@ -159,6 +170,10 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
         model = session.model
 
     (request,) = submitted
+    assert request.replicas == pipeline_size
+    assert session.effective_serving is not None
+    assert session.effective_serving.task_count == pipeline_size
+    assert session.effective_serving.max_model_len == 4096
     (service,) = request.entrypoint.callable_entrypoint.args
     assert service.controller_proxy_timeout_seconds > 1800
     assert service.endpoint_name == minted[0][0]

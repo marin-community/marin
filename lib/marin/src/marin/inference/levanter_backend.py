@@ -13,7 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 import jax
 import jax.numpy as jnp
 import jmp
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmHeadModel
@@ -24,7 +24,7 @@ from transformers import PreTrainedTokenizerBase
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
-from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
+from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
@@ -41,12 +41,6 @@ DEFAULT_LEVANTER_MAX_SEQ_LEN = 4096
 _MIN_QUEUED_TOKENS = 512
 # Levanter loads weights at one dtype; vLLM's `auto`/`half`/`float` aliases have no meaning here.
 LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
-
-
-def _checkpoint_ref(spec: ModelSpec) -> str:
-    if spec.revision is None:
-        return spec.weights
-    return f"{spec.weights}@{spec.revision}"
 
 
 @runtime_checkable
@@ -70,6 +64,7 @@ class LevanterServedModel:
 
     base_url: str
     model_id: str
+    chat_template_content: str | None
     uvicorn: BackgroundServer
 
     def check_alive(self) -> None:
@@ -140,7 +135,7 @@ class LevanterBackend:
         jax.config.update("jax_persistent_cache_min_compile_time_secs", JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS)
 
         dtype = validate_levanter_dtype(spec.dtype)
-        checkpoint_ref = _checkpoint_ref(spec)
+        checkpoint_ref = RepoRef(spec.weights, spec.revision)
         # Resolve the model class first: whether the mesh needs explicit axes is a model property.
         converter = HFCheckpointConverter.from_hf(checkpoint_ref)
         model_config = converter.default_config
@@ -151,7 +146,7 @@ class LevanterBackend:
             mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
-        tokenizer = load_tokenizer(checkpoint_ref)
+        tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.tokenizer_revision)
         if spec.chat_template_content is not None:
             tokenizer.chat_template = spec.chat_template_content
 
@@ -188,7 +183,8 @@ class LevanterBackend:
         # Reject models the inference engine cannot drive before the weight load: resolving the model
         # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
         # load_model has no such requirement.)
-        checkpoint_ref = _checkpoint_ref(spec)
+        checkpoint_ref = RepoRef(spec.weights, spec.revision)
+        tokenizer_ref = str(RepoRef(spec.tokenizer_source, spec.tokenizer_revision))
         model_type = HFCheckpointConverter.from_hf(checkpoint_ref).default_config.model_type
         if not issubclass(model_type, SupportsPagedGeneration):
             raise NotImplementedError(
@@ -197,12 +193,13 @@ class LevanterBackend:
                 "engine. Score it with LevanterBackend.load_model, or serve it with vLLM."
             )
         with self.load_model(spec) as loaded:
+            chat_template_content = tool_chat_template(loaded.tokenizer)
             # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
             # device-mesh context; the serve loop below then runs off-mesh, as before.
             server = InferenceServer.create(
                 InferenceServerConfig(
                     trainer=loaded.trainer,
-                    tokenizer=checkpoint_ref,
+                    tokenizer=tokenizer_ref,
                     model_name=spec.api_model,
                     service=InferenceEngineConfig(
                         max_seq_len=loaded.max_seq_len,
@@ -226,6 +223,7 @@ class LevanterBackend:
                 yield LevanterServedModel(
                     base_url=f"http://{self.host}:{port}",
                     model_id=spec.api_model,
+                    chat_template_content=chat_template_content,
                     uvicorn=background,
                 )
         finally:

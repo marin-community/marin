@@ -7,13 +7,14 @@ These dataclasses are safe to construct in CPU coordinators and CLI processes.
 Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
+import json
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
+from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
@@ -23,6 +24,82 @@ WORKER_PYTHON_VERSION = "3.12"
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 VLLM_METRIC_PREFIX = "vllm:"
+VLLM_TOPOLOGY_OPTIONS = frozenset(
+    {
+        "--tensor-parallel-size",
+        "--pipeline-parallel-size",
+        "--data-parallel-size",
+        "--data-parallel-size-local",
+        "--data-parallel-start-rank",
+        "--nnodes",
+        "--node-rank",
+        "--master-addr",
+        "--master-port",
+        "--device-ids",
+        "--headless",
+    }
+)
+
+
+def resolve_tokenizer_revision(
+    revision: str | None,
+    tokenizer: str | None,
+    tokenizer_revision: str | None,
+) -> str | None:
+    """Resolve the revision owned by an explicit or model-default tokenizer."""
+    if tokenizer_revision is not None:
+        return tokenizer_revision
+    if tokenizer is None:
+        return revision
+    return None
+
+
+def validate_pipeline_args(args: tuple[str, ...]) -> None:
+    """Reject flags whose values must agree with the Iris gang geometry."""
+    for arg in args:
+        option = arg.partition("=")[0]
+        if option in VLLM_TOPOLOGY_OPTIONS:
+            raise ValueError(f"pipeline parallelism owns {option}; remove it from extra args")
+
+
+@dataclass(frozen=True)
+class ServingGeometry:
+    """GPU ranks per pipeline stage and stages per Iris gang."""
+
+    tensor_parallel_size: int
+    data_parallel_size: int
+    pipeline_parallel_size: int
+    gpus_per_task: int
+
+    def __post_init__(self) -> None:
+        if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size) < 1:
+            raise ValueError("parallel sizes must be positive")
+        if self.tensor_parallel_size * self.data_parallel_size != self.gpus_per_task:
+            raise ValueError("tensor_parallel_size * data_parallel_size must equal gpus_per_task")
+
+    @property
+    def task_count(self) -> int:
+        return self.pipeline_parallel_size
+
+    @property
+    def total_gpus(self) -> int:
+        return self.task_count * self.gpus_per_task
+
+    @property
+    def label(self) -> str:
+        return f"PP{self.pipeline_parallel_size} TP{self.tensor_parallel_size} DP{self.data_parallel_size}"
+
+
+@dataclass(frozen=True)
+class EffectiveServing:
+    """Resolved serving settings reported by a running inference endpoint."""
+
+    tensor_parallel_size: int | None
+    data_parallel_size: int | None
+    pipeline_parallel_size: int
+    task_count: int
+    max_model_len: int | None
+
 
 # This standard set includes families consumed by Marin's inference dashboards or needed for
 # basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
@@ -90,11 +167,63 @@ class VllmCompilationCacheMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class ResolvedModelLocator:
+    """An immutable model source resolved before inference is launched."""
+
+    uri: str
+    identity: str
+
+    def __post_init__(self) -> None:
+        if not self.uri:
+            raise ValueError("resolved model URI must not be empty")
+        if not self.identity:
+            raise ValueError("resolved model identity must not be empty")
+
+
+class SpeculativeMethod(StrEnum):
+    """Speculative decoding methods supported by Marin's vLLM launcher."""
+
+    EAGLE3 = "eagle3"
+
+
+@dataclass(frozen=True)
+class SpeculativeServingConfig:
+    """A resolved draft model and its vLLM speculative-decoding policy."""
+
+    method: SpeculativeMethod
+    model: ResolvedModelLocator
+    num_speculative_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.num_speculative_tokens <= 0:
+            raise ValueError("num_speculative_tokens must be positive")
+
+    def vllm_argument(self) -> str:
+        """Return the JSON value accepted by vLLM's ``--speculative-config``."""
+        return json.dumps(
+            {
+                "method": self.method.value,
+                "model": self.model.uri,
+                "num_speculative_tokens": self.num_speculative_tokens,
+            },
+            separators=(",", ":"),
+        )
+
+
+@dataclass(frozen=True)
 class ServedModelConfig:
+    """Model and tokenizer inputs for local or Iris-backed serving.
+
+    ``revision`` pins ``weights``. ``tokenizer_revision`` pins an explicitly
+    configured ``tokenizer``. When ``tokenizer`` is omitted, it defaults to the
+    original weights repository and may inherit its revision.
+    """
+
     weights: str
     revision: str | None = None
     api_model: str | None = None
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     dtype: str = "bfloat16"
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
@@ -114,6 +243,11 @@ class ServedModelConfig:
     def model_id(self) -> str:
         """Model identifier accepted by the served OpenAI endpoint."""
         return self.api_model or self.weights
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        """Revision owned by the configured or default tokenizer repository."""
+        return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
 
 
 @dataclass
@@ -136,6 +270,7 @@ class VllmEngineConfig:
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
     extra_metric_families: frozenset[str] = frozenset()
+    speculative: SpeculativeServingConfig | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -252,6 +387,7 @@ class IrisConfig:
 
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
+    serving_geometry: ServingGeometry | None = None
     cache_ttl_days: int = 14
     endpoint_ready_timeout_seconds: float = 1800.0
     endpoint_health_timeout_seconds: float = 1800.0
@@ -272,9 +408,15 @@ class IrisConfig:
         # marker before concrete resources are restored at execution time.
         if not isinstance(self.worker_resources, ResourceConfig):
             return
-        if self.worker_resources.replicas != 1:
+        geometry = self.serving_geometry
+        if geometry is None and self.worker_resources.replicas != 1:
             raise ValueError("Each inference instance must use exactly one Iris task")
         device = self.worker_resources.device
+        if geometry is not None:
+            if self.worker_resources.replicas != geometry.task_count:
+                raise ValueError("worker resource replicas must equal serving geometry task_count")
+            if not isinstance(device, GpuConfig) or device.count != geometry.gpus_per_task:
+                raise ValueError("serving geometry requires matching GPU resources per task")
         if isinstance(device, CpuConfig):
             raise ValueError("Inference workers require an accelerator")
         if isinstance(device, TpuConfig) and device.vm_count() != 1:
@@ -295,3 +437,12 @@ class RemoteInferenceConfig:
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
+        geometry = self.iris.serving_geometry
+        if geometry is not None and geometry.task_count > 1:
+            if not isinstance(self.engine, VllmEngineConfig):
+                raise ValueError("pipeline parallelism requires the vLLM backend")
+            if self.instances != 1 or self.broker is not None:
+                raise ValueError("pipeline parallelism requires one instance and no broker")
+            if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
+                raise ValueError("model tensor_parallel_size must match serving geometry")
+            validate_pipeline_args(self.engine.extra_args)

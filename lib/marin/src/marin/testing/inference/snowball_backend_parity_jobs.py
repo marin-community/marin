@@ -362,6 +362,7 @@ def score_vllm_against_goldens(
     parities: list[NextTokenParity] = []
     with iris_vllm_launch(
         pipeline_parallel_size=pipeline_parallel_size,
+        tensor_parallel_size=1,
         data_parallel_size=GPU_COUNT,
     ) as launch:
         logger.info(

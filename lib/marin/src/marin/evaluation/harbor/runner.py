@@ -4,13 +4,12 @@
 """Run a Harbor dataset against an already-served model and normalize the trials.
 
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
-Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
-sandbox environment, and normalizes each finished trial into the shared eval
-contract: one agentic :class:`~finestore.eval.EvalSample` per task (its reward, its grading,
-and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
-back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
-the durable output path as it finishes, so a completed trial survives a driver killed before the job
-returns and Harbor's own per-trial resume reads it back from that path on the next run.
+Harbor agent at it (``hosted_vllm/<served-name>``) and runs the dataset's trials on the configured
+sandbox environment. Harbor writes each native result and normalized evaluation sample directly to
+the run's FineStore archive. This module reads Harbor's durable trial results only to compute the
+aggregate record metrics and coverage. Harbor also keeps its trial tree under the results root, so a
+completed trial survives a driver killed before the job returns and Harbor's own per-trial resume
+reads it back on the next run.
 
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """
@@ -26,10 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborErrorTaxonomy,
@@ -37,17 +35,14 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     run_harbor_driver,
 )
-from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-# Local scratch, used only to materialize a dataset before the isolated driver runs. Trial results
-# are written straight to the remote (or local) ``output_dir``, never staged here.
-_HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
 # Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
 _HARBOR_JOBS_SUBDIR = "harbor_jobs"
 # Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
@@ -85,18 +80,14 @@ class HarborTrial:
     infrastructure or unknown failures remain ungraded.
     """
 
-    task_id: str
-    trial_id: str
     reward: float
     scored: bool
-    status: str
-    trajectory_path: str | None
     error: dict | None
 
 
 @dataclass(frozen=True)
 class HarborRunResult:
-    """The aggregate of one Harbor run, and the root of the finestore archive it wrote.
+    """The aggregate of one Harbor run.
 
     ``attempted_trials`` is the number of trials the run set out to score after the runtime cap,
     derived from the dataset size captured during preflight rather than from result files.
@@ -113,7 +104,6 @@ class HarborRunResult:
     mean_reward: float
     reward_stderr: float
     benchmark: BenchmarkMetadataRef
-    archive_path: str | None
 
     @property
     def unscored_trials(self) -> int:
@@ -182,10 +172,8 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
 
 
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
-    """Normalize one Harbor result and locate its durable trajectory."""
-    trial_dir = result_file.parent
+    """Normalize one Harbor result for aggregate scoring and coverage."""
     data = json.loads(result_file.read_text())
-    task_id = data.get("task_name", trial_dir.name)
     verifier_result = data.get("verifier_result")
     rewards = (verifier_result or {}).get("rewards") or {}
     reward = rewards.get("reward", 0.0)
@@ -206,15 +194,9 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
     else:
         error["type"] = f"{_UNKNOWN_ERROR_PREFIX}{exception_type or _UNKNOWN_ERROR}"
         scored = False
-    trajectory_file = trial_dir / "agent" / "trajectory.json"
-    trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
     return HarborTrial(
-        task_id=task_id,
-        trial_id=trial_dir.name,
         reward=reward,
         scored=scored,
-        status="failed" if exc else "completed",
-        trajectory_path=trajectory_path,
         error=error,
     )
 
@@ -276,60 +258,6 @@ def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy)
             result_file.parent.rmtree()
 
 
-def _sample_for(trial: HarborTrial, dataset: str, *, trajectory_uri: str | None) -> EvalSample:
-    """Normalize one trial into an agentic :class:`EvalSample`, referencing its archived trajectory.
-
-    An ungraded trial is ungraded, not wrong: it carries no score and ``correct`` stays ``None``, so
-    the sample browser counts it apart from the answers the model actually got wrong.
-    """
-    solved = trial.reward >= SOLVED_REWARD if trial.scored else None
-    detail = json.dumps({"reward": trial.reward, "error": trial.error, "scored": trial.scored}, ensure_ascii=False)
-    return EvalSample(
-        task=dataset,
-        doc_id=trial.task_id,
-        kind=SampleKind.AGENTIC,
-        trajectory_uri=trajectory_uri,
-        grading=Grading(
-            method="harbor:verifier",
-            metric="reward",
-            score=trial.reward if trial.scored else None,
-            passed=solved,
-            detail=detail,
-        ),
-        metrics={"reward": trial.reward} if trial.scored else {},
-        correct=solved,
-    )
-
-
-def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> str | None:
-    """Write the run's samples, flattened steps, and raw trajectories to the finestore archive.
-
-    Each trial's raw trajectory is stored once in the ``blobs`` table and referenced from the sample
-    by a ``finestore://`` URI; its steps are flattened into the ``steps`` table for column projection.
-    Returns the archive root, or ``None`` when there are no trials to write.
-    """
-    if not trials:
-        return None
-    store = EvaluationStore.open(output_dir, writer_id="harbor")
-    try:
-        for trial in trials:
-            trajectory_uri = None
-            if trial.trajectory_path is not None:
-                stored = archive_trajectory(
-                    store,
-                    StoragePath(trial.trajectory_path).read_bytes(),
-                    task=dataset,
-                    doc_id=trial.task_id,
-                    trial_id=trial.trial_id,
-                )
-                trajectory_uri = stored.uri
-            store.add_sample(_sample_for(trial, dataset, trajectory_uri=trajectory_uri), trial_id=trial.trial_id)
-        store.seal()
-    finally:
-        store.close()
-    return output_dir
-
-
 def _trial_errors(trials: list[HarborTrial], attempted: int) -> dict[str, int]:
     """Count trial errors, including errors on scored outcomes.
 
@@ -350,7 +278,6 @@ def _trial_errors(trials: list[HarborTrial], attempted: int) -> dict[str, int]:
 def _aggregate(
     trials: list[HarborTrial],
     dataset: str,
-    archive_path: str | None,
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
@@ -382,7 +309,6 @@ def _aggregate(
         mean_reward=(total_reward / len(scored)) if scored else 0.0,
         reward_stderr=reward_stderr,
         benchmark=benchmark,
-        archive_path=archive_path,
     )
 
 
@@ -411,8 +337,8 @@ def _run_harbor_job(
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
+    normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
     trials = _read_trials(job_dir, config.error_taxonomy)
-    archive_path = _write_archive(trials, dataset, output_dir)
     recorded_attempted = _attempted_trials(job_dir)
     recorded_benchmark = _job_benchmark(job_dir)
     if recorded_benchmark != benchmark:
@@ -422,7 +348,7 @@ def _run_harbor_job(
     n_attempted = benchmark.n_attempted * trials_per_task
     if recorded_attempted is not None and recorded_attempted > n_attempted:
         raise ValueError(f"Harbor recorded {recorded_attempted} trials but intended only {n_attempted}")
-    result = _aggregate(trials, dataset, archive_path, recorded_benchmark, trials_per_task)
+    result = _aggregate(trials, dataset, recorded_benchmark, trials_per_task)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {
@@ -525,7 +451,6 @@ class HarborExecutor:
         self,
         model: RunningModel,
         output_dir: str,
-        hf_token: str | None,
         driver_env: Mapping[str, str],
         inference_session: RemoteInferenceSession,
     ) -> HarborRunResult:
@@ -534,12 +459,7 @@ class HarborExecutor:
             dataset,
             (self.config.digest, model.endpoint.model, self.task_limit),
         )
-        workdir = _HARBOR_WORKDIR / job_name
-        dataset_path = materialize_harbor_dataset(
-            self.config,
-            workdir,
-            hf_token=hf_token,
-        )
+        dataset_path = local_harbor_dataset_path(self.config)
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
             jobs_dir=str(_jobs_dir(output_dir)),
@@ -548,6 +468,8 @@ class HarborExecutor:
             served_model=model.endpoint.model,
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
+            archive_root=output_dir,
+            archive_dataset=dataset,
         )
         benchmark = self.config.benchmark_for(
             self.task_limit,
@@ -578,7 +500,7 @@ class HarborExecutor:
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         return _evaluation_outcome(
-            lambda: self._run(session.model, output_dir, hf_token, driver_env, session),
+            lambda: self._run(session.model, output_dir, driver_env, session),
             output_dir,
             self.min_completion_rate,
         )
