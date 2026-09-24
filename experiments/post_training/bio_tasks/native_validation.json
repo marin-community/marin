@@ -1999,6 +1999,15 @@
       "output_archive_sha256": "8cc3247f8278d7e645cf0f5b75b00bfbfcaef919bd92d4835d529833bd196012",
       "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/8cc3247f8278d7e645cf0f5b75b00bfbfcaef919bd92d4835d529833bd196012/outputs.tar.zst",
       "correction": "Add tomlkit==0.13.3 to the remote Python environment; scientific source and input file hashes are unchanged."
+    },
+    {
+      "job_id": "/exedev/bio-assembly-reference-20260924-111612",
+      "status": "succeeded",
+      "source_revision": "376e348a0e417220efe8985909484532b40cc611",
+      "output_archive_sha256": "d00c61f25974b9578d70774e712161988e3332c09f96de6bbf55275ab47b3741",
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/d00c61f25974b9578d70774e712161988e3332c09f96de6bbf55275ab47b3741/outputs.tar.zst",
+      "scope": "Diagnostic SPAdes assembly of the first 6,000 observed ERR266411 pairs. Two contigs, 510 assembled bases, 236 of 5,386 reference positions covered. Not counted as validated native coverage or registered as a final example.",
+      "next_preparation": "Replace the archive prefix with a reproducible systematic sample across both checksum-verified full mate archives. Preserve observed record bytes."
     }
   ]
 }

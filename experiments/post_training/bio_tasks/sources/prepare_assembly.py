@@ -218,8 +218,9 @@ def prepare(inputs: Path, output: Path) -> None:
             for name, rows in tables.items()
         },
         "interpretation": (
-            "Method-specific assembly of an observed archive prefix. Reference coverage is aligned contig breadth, "
-            "not read depth or proof of sequence truth. A circular genome can produce terminal overlap; "
+            "Method-specific assembly of the supplied observed read subset. "
+            "Reference coverage is aligned contig breadth, not read depth or proof of sequence truth. "
+            "A circular genome can produce terminal overlap; "
             "no circularization or reference-guided sequence correction is performed."
         ),
     }
