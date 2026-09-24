@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
@@ -125,7 +126,7 @@ def _resolve_execution_history_url() -> str | None:
         return None
     try:
         return context.client.resolve_endpoint(ZEPHYR_HISTORY_ENDPOINT_NAME).rstrip("/")
-    except ConnectionError:
+    except (ConnectionError, ConnectError):
         return None
 
 
