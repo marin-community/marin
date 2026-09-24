@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **142 recipes across 13 domains**, with one task per
+The implementation has **143 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -44,12 +44,12 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The authoring recipes have input-reading Python, R or native-tool oracles.
-Native CLI/API execution is recorded separately below. **38 of 50 packages have passing native checks**: 34 on three reference cases each,
-IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER on a complete observed bacterial proteome. The first CoreWeave run passed 22 packages; correction batches
+Native CLI/API execution is recorded separately below. **39 of 50 packages have passing native checks**: 34 on three reference cases each,
+IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER and MMseqs2 on a complete observed bacterial proteome. The first CoreWeave run passed 22 packages; correction batches
 on an existing reserved TRC host in `us-central2` passed 12 more, with outputs
 retrieved from regional GCS. MAFFT and MUSCLE each passed three real-protein alignments. MAFFT required the
 same version from conda-forge after a Bioconda channel-priority conflict; the failed
-installation remains in the evidence. Twelve repositories still need scripts. Picard and fastp passed on
+installation remains in the evidence. Eleven repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
@@ -120,7 +120,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 39 | [SnpEff](https://github.com/pcingola/SnpEff/blob/1db15998ea6aad93a35848aca0f6cba81cd36738/src/test/java/org/snpeff/snpEffect/testCases/unity/TestCasesSnps.java) | `variant-coding-consequences` | Pending |
 | 40 | [Ensembl VEP](https://github.com/Ensembl/ensembl-vep/blob/cee181c2a1bb31900a0b7526168c67577fb23928/t/AnnotationSource_File_GTF.t) | `variant-coding-consequences`, `gtf-splicing` | Pending |
 | 41 | [MACS2 / MACS3](https://github.com/macs3-project/MACS/blob/ece08963b6a30f4de0c5a5e684513f876b788d2c/test/test_Pileup.py) | `bedgraph-threshold-peaks` | 3 reference checks passed (`bedgraph-threshold-peaks`) |
-| 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | `sequence-identity-clusters` | Pending |
+| 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | `sequence-identity-clusters`, `real-proteome-clustering` | 1 observed proteome reference and artifact check passed |
 | 43 | [MUSCLE](https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py) | `alignment-sum-of-pairs`, `alignment-consensus`, `real-protein-alignment` | 3 reference checks passed (`real-protein-alignment`) |
 | 44 | [Kraken 2](https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc) | `taxonomy-counts`, `taxonomic-lca` | Pending |
 | 45 | [BUSCO](https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py) | `busco-summary` | Pending |
@@ -243,6 +243,18 @@ check found none remaining. The
 [container evidence](../../experiments/post_training/bio_tasks/container_validation.json)
 preserves both outcomes and the durable regional archive. The inspected biological
 source does not establish exact benchmark independence.
+
+The observed proteome clustering task runs MMseqs2 Linclust on all 4,403 proteins,
+then extracts 4,184 unchanged native representatives. All membership rows and
+cluster quantities are checked, including 4,029 singletons and 155 multimember
+clusters. Biopython reference measurements and a fresh native run with independent
+standard-library measurements agree; nine missing, duplicated or changed-artifact
+controls fail with correct summaries. Reference execution took 1.2 seconds and
+oracle plus artifact checks took 3.9 seconds. The
+[native record](../../experiments/post_training/bio_tasks/native_validation_runs/9d28dd15e082.json)
+pins all 26 package artifacts and retains the first launcher dependency failure.
+These heuristic similarity clusters do not establish orthology or function.
+Packaged-task and Harbor checks and benchmark-lineage screening remain open.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:
@@ -627,7 +639,7 @@ chosen environment and specify normalization inputs.
 | 39 | [SnpEff](https://github.com/pcingola/SnpEff), `1db1599`. [Generated transcript/SNP tests](https://github.com/pcingola/SnpEff/blob/1db15998ea6aad93a35848aca0f6cba81cd36738/src/test/java/org/snpeff/snpEffect/testCases/unity/TestCasesSnps.java) | Classify coding SNVs as synonymous, missense, stop gained/lost, or start changes on fresh transcripts. | Reconstruct strand-aware codons and compare reference/alternate translation with an independent codon table. Check transcript ID and allele orientation. SnpEff impact categories do not establish pathogenicity; freeze annotation and genetic code. |
 | 40 | [Ensembl VEP](https://github.com/Ensembl/ensembl-vep), `cee181c`. [Custom-GTF annotation tests](https://github.com/Ensembl/ensembl-vep/blob/cee181c2a1bb31900a0b7526168c67577fb23928/t/AnnotationSource_File_GTF.t) | Annotate variants against a supplied miniature FASTA/GTF, retaining per-transcript consequences. | Independently derive exon/CDS positions and codon changes; accept all requested transcripts rather than one arbitrary consequence. The source tests transcript construction and sequence explicitly. Pin assembly, transcript version, phase, and consequence vocabulary. |
 | 41 | [MACS2 / MACS3](https://github.com/macs3-project/MACS), `ece0896`. [Synthetic strand/shift pileup tests](https://github.com/macs3-project/MACS/blob/ece08963b6a30f4de0c5a5e684513f876b788d2c/test/test_Pileup.py) | Build fragment pileups or call intervals above a supplied signal threshold. | Use independent interval accumulation, strand-specific shifts, scaling, and explicit merging rules. Verify full bedGraph/peak intervals. Such checks do not establish calibrated significance for the full MACS peak-calling model. |
-| 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2), `d401e78`. [Clustering workflow and export](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | Cluster clearly separated synthetic sequence families and reconcile membership/representative FASTA files. | Check expected partition membership modulo representative choice, all IDs, and sequence preservation. State identity, coverage, and clustering mode; greedy clustering is not an all-pairs identity guarantee. Use small independently adjudicable cases. |
+| 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2), `d401e78`. [Clustering workflow and export](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | Cluster a complete observed proteome and reconcile native membership, sequence versions, cluster statistics and representative FASTA files. | The observed task reproduces pinned Linclust assignments with one thread and explicit identity, coverage and clustering modes. Check every member and unchanged representative sequence. Similarity clusters do not establish orthology or function; greedy clustering is not an all-pairs identity guarantee. |
 | 43 | [MUSCLE](https://github.com/rcedgar/muscle), `29aa067`. [Alignment Q/TC regression checks](https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py) | Score or repair a small multiple alignment using known residue correspondences. | Check residue preservation and independently specified pair/column correspondence scores. The inspected regression accepts relative Q/TC thresholds on benchmark alignments; do not reuse those fixtures or treat those thresholds as universal biological truth. |
 | 44 | [Kraken 2](https://github.com/DerrickWood/kraken2), `8c190b1`. [Taxonomic report implementation](https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc) | Compute direct and clade-level counts from read assignments and a frozen miniature taxonomy. | Sum assignments up the tree, count paired fragments once, and check unclassified denominators. Ancestor clade counts overlap and must not be summed as disjoint abundances. Full classification additionally needs a pinned reference database. |
 | 45 | [BUSCO](https://gitlab.com/ezlab/busco), `cd07105`. [Completeness table/summary implementation](https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py) | Reconcile complete single-copy, duplicated, fragmented, and missing ortholog categories. | Count unique BUSCO IDs against a supplied lineage inventory: C = S + D and N = S + D + F + M. Multiple hits for a duplicated ortholog do not create multiple orthologs. This checks summary accounting; sequence-level completeness needs frozen models and cutoffs. |

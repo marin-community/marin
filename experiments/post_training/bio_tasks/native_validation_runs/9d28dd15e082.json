@@ -1,0 +1,730 @@
+{
+  "schema_version": 1,
+  "source_revision": "0d4a757989e235d4c6595c0e7c0eedd9b63d9235",
+  "source_state": "Committed FASTA verifier plus new MMseqs2 implementation captured by the per-file hashes; recipe registration and training acceptance remain pending validation.",
+  "source_file_hashes": {
+    "experiments/post_training/bio_tasks/contract.py": "ef1814efc7897632a0b448c359c074d5255f8a24675e23d8268483e27b35dfc9",
+    "experiments/post_training/bio_tasks/recipe_types.py": "aea8dfc21c7bb98d78a363ad71870be1dbb1b5e61d6c96f5f9fde5fbee58456e",
+    "experiments/post_training/bio_tasks/real_data.py": "a3969a0b5bd92223b13518940b23ba0fc481a03eba050bdc91f5aa8a30cf3b30",
+    "experiments/post_training/bio_tasks/data_sources.json": "013a986e01461d2665fdb0a449d944e2a0975a1c1f77d0ed041141abc5534c94",
+    "experiments/post_training/bio_tasks/native/commands.py": "8492cb40fd5c40337f98736d7d97c19d952c19bfce65eeb7193bbdf4777db4eb",
+    "experiments/post_training/bio_tasks/sources/prepare_clusters.py": "d1f77b96010bff298c094ba9db0a36e8ca09f40b3ebffd1fcc1d9f3580030c0f",
+    "experiments/post_training/bio_tasks/solvers/real_clusters.py": "dca414880eb0c1fccff5a97ea9c16351858c84dfe828a448916d7758d9d47b6d",
+    "experiments/post_training/bio_tasks/solvers/newick.py": "ca08023ed5a93fdf53f20850045667cdfe5a67a65ea75080f9c293886cceeda9",
+    "experiments/post_training/bio_tasks/solvers/formats.py": "e87b9caa33ea05f8500f893374192107ab52ed9176fc6b340f245f32ddee300b",
+    "experiments/post_training/bio_tasks/generators/real_clusters.py": "13d4ebbe9ca224a58314ef08429b5b3455af8ebe137c3898a2ac00f97c1b48e4",
+    "experiments/post_training/bio_tasks/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-proteins.fasta.gz": "e11df6b604362a3290f997ca3fd32af72de53b695a5263fc6cabb7be93a93aa1",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-metadata.tsv.gz": "9c9b9c0451677c0156f3249a2664c90182783089bd38935496f4f0005e70466e",
+    "lib/tasktrove-verify/src/tasktrove_verify/grade.py": "d9379923176dc2775462da5be33c8bacba55c99cb7518851085f6d6391ffdeb4",
+    "lib/tasktrove-verify/src/tasktrove_verify/spec.py": "d3f28347ed0c84b3409b032d0d70f2be69e1e28db81864b9648b716bfd052535",
+    "lib/tasktrove-verify/src/tasktrove_verify/__init__.py": "79521278dbeceeac7a5684f2972df3070d760df0cb08d91d1a1913470eda0d02",
+    "experiments/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/bio_tasks/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/bio_tasks/native/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/bio_tasks/sources/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/bio_tasks/solvers/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "experiments/post_training/bio_tasks/generators/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "scope": "Native observed-proteome clustering, representative extraction, independent membership and sequence verification. No model calls.",
+  "checks": [
+    {
+      "repository_index": 42,
+      "repository": "MMseqs2",
+      "recipe": "real-proteome-clustering",
+      "status": "passed",
+      "execution": "completed",
+      "cases": [
+        {
+          "case_id": "UP000000625-linclust-representatives",
+          "recipe": "real-proteome-clustering",
+          "execution": "completed",
+          "input_artifacts": {
+            "query.json": {
+              "bytes": 76,
+              "sha256": "cbb4f48a5b092804013bcbe455781a454a4f4c0d46949995ad59e1861315cede"
+            },
+            "proteins.tsv": {
+              "bytes": 188547,
+              "sha256": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590"
+            },
+            "proteins.fa": {
+              "bytes": 1891178,
+              "sha256": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2"
+            }
+          },
+          "query": {
+            "minimum_identity": 0.5,
+            "coverage": 0.8,
+            "kmer_per_sequence": 80
+          },
+          "summary": {
+            "proteome": {
+              "proteins": 4403,
+              "clusters": 4184,
+              "singletons": 4029,
+              "multimember_clusters": 155,
+              "nonrepresentative_proteins": 219,
+              "input_residues": 1354442,
+              "representative_residues": 1283177
+            }
+          },
+          "commands": {
+            "reference": [
+              {
+                "argv": [
+                  "mmseqs",
+                  "version"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-version.txt",
+                "stderr": "mmseqs-version.txt.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.004374128999188542
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "createdb",
+                  "/iris/outputs/inputs/proteins.fa",
+                  "/iris/outputs/linclust-m6exo7kf/proteins",
+                  "--dbtype",
+                  "1",
+                  "--shuffle",
+                  "0"
+                ],
+                "exit_code": 0,
+                "stdout": "createdb.stdout",
+                "stderr": "createdb.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.016387438008678146
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "linclust",
+                  "/iris/outputs/linclust-m6exo7kf/proteins",
+                  "/iris/outputs/linclust-m6exo7kf/clusters",
+                  "/iris/outputs/linclust-m6exo7kf/tmp",
+                  "--min-seq-id",
+                  "0.5",
+                  "-c",
+                  "0.8",
+                  "--cov-mode",
+                  "0",
+                  "--cluster-mode",
+                  "2",
+                  "--alignment-mode",
+                  "3",
+                  "--kmer-per-seq",
+                  "80",
+                  "--threads",
+                  "1"
+                ],
+                "exit_code": 0,
+                "stdout": "linclust.stdout",
+                "stderr": "linclust.stdout.stderr",
+                "timeout_seconds": 900,
+                "elapsed_seconds": 0.5149605639890069
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "createtsv",
+                  "/iris/outputs/linclust-m6exo7kf/proteins",
+                  "/iris/outputs/linclust-m6exo7kf/proteins",
+                  "/iris/outputs/linclust-m6exo7kf/clusters",
+                  "/iris/outputs/reference/native-clusters.tsv",
+                  "--threads",
+                  "1"
+                ],
+                "exit_code": 0,
+                "stdout": "createtsv.stdout",
+                "stderr": "createtsv.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008256068991613574
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "createsubdb",
+                  "/iris/outputs/linclust-m6exo7kf/clusters",
+                  "/iris/outputs/linclust-m6exo7kf/proteins",
+                  "/iris/outputs/linclust-m6exo7kf/representatives"
+                ],
+                "exit_code": 0,
+                "stdout": "createsubdb.stdout",
+                "stderr": "createsubdb.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008147409011144191
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "convert2fasta",
+                  "/iris/outputs/linclust-m6exo7kf/representatives",
+                  "/iris/outputs/reference/native-representatives.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "convert2fasta.stdout",
+                "stderr": "convert2fasta.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008172949004801922
+              }
+            ],
+            "oracle": [
+              {
+                "argv": [
+                  "mmseqs",
+                  "createdb",
+                  "/iris/outputs/inputs/proteins.fa",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/db",
+                  "--shuffle",
+                  "0",
+                  "--dbtype",
+                  "1"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-0.stdout",
+                "stderr": "mmseqs-0.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.01639133800927084
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "linclust",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/db",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/clusters",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/tmp",
+                  "--threads",
+                  "1",
+                  "--cluster-mode",
+                  "2",
+                  "--cov-mode",
+                  "0",
+                  "--alignment-mode",
+                  "3",
+                  "--min-seq-id",
+                  "0.5",
+                  "-c",
+                  "0.8",
+                  "--kmer-per-seq",
+                  "80"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-1.stdout",
+                "stderr": "mmseqs-1.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.5650963480002247
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "createtsv",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/db",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/db",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/clusters",
+                  "/iris/outputs/oracle/native-clusters.tsv",
+                  "--threads",
+                  "1"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-2.stdout",
+                "stderr": "mmseqs-2.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008184278995031491
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "createsubdb",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/clusters",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/db",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/representatives"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-3.stdout",
+                "stderr": "mmseqs-3.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008142939012032002
+              },
+              {
+                "argv": [
+                  "mmseqs",
+                  "convert2fasta",
+                  "/iris/outputs/oracle/mmseqs-oracle-wq7yi73q/representatives",
+                  "/iris/outputs/oracle/native-representatives.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "mmseqs-4.stdout",
+                "stderr": "mmseqs-4.stdout.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008177779003744945
+              }
+            ]
+          },
+          "artifacts": {
+            "reference/answer.json": {
+              "bytes": 204,
+              "sha256": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6"
+            },
+            "reference/clusters.tsv": {
+              "bytes": 111243,
+              "sha256": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4"
+            },
+            "reference/commands.jsonl": {
+              "bytes": 1931,
+              "sha256": "b0e7964554315785958cdd0596ad9b23ea83d3a1e4486d39e508597c7f2c43c7"
+            },
+            "reference/convert2fasta.stdout": {
+              "bytes": 282,
+              "sha256": "11a7fe1fdeabd6b3b0535289fa87651fcfd14120feed8672cab27733825a9111"
+            },
+            "reference/convert2fasta.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/createdb.stdout": {
+              "bytes": 490,
+              "sha256": "cf65917d3404e7b4c22de9a7608a8bfacebe290dced273e9f7906683b48e3eb0"
+            },
+            "reference/createdb.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/createsubdb.stdout": {
+              "bytes": 312,
+              "sha256": "319939c68cb8ddb7d57517b59ef860262905be3113d5355773aab2b8dea6f66c"
+            },
+            "reference/createsubdb.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/createtsv.stdout": {
+              "bytes": 614,
+              "sha256": "38555d197d9a376f8169283d33066372b8f6512524cbecad18477885ea458855"
+            },
+            "reference/createtsv.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/linclust.stdout": {
+              "bytes": 10067,
+              "sha256": "0e7dae06b7ede7f6dad441d8c04b7f135d471eb593f717b0178c88c4fa174350"
+            },
+            "reference/linclust.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/membership.tsv": {
+              "bytes": 87735,
+              "sha256": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7"
+            },
+            "reference/mmseqs-version.txt": {
+              "bytes": 9,
+              "sha256": "2147fb42436ff2ea03896a62d733b8eebfcb08916d6bfc6beda337b881a0a626"
+            },
+            "reference/mmseqs-version.txt.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/native-clusters.tsv": {
+              "bytes": 61778,
+              "sha256": "6e9eb87ac0c12e78c8a4682fd8edc189f468c45aa701983fc860fa80e925191e"
+            },
+            "reference/native-representatives.fa": {
+              "bytes": 1773438,
+              "sha256": "4fa959356d98d0ab1f52780b69a656d604f692499c99fd7e9badf765c33f62a7"
+            },
+            "reference/reference.json.gz": {
+              "bytes": 877283,
+              "sha256": "4457cc56e41cdd049499171f38c7e9eca596b2b69324d6ef2407ef85d897f73f"
+            },
+            "reference/representatives.fa": {
+              "bytes": 1320853,
+              "sha256": "a27d34a3ae7de575fa67f76e9b6eb6d4371e4fac181ed2e363f98cc68fd9b5ed"
+            },
+            "oracle/answer.json": {
+              "bytes": 204,
+              "sha256": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6"
+            },
+            "oracle/clusters.tsv": {
+              "bytes": 111243,
+              "sha256": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4"
+            },
+            "oracle/commands.jsonl": {
+              "bytes": 1824,
+              "sha256": "6f786d6d28d47a25799c5c30375b5a9454786aa93c7c886ea40f753497220ec6"
+            },
+            "oracle/membership.tsv": {
+              "bytes": 87735,
+              "sha256": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7"
+            },
+            "oracle/mmseqs-0.stdout": {
+              "bytes": 484,
+              "sha256": "779e0f1804d2d5326fd1d95fc8d05feede85583f778ab9ec5bac8c871980397a"
+            },
+            "oracle/mmseqs-0.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/mmseqs-1.stdout": {
+              "bytes": 10487,
+              "sha256": "e585e305a05cf1306030f1a8a3577da048ef3961784312450b953956c79f1c2b"
+            },
+            "oracle/mmseqs-1.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/mmseqs-2.stdout": {
+              "bytes": 635,
+              "sha256": "d435da26899c33214b5c6af4e57ca39616c1f6d5fcd6bd62b674c9af770a60a9"
+            },
+            "oracle/mmseqs-2.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/mmseqs-3.stdout": {
+              "bytes": 342,
+              "sha256": "e2cdcbb53953f7e610ae911f62515003fb4df4c03a83edbb841737e2078712a1"
+            },
+            "oracle/mmseqs-3.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/mmseqs-4.stdout": {
+              "bytes": 288,
+              "sha256": "4512b0871396dd46e7ee5d08447aee6ba87e0a998126f518fd1510ef763721e1"
+            },
+            "oracle/mmseqs-4.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/native-clusters.tsv": {
+              "bytes": 61778,
+              "sha256": "6e9eb87ac0c12e78c8a4682fd8edc189f468c45aa701983fc860fa80e925191e"
+            },
+            "oracle/native-representatives.fa": {
+              "bytes": 1773438,
+              "sha256": "4fa959356d98d0ab1f52780b69a656d604f692499c99fd7e9badf765c33f62a7"
+            },
+            "oracle/reference.json": {
+              "bytes": 2219856,
+              "sha256": "f2537705326d9d3b68ec96ad358841884396f2422ad56542c94f12093f5b728e"
+            },
+            "oracle/representatives.fa": {
+              "bytes": 1320853,
+              "sha256": "a27d34a3ae7de575fa67f76e9b6eb6d4371e4fac181ed2e363f98cc68fd9b5ed"
+            },
+            "oracle/validation.json": {
+              "bytes": 797,
+              "sha256": "e6cc8791ff4fd21e3fa44540cc835495b96916f60dc433c5122949f0d9d5723c"
+            }
+          },
+          "verification": {
+            "reference": 1.0,
+            "oracle": 1.0,
+            "missing:representatives.fa": 0.0,
+            "changed_residue": 0.0,
+            "duplicated_fasta": 0.0,
+            "missing:membership.tsv": 0.0,
+            "missing_row:membership.tsv": 0.0,
+            "duplicated_row:membership.tsv": 0.0,
+            "missing:clusters.tsv": 0.0,
+            "missing_row:clusters.tsv": 0.0,
+            "duplicated_row:clusters.tsv": 0.0
+          },
+          "resources": {
+            "reference": {
+              "module": "experiments.post_training.bio_tasks.sources.prepare_clusters",
+              "status": "passed",
+              "seconds": 1.1750927410030272,
+              "peak_rss_kib": 75300,
+              "finished_at": "2026-09-24T09:17:33.397899+00:00"
+            },
+            "oracle_and_artifact_checks": {
+              "module": "validate",
+              "status": "passed",
+              "seconds": 3.9375526860094396,
+              "peak_rss_kib": 60808,
+              "finished_at": "2026-09-24T09:17:37.425880+00:00"
+            }
+          }
+        }
+      ],
+      "environment": {
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "md5": "a9f577daf3de00bca7c3c76c0ecbd1de",
+            "size": 28948
+          },
+          {
+            "name": "aria2",
+            "version": "1.37.0",
+            "build": "h4b33fff_4",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/aria2-1.37.0-h4b33fff_4.conda",
+            "sha256": "a57932dfc4252f58772dfe8b6cef4b88ce76119474c3f405812628983a40ca66",
+            "md5": "95fb49dd7b23d4e788da61095ec258de",
+            "size": 1829525
+          },
+          {
+            "name": "bzip2",
+            "version": "1.0.8",
+            "build": "hda65f42_10",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+            "sha256": "1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96",
+            "md5": "e675fabcf81499adc7edf58124fb1e01",
+            "size": 257808
+          },
+          {
+            "name": "c-ares",
+            "version": "1.34.8",
+            "build": "hebe6cf0_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/c-ares-1.34.8-hebe6cf0_2.conda",
+            "sha256": "9c37cc233238adf366ea75b0e845662a5be07ceadf62e458183516369340274b",
+            "md5": "3ad2b403be8fc5612b9159e2ce621f69",
+            "size": 228700
+          },
+          {
+            "name": "ca-certificates",
+            "version": "2026.7.22",
+            "build": "hbd8a1cb_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+            "sha256": "0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6",
+            "md5": "0f51e2391ade309db462a55611263e9c",
+            "size": 131780
+          },
+          {
+            "name": "gawk",
+            "version": "5.4.1",
+            "build": "h0a3468a_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/gawk-5.4.1-h0a3468a_0.conda",
+            "sha256": "0ae20399bc13d1097237cf29653c1f2dd68e37f08b47a9b3cab76f97556a6bfa",
+            "md5": "64fd8d804a6aaef55d6d6c562446d72b",
+            "size": 1522511
+          },
+          {
+            "name": "gmp",
+            "version": "6.3.0",
+            "build": "hfd2156b_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/gmp-6.3.0-hfd2156b_3.conda",
+            "sha256": "f36c336efc874f346a53a9011f67e997f9faac505562cc18c13b6d399cfe61c7",
+            "md5": "576e32739f323438bf69ab006c21be7b",
+            "size": 493498
+          },
+          {
+            "name": "icu",
+            "version": "78.3",
+            "build": "py310h44b86e0_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+            "sha256": "9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432",
+            "md5": "72a381cbad04f24b1c2a43ef707f45b4",
+            "size": 14459115
+          },
+          {
+            "name": "libasprintf",
+            "version": "0.25.1",
+            "build": "h0e23cf9_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libasprintf-0.25.1-h0e23cf9_2.conda",
+            "sha256": "cd1acde49a1915b7a62a9678bdf42557f083d63f08d4ccc5cd9834553be96eb1",
+            "md5": "708966b4a89392fe7b7d348f41501ffc",
+            "size": 53449
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "md5": "3b62b92f0f082b67c59618ebf07617a7",
+            "size": 1057064
+          },
+          {
+            "name": "libgettextpo",
+            "version": "0.25.1",
+            "build": "h0e23cf9_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgettextpo-0.25.1-h0e23cf9_2.conda",
+            "sha256": "58bbdb3ee8ab85fff94435bcf4a335fd5e7b61d4d84f15d9afc8b4207d522ea3",
+            "md5": "de2346aa9d78288e6924b01a2db091c1",
+            "size": 186971
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "md5": "af44890f8a2beefd3a83805a59a65014",
+            "size": 641644
+          },
+          {
+            "name": "libiconv",
+            "version": "1.18",
+            "build": "h0cb94f2_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libiconv-1.18-h0cb94f2_3.conda",
+            "sha256": "f943117edb9cd4d9c61cc972eee5a34291dc55ea7a6e9e38da104995841cbcb6",
+            "md5": "f92233bf33e24a25668bb2119e2c51f9",
+            "size": 789471
+          },
+          {
+            "name": "liblzma",
+            "version": "5.8.3",
+            "build": "hb03c661_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+            "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+            "md5": "1390b7c5ac0b1d8e447bc5efa6d3c8c2",
+            "size": 112995
+          },
+          {
+            "name": "libsqlite",
+            "version": "3.53.4",
+            "build": "h13e7031_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+            "sha256": "f20d70da54e5b31dd4a51fb1efeaafafd5ab6dd8d7ac9d1438eaa2526ac4ed3d",
+            "md5": "e72bbec309c2b0f37823ee7d4fabfcd3",
+            "size": 974348
+          },
+          {
+            "name": "libssh2",
+            "version": "1.11.1",
+            "build": "h6154650_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libssh2-1.11.1-h6154650_1.conda",
+            "sha256": "7e463000fa1cba3f3a6597b776f6ab301d425a96e3bc20d0d9d76a3b9f237aa3",
+            "md5": "5c526561e1d2a2e071941174eae84557",
+            "size": 306045
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "md5": "75b43a2912a0354204696708e4f34b8d",
+            "size": 6618916
+          },
+          {
+            "name": "libxml2-16",
+            "version": "2.15.4",
+            "build": "hf3af7cc_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libxml2-16-2.15.4-hf3af7cc_0.conda",
+            "sha256": "9a1685c8d8b8488cd7882a9cd6e673e687211ca763ebbcd1e91b6f594eeadc45",
+            "md5": "b7545c57a73a51d72aa6eee5695cf051",
+            "size": 569196
+          },
+          {
+            "name": "libxml2",
+            "version": "2.15.4",
+            "build": "h7df9aa5_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libxml2-2.15.4-h7df9aa5_0.conda",
+            "sha256": "053d85821ce5e36b7ce03faea5930382f6af695df9e2cd68e5d8d273072d1551",
+            "md5": "ea192d1ef556bf1d55de4acb8c0f5b65",
+            "size": 47077
+          },
+          {
+            "name": "libzlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+            "md5": "0de0122d9570a8ab637c6b73db268389",
+            "size": 63713
+          },
+          {
+            "name": "mmseqs2",
+            "version": "17.b804f",
+            "build": "hd6d6fdc_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/mmseqs2-17.b804f-hd6d6fdc_1.tar.bz2",
+            "sha256": "f64af29a82a8642138b34cf7b033b6344c0bd24a6bba898cf653edde6e0f727c",
+            "md5": "561fb589d37cff61ec6b887fc2976498",
+            "size": 117468424
+          },
+          {
+            "name": "mpfr",
+            "version": "4.2.2",
+            "build": "ha2cb11d_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/mpfr-4.2.2-ha2cb11d_1.conda",
+            "sha256": "0be79ef2ee536e0c5d3ddb4a52bbae9f26d08560623299f33db2f4c4a17c525a",
+            "md5": "7dcc10f6c0bc3596d5519a710a84dfd4",
+            "size": 730409
+          },
+          {
+            "name": "ncurses",
+            "version": "6.6",
+            "build": "hdb14827_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+            "sha256": "5d46557214ed184381dafe835b7c94a474a1c3b307a08a250b1ea4779b44ffb3",
+            "md5": "ee6c0cd80a60961a1f48aa3e0b91f986",
+            "size": 911196
+          },
+          {
+            "name": "openssl",
+            "version": "3.6.4",
+            "build": "h781a0a9_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+            "sha256": "4747b2d6a8336f52343bceb8a1ebf41a9e6e665b9d2e3f989972de53a310599e",
+            "md5": "16e3034a330cc625f2c685edec60cf4e",
+            "size": 3202955
+          },
+          {
+            "name": "readline",
+            "version": "8.3",
+            "build": "hd6e31c0_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+            "sha256": "01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d",
+            "md5": "69c01c781e7c8190bbdaf79e3848c5ca",
+            "size": 348899
+          },
+          {
+            "name": "zlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "16080a1c7724f7d25727cdc23c7658e0cec2db52448c1dc0c33467ee2c6e1c62",
+            "md5": "6acb86426229f96f93e5468d1df3a5e8",
+            "size": 96132
+          }
+        ],
+        "runtime_lock_sha256": "22bd588889886d4c28e7e3e1cd430de778f4db4b0754314b42e7b2a067ad9e1e",
+        "versions": {
+          "mmseqs2": "17.b804f",
+          "biopython": "1.86"
+        },
+        "build_note": "MMseqs2 17.b804f hd6d6fdc_1, strict conda-forge/bioconda resolution, all 26 package SHA-256 values retained. One execution thread."
+      },
+      "limits": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged-task and Harbor checks and biological lineage review remain pending."
+    }
+  ]
+}

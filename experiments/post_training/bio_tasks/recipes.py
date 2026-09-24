@@ -19,6 +19,7 @@ from experiments.post_training.bio_tasks.generators.networks import RECIPES as N
 from experiments.post_training.bio_tasks.generators.phylogeny import RECIPES as PHYLOGENY_RECIPES
 from experiments.post_training.bio_tasks.generators.reads import RECIPES as READ_RECIPES
 from experiments.post_training.bio_tasks.generators.real_clinical import RECIPES as REAL_CLINICAL_RECIPES
+from experiments.post_training.bio_tasks.generators.real_clusters import RECIPES as REAL_CLUSTER_RECIPES
 from experiments.post_training.bio_tasks.generators.real_domains import RECIPES as REAL_DOMAIN_RECIPES
 from experiments.post_training.bio_tasks.generators.real_expression import RECIPES as REAL_EXPRESSION_RECIPES
 from experiments.post_training.bio_tasks.generators.real_genomes import RECIPES as REAL_GENOMES_RECIPES
@@ -908,6 +909,7 @@ RECIPES = (
     *REAL_PHYLOGENY_RECIPES,
     *REAL_STRUCTURE_RECIPES,
     *REAL_DOMAIN_RECIPES,
+    *REAL_CLUSTER_RECIPES,
     *INTERVAL_RECIPES,
     *READ_RECIPES,
     *STATISTICS_RECIPES,
@@ -935,7 +937,7 @@ DOMAIN_RECIPES = {
     "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES,
     "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES + REAL_PHYLOGENY_RECIPES,
     "assembly-and-ecology": ASSEMBLY_RECIPES,
-    "structures-and-proteomics": STRUCTURE_RECIPES + REAL_STRUCTURE_RECIPES + REAL_DOMAIN_RECIPES,
+    "structures-and-proteomics": STRUCTURE_RECIPES + REAL_STRUCTURE_RECIPES + REAL_DOMAIN_RECIPES + REAL_CLUSTER_RECIPES,
     "networks": NETWORKS_RECIPES,
     "imaging-and-spatial": IMAGING_RECIPES,
     "assays-and-metabolomics": ASSAYS_RECIPES,

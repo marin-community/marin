@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 142
+The generators in `experiments/post_training/bio_tasks/` implement 143
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,7 +11,7 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 142 recipes span 13 domains:
+format profile, and repository mapping. The 143 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
@@ -24,13 +24,13 @@ format profile, and repository mapping. The 142 recipes span 13 domains:
 | assembly and ecology | 8 |
 | imaging and spatial | 7 |
 | statistics | 11 |
-| structures and proteomics | 10 |
+| structures and proteomics | 11 |
 | networks | 6 |
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 142 authoring examples, comprising
-27 real-data candidates and 115 simulated controls. Add another task from a recipe
+The default build contains one task per recipe: 143 authoring examples, comprising
+28 real-data candidates and 115 simulated controls. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
@@ -73,18 +73,19 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. 38 packages have passing checks: 34 on three reference cases each,
-IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER on a complete observed bacterial proteome. The
+for all 50 repositories. 39 packages have passing checks: 34 on three reference cases each,
+IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER and MMseqs2 on a complete observed bacterial proteome. The
 first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
 12 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
 fastp paired-filter checks pass on observed reads. MAFFT and MUSCLE passed three real-protein alignments each; the MAFFT channel
-correction and earlier installation failure are retained. Twelve other repositories
+correction and earlier installation failure are retained. Eleven other repositories
 still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
 image-build contexts with the exact resolved package artifacts and checksums.
-The two connected DESeq2 recipes also have locked R image contexts. Other recipes
-currently use Python-only environments. Package checks alone do not
+The two connected DESeq2 recipes have locked R image contexts; the COX1, full-study
+single-cell, HMMER and MMseqs2 workflows also have pinned native environments.
+Remaining recipes use Python-only environments. Package checks alone do not
 establish successful execution in these Harbor images. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 

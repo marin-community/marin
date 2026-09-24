@@ -39,7 +39,6 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `protein-local-search` | fasta | query-coverage, local-search, identity | BLAST+, DIAMOND |
 | `alignment-sum-of-pairs` | aligned-fasta | alignment-scoring, gap-policy, residue-correspondence | MAFFT, MUSCLE |
 | `hmmer-domain-extraction` | fasta, hmmer-domtblout | domtblout, alignment-versus-envelope, domain-identities | HMMER |
-| `real-proteome-domain-search` | FASTA, Pfam HMM, HMMER domtblout, TSV protein metadata, JSON query | profile search, domain coordinates, sequence extraction, overlap-aware proteome coverage | HMMER |
 | `sequence-identity-clusters` | fasta | sequence-clustering, transitive-membership, coverage-policy | MMseqs2 |
 | `fasta-indexed-regions` | fasta, fai, csv-header | fasta-index, line-wrapping, coordinate-conversion | HTSlib |
 
@@ -180,6 +179,8 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Supplied formats | Skills | Repository operations |
 |---|---|---|---|
+| `real-proteome-domain-search` | FASTA, Pfam HMM, HMMER domtblout, TSV protein metadata, JSON query | profile search, domain coordinates, sequence extraction, overlap-aware proteome coverage | HMMER |
+| `real-proteome-clustering` | FASTA, MMseqs2 cluster TSV, TSV protein metadata, JSON query | protein similarity clustering, representative extraction, metadata joins, proteome accounting | MMseqs2 |
 | `real-mmcif-chain-geometry` | mmCIF | experimental-structures, author-residue-identifiers, alternate-conformers, coordinate-geometry | Biopython |
 | `real-mmcif-contact-degree` | mmCIF | experimental-structures, author-residue-identifiers, alternate-conformers, coordinate-geometry | Biopython |
 | `pdb-ca-distances` | pdb3.3-atom-profile | fixed-width-atoms, alternate-locations, insertion-codes | Additional domain coverage |

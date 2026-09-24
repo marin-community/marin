@@ -151,7 +151,7 @@
       "adoption": {
         "download_evidence": "Bioconda 10.52M",
         "stars": "902",
-        "canonical_paper_citations": "—"
+        "canonical_paper_citations": "\u2014"
       }
     },
     {
@@ -195,7 +195,7 @@
       "file": "tests/testthat/test_data_manipulation.R",
       "source_url": "https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R",
       "seed": "Join single-cell features and apply prescribed library-size log normalization or row scaling.",
-      "verification_and_limitations": "Compute joins and log1p(count / cell total × scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation.",
+      "verification_and_limitations": "Compute joins and log1p(count / cell total \u00d7 scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation.",
       "url": "https://github.com/satijalab/seurat",
       "interface": "R API",
       "role": "Single-cell and spatial omics analysis",
@@ -253,7 +253,7 @@
       "adoption": {
         "download_evidence": "Bioconda 2.92M",
         "stars": "1.1k",
-        "canonical_paper_citations": "—"
+        "canonical_paper_citations": "\u2014"
       }
     },
     {
@@ -304,7 +304,7 @@
       "adoption": {
         "download_evidence": "Bioconda 1.42M",
         "stars": "611",
-        "canonical_paper_citations": "—"
+        "canonical_paper_citations": "\u2014"
       }
     },
     {
@@ -416,13 +416,13 @@
       "file": "R/cpm.R",
       "source_url": "https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R",
       "seed": "Normalize counts with explicitly supplied library sizes/factors and a declared expression filter.",
-      "verification_and_limitations": "Check non-log CPM = count × 1e6 / effective library size and selected genes. Specify offsets and normalization factors; zero libraries need a defined error. This short recipe does not substitute for replicate-aware differential expression.",
+      "verification_and_limitations": "Check non-log CPM = count \u00d7 1e6 / effective library size and selected genes. Specify offsets and normalization factors; zero libraries need a defined error. This short recipe does not substitute for replicate-aware differential expression.",
       "url": "https://git.bioconductor.org/packages/edgeR",
       "interface": "R/Bioconductor",
       "role": "Differential expression from count data",
       "adoption": {
         "download_evidence": "Bioconda 630k",
-        "stars": "—",
+        "stars": "\u2014",
         "canonical_paper_citations": "[~44.9k](https://doi.org/10.1093/bioinformatics/btp616)"
       }
     },
@@ -439,7 +439,7 @@
       "role": "Differential expression and linear modeling",
       "adoption": {
         "download_evidence": "Bioconda 806k",
-        "stars": "—",
+        "stars": "\u2014",
         "canonical_paper_citations": "[~43.7k](https://doi.org/10.1093/nar/gkv007)"
       }
     },
@@ -569,7 +569,7 @@
       "file": "prepDE.py3",
       "source_url": "https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3",
       "seed": "Convert annotated transcript coverage into transcript/gene count estimates with correct exon lengths and sample joins.",
-      "verification_and_limitations": "Independently compute inclusive GTF exon lengths and ceil(coverage × length / read length), then aggregate by gene. Check annotation consistency. These are estimated counts; they are not exact observed molecule counts.",
+      "verification_and_limitations": "Independently compute inclusive GTF exon lengths and ceil(coverage \u00d7 length / read length), then aggregate by gene. Check annotation consistency. These are estimated counts; they are not exact observed molecule counts.",
       "url": "https://github.com/gpertea/stringtie",
       "interface": "C++ CLI",
       "role": "Transcript assembly and quantification",
@@ -610,7 +610,7 @@
       "adoption": {
         "download_evidence": "Bioconda 727k",
         "stars": "1.4k",
-        "canonical_paper_citations": "—"
+        "canonical_paper_citations": "\u2014"
       }
     },
     {
@@ -704,8 +704,8 @@
       "revision": "d401e78c2d18a822cdb1527d7464a043f6035a15",
       "file": "data/workflow/easycluster.sh",
       "source_url": "https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh",
-      "seed": "Cluster clearly separated synthetic sequence families and reconcile membership/representative FASTA files.",
-      "verification_and_limitations": "Check expected partition membership modulo representative choice, all IDs, and sequence preservation. State identity, coverage, and clustering mode; greedy clustering is not an all-pairs identity guarantee. Use small independently adjudicable cases.",
+      "seed": "Cluster a complete observed proteome and reconcile native membership, sequence versions, cluster statistics and representative FASTA files.",
+      "verification_and_limitations": "The observed task reproduces pinned Linclust assignments with one thread and explicit identity, coverage and clustering modes. Check every member and unchanged representative sequence. Similarity clusters do not establish orthology or function; greedy clustering is not an all-pairs identity guarantee.",
       "url": "https://github.com/soedinglab/MMseqs2",
       "interface": "C++ CLI",
       "role": "Large-scale protein search and clustering",
@@ -778,7 +778,7 @@
       "interface": "C CLI collection",
       "role": "liftOver; 2bit, BigWig, BigBed, BED, and genome-browser formats",
       "adoption": {
-        "download_evidence": "Bioconda 51k–594k per utility",
+        "download_evidence": "Bioconda 51k\u2013594k per utility",
         "stars": "275",
         "canonical_paper_citations": "[~1.5k for BigWig/BigBed](https://doi.org/10.1093/bioinformatics/btq351)"
       }
@@ -814,7 +814,7 @@
       "adoption": {
         "download_evidence": "Bioconda 1.74M",
         "stars": "69",
-        "canonical_paper_citations": "—"
+        "canonical_paper_citations": "\u2014"
       }
     },
     {

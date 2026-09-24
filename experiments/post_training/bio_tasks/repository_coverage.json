@@ -791,15 +791,20 @@
       "index": 42,
       "name": "MMseqs2",
       "recipes": [
-        "sequence-identity-clusters"
+        "sequence-identity-clusters",
+        "real-proteome-clustering"
       ],
       "source_url": "https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/9d28dd15e082.json",
+        "source_revision": "0d4a757989e235d4c6595c0e7c0eedd9b63d9235",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-proteome-clustering"
       },
-      "scope": "Cluster clearly separated synthetic sequence families and reconcile membership/representative FASTA files.",
-      "limitations": "Check expected partition membership modulo representative choice, all IDs, and sequence preservation. State identity, coverage, and clustering mode; greedy clustering is not an all-pairs identity guarantee. Use small independently adjudicable cases."
+      "scope": "Cluster an observed complete proteome with native MMseqs2, extract its representatives and reconcile all member, sequence-version and cluster quantities.",
+      "limitations": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged-task and Harbor checks and biological lineage review remain pending."
     },
     {
       "index": 43,

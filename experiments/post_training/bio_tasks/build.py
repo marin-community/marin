@@ -86,6 +86,8 @@ def oracle_archive() -> bytes:
         "experiments/post_training/__init__.py": b"",
         prefix + "__init__.py": b"",
         prefix + "oracle.py": (SOURCE_DIR / "oracle.py").read_bytes(),
+        prefix + "native/__init__.py": b"",
+        prefix + "native/commands.py": (SOURCE_DIR / "native/commands.py").read_bytes(),
     }
     files.update(
         {

@@ -1188,10 +1188,18 @@
           "content_bytes": 660517,
           "vendored_bytes": 29356,
           "transformation": "Private HMMER reference measured by Biopython and independently verified from unchanged inputs; never supplied to the solver."
+        },
+        "ecoli-k12-cluster-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/4fd454faaed0274c38b42b6d2fd0ade234abea907c40abe1387452209f061c84/outputs.tar.zst",
+          "content_sha256": "68101356b2acd3ede82bc31f8d3f66fa52b4453e794386b615599e85dd3ecc17",
+          "vendored_sha256": "4457cc56e41cdd049499171f38c7e9eca596b2b69324d6ef2407ef85d897f73f",
+          "content_bytes": 2643704,
+          "vendored_bytes": 877283,
+          "transformation": "Private MMseqs2 clustering reference measured with Biopython and checked against a fresh native run using independent standard-library measurements. Never supplied as solver input."
         }
       },
       "validation": "FASTA and metadata identifiers match exactly; all sequence lengths agree; downloaded proteome proteinCount agrees. All returned proteins retained without sequence modification.",
-      "intended_workflow": "Search a frozen small set of Pfam profiles against the full proteome, retain all domain boundaries and scores, extract aligned domains, and reconcile per-model and per-protein coverage.",
+      "intended_workflow": "Search versioned profiles over the complete proteome and reconcile domain coverage; independently cluster the complete proteome with specified Linclust parameters and preserve native representative sequences and all member identities.",
       "remaining_checks": [
         "Benchmark data-lineage screening",
         "Packaged task and Harbor validation"
@@ -1232,6 +1240,11 @@
         },
         "status": "passed-full-corpus-package-checks",
         "limits": "Host package validation only. Harbor execution, scientific review and benchmark-lineage screening remain separate."
+      },
+      "clustering_native_check": {
+        "checks_file": "native_validation_runs/9d28dd15e082.json",
+        "checks_sha256": "9d28dd15e082525c9e41d5548f3ac7737f15c67be4fce95aa8fb38205f3a4906",
+        "source_revision": "0d4a757989e235d4c6595c0e7c0eedd9b63d9235"
       }
     },
     "Pfam:selected-models-20260924": {

@@ -1056,6 +1056,42 @@
         "distinct_biological_inputs": 1
       },
       "limitations": "Complete 4,403-protein observed proteome, but only three supplied Pfam models. A no-hit result is not absence of biological domains or functions. Biopython and the independent standard-library parser measure the same native HMMER search. Package/Harbor task validation and benchmark-lineage review remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "0d4a757989e235d4c6595c0e7c0eedd9b63d9235",
+      "source_state": "Committed FASTA verifier plus new MMseqs2 implementation captured by the per-file hashes; recipe registration and training acceptance remain pending validation.",
+      "environment_kind": "Pinned MMseqs2 Linclust on a reserved TRC CPU; Biopython reference and independent standard-library oracle measurements",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-proteome-clustering-fixed-20260924-091629",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "job_timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "bb33428cd119d9252370f2b9834c3d06371a20dc977f15ca400b1b98168bcc42",
+      "output_archive_sha256": "4fd454faaed0274c38b42b6d2fd0ade234abea907c40abe1387452209f061c84",
+      "output_archive_bytes": 6829883,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/4fd454faaed0274c38b42b6d2fd0ade234abea907c40abe1387452209f061c84/outputs.tar.zst",
+      "archive_storage_status": "uploaded; provider size and MD5 verified",
+      "checks_file": "native_validation_runs/9d28dd15e082.json",
+      "checks_sha256": "9d28dd15e082525c9e41d5548f3ac7737f15c67be4fce95aa8fb38205f3a4906",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1
+      },
+      "limitations": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged-task and Harbor checks and biological lineage review remain pending."
     }
   ],
   "numerical_portability": [
@@ -1771,6 +1807,15 @@
       "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695/outputs.tar.zst",
       "output_archive_sha256": "cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695",
       "correction": "Add scipy==1.17.0 to the remote builder environment; task inputs and verifiers unchanged."
+    },
+    {
+      "job_id": "/exedev/bio-proteome-clustering-20260924-091135",
+      "status": "failed",
+      "failed_phase": "oracle-validation-import",
+      "error": "ModuleNotFoundError: tomlkit in the validation wrapper environment, before the oracle started. Native reference passed.",
+      "output_archive_sha256": "8cc3247f8278d7e645cf0f5b75b00bfbfcaef919bd92d4835d529833bd196012",
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/8cc3247f8278d7e645cf0f5b75b00bfbfcaef919bd92d4835d529833bd196012/outputs.tar.zst",
+      "correction": "Add tomlkit==0.13.3 to the remote Python environment; scientific source and input file hashes are unchanged."
     }
   ]
 }
