@@ -670,6 +670,27 @@ def test_wandb_run_activity_projects_the_finish_from_the_recent_step_rate():
     assert row["projected_finish_ms"] is None
 
 
+def test_wandb_run_activity_projects_no_finish_for_a_run_that_stopped():
+    # A crashed run a fork replaced will never reach its stop step.
+    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    points = [
+        {
+            "_step": step,
+            "_timestamp": (heartbeat - timedelta(seconds=(85_320 - step) * 20)).timestamp(),
+            "run_progress": step / 390_000,
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+        for step in (84_320, 85_320)
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", _projection_run("crashed", heartbeat), [], points)).run_activity(
+        "hero-run"
+    )
+
+    assert row["projected_finish_ms"] is None
+
+
 def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():
     asked: list[str] = []
 

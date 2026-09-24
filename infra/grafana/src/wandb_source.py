@@ -330,14 +330,14 @@ class WandbSource:
         checkpoints, evals, and steps redone after a rollback. A run that has logged
         nothing yet reports nulls rather than zeros.
 
-        `projected_finish_ms` is the epoch millisecond at which the run reaches
+        `projected_finish_ms` is the epoch millisecond at which a running run reaches
         its stop step at its recent step rate (see `_projected_finish_ms`), sampled over
         the last `_RATE_WINDOW_STEPS` steps. Checkpoints, evals, and restarts inside the
         window slow the rate; an outage the run has trained past no longer does. The
         window never reaches into a fork's inherited history. A stall or a replay of
         already-logged steps logs nothing, so it moves the date only once the run logs
-        a new step. Null until the window spans two steps, and for a run that does not
-        log `run_progress`.
+        a new step. Null for a run that is not running, until the window spans two
+        steps, and for a run that does not log `run_progress`.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -361,7 +361,7 @@ class WandbSource:
             own_min_step = int(branch_point["step"]) + 1 if branch_point else None
             specs = [_HistorySpec((_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), _TPS_SAMPLES, own_min_step)]
             step = summary.get(_STEP_KEY)
-            projecting = isinstance(step, int | float)
+            projecting = run_data.get("state") == "running" and isinstance(step, int | float)
             if projecting:
                 window_start = max(int(step) - _RATE_WINDOW_STEPS, own_min_step or 0)
                 specs.append(
