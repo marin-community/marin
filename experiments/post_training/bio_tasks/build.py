@@ -597,7 +597,11 @@ def build(
         benchmark = benchmark_registry["benchmarks"][task["benchmark"]]
         if benchmark["distribution"] not in {"ID", "OOD"}:
             raise ValueError(f"Unknown benchmark distribution: {task['benchmark']}")
-        if task["recipes"] and (benchmark["distribution"] == "OOD" or not benchmark["training_mapping_allowed"]):
+        if task["recipes"] and (
+            benchmark["distribution"] == "OOD"
+            or not benchmark["training_mapping_allowed"]
+            or not task.get("training_mapping_allowed", True)
+        ):
             raise ValueError(f"Evaluation-only task mapped to training recipes: {task['task_id']}")
         if unknown := set(task["recipes"]) - known_recipes:
             raise ValueError(f"Unknown benchmark coverage recipes: {unknown}")

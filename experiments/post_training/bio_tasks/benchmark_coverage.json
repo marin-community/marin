@@ -275,6 +275,20 @@
       "tasks_file": "benchmark_tasks/biomlbench.json",
       "source_inventory_name": "BioML-bench",
       "task_inventory_status": "definitions-inventoried; five single-cell and shared assay cross-validation protocols assessed; individual details pending"
+    },
+    "BixBench3": {
+      "revision": "3be006a68327e1fd04cd2c5fc87a703e53ca67cd",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/tree/3be006a68327e1fd04cd2c5fc87a703e53ca67cd",
+      "inventory_count": 20,
+      "public_inventory_count": 20,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/bixbench3.json",
+      "source_inventory_name": "BixBench3",
+      "task_inventory_status": "19-task-bodies-assessed-one-objective-excluded",
+      "runner_revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
+      "metadata_access": "gated-authorized",
+      "task_metadata_bytes": 107623
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

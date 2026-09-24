@@ -1,0 +1,882 @@
+{
+  "benchmark": "BixBench3",
+  "source_revision": "3be006a68327e1fd04cd2c5fc87a703e53ca67cd",
+  "runner_revision": "d0e0bbb41222335b1b8878f533a58466a3a782dc",
+  "scope": "All 20 released paper task IDs; 19 task bodies assessed for connected workflow patterns and one restricted objective retained as an identifier only. Biological inputs, answer artifacts and process-judge rubrics are not training seeds.",
+  "source_runtime": "Runner README reports an average near eight hours and a 24-hour ceiling on substantially larger CPUs; no timings measured here.",
+  "grading_scope": "Deterministic artifact grading and a separate model-based process judgment. This inventory adapts only independently verifiable operations.",
+  "tasks": [
+    {
+      "task_id": "10.1101_2025.06.17.659900_v1",
+      "task_number": 1,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.17.659900_v1/agent/task_body.json",
+      "source_metadata_sha256": "41b0bf23a7125da42d90927405aa8344f3be4cf50b3b10618416f16e9033c186",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "expression-damid-integration",
+      "required_stages": [
+        "join assay-specific biological replicates",
+        "quantify strand-specific expression",
+        "fit genotype contrast",
+        "map long-read DamID",
+        "normalize to paired controls and call peaks",
+        "join target genes and response gene sets"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF2",
+        "BAM",
+        "bedGraph",
+        "TSV"
+      ],
+      "required_tools": [
+        "HTSeq",
+        "DESeq2",
+        "minimap2",
+        "damidseq_pipeline"
+      ],
+      "scientific_decisions": [
+        "Keep annotation-native gene IDs distinct from stable database IDs; quantify enrichment from matched controls."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.02.11.704850_v1",
+      "task_number": 2,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.11.704850_v1/agent/task_body.json",
+      "source_metadata_sha256": "86990ba7b8832cc76ac97b3ac2a138f9e467f3505c5f68916fac56bd3464de01",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "bulk-expression-communication",
+      "required_stages": [
+        "quantify paired bulk libraries",
+        "collapse duplicate gene symbols",
+        "fit full condition model and shrink effects",
+        "enrich direction-specific gene sets",
+        "simplify ontology terms",
+        "score directional ligand-receptor pairs"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "TSV"
+      ],
+      "required_tools": [
+        "HISAT2",
+        "featureCounts",
+        "DESeq2",
+        "clusterProfiler",
+        "ICELLNET"
+      ],
+      "scientific_decisions": [
+        "Preserve similar-looking sample identifiers; expression-based communication scores do not establish causal signaling."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.08.16.670679_v1",
+      "task_number": 3,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.08.16.670679_v1/agent/task_body.json",
+      "source_metadata_sha256": "c673d4630642875b197581297098cfb9b615313878d5a99a33551e1627909db2",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "repeated-subject-expression",
+      "required_stages": [
+        "count annotated alignments and remaining reads",
+        "apply sample and expression QC",
+        "normalize and estimate surrogate covariates",
+        "fit repeated-bird contrasts",
+        "rank coefficients",
+        "enrich and prune pathways"
+      ],
+      "required_formats": [
+        "BAM",
+        "FASTQ",
+        "GFF3",
+        "TSV"
+      ],
+      "required_tools": [
+        "featureCounts",
+        "edgeR",
+        "limma",
+        "sva",
+        "fgsea"
+      ],
+      "scientific_decisions": [
+        "Preserve bird and anatomical-region dependence; imputation, model coefficients and enrichment direction share one design."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.02.03.703548_v1",
+      "task_number": 4,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.03.703548_v1/agent/task_body.json",
+      "source_metadata_sha256": "8ff5d6830ab6c1d7eabbd0b69f3e6d7c53fa8ec9a9c74a05eade3b6bfa2a7095",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "expression-variant-ancestry",
+      "required_stages": [
+        "quantify transcript clusters",
+        "calculate length-aware abundance",
+        "assemble and jointly genotype mixed library types",
+        "filter and prune variants",
+        "infer ancestry and population structure",
+        "compare parental and mixed genotypes"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF",
+        "BAM",
+        "VCF",
+        "PLINK",
+        "HDF5",
+        "Newick"
+      ],
+      "required_tools": [
+        "HISAT2",
+        "featureCounts",
+        "Trinity",
+        "GATK",
+        "bcftools",
+        "PLINK2",
+        "ADMIXTURE",
+        "IQ-TREE"
+      ],
+      "scientific_decisions": [
+        "Separate host and focal-species libraries; orient ancestry labels using explicit populations and preserve missing genotypes."
+      ],
+      "source_accessions_mentioned": [
+        "PRJNA914055"
+      ],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.20.665670_v1",
+      "task_number": 5,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.20.665670_v1/agent/task_body.json",
+      "source_metadata_sha256": "93b89239c1f6ec07f3aff2157cada3e119f99e34e9f7bca36d99fac390b0da31",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "small-rna-orthology",
+      "required_stages": [
+        "trim and length-filter small RNAs",
+        "remove structural-RNA reads",
+        "map to accession-specific genomes",
+        "identify homolog groups",
+        "quantify locus-level abundance",
+        "compare conserved loci and target-prediction scores"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF",
+        "TSV"
+      ],
+      "required_tools": [
+        "Cutadapt",
+        "Bowtie",
+        "BLAST+",
+        "GSTAr"
+      ],
+      "scientific_decisions": [
+        "Multiple genomic alignments and total-read normalization use different denominators; preserve accession-specific identifier namespaces."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.08.663208_v1",
+      "task_number": 6,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.08.663208_v1/agent/task_body.json",
+      "source_metadata_sha256": "a68e174825911c858dc7810407cdc0fcd362c174b9b42c656e977f7effcc73be",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "perturbation-multiome-damid",
+      "required_stages": [
+        "quantify bulk expression",
+        "jointly filter RNA and accessibility cells",
+        "integrate modalities and assign guides",
+        "estimate mitochondrial allele fractions",
+        "normalize and call DamID peaks",
+        "require replicate support and annotate targets"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "BED",
+        "sparse counts",
+        "fragment tables"
+      ],
+      "required_tools": [
+        "Cell Ranger ARC",
+        "Seurat",
+        "Signac",
+        "mgatk",
+        "MACS3",
+        "IDR"
+      ],
+      "scientific_decisions": [
+        "Preserve cell barcode and biological-replicate identity across modalities; guide assignment, perturbation response and allelic depth are separate evidence."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.28.666515_v1",
+      "task_number": 7,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.28.666515_v1/agent/task_body.json",
+      "source_metadata_sha256": "63d0c13d15ff359375d1ef4a273bcd34d6f456f6504a9edb0d72635dea38f3c4",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "cross-platform-methylation",
+      "required_stages": [
+        "reconcile runs and biological samples",
+        "quantify RRBS methylation",
+        "QC and normalize array intensities",
+        "fit genotype-age and pathology models",
+        "harmonize genomic annotations",
+        "combine dependent site-level evidence"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "IDAT",
+        "FASTA",
+        "GTF",
+        "coverage tables",
+        "array manifest",
+        "TSV"
+      ],
+      "required_tools": [
+        "Bismark",
+        "BiSeq",
+        "minfi",
+        "SeSaMe",
+        "betareg",
+        "glmmTMB",
+        "EmpiricalBrownsMethod"
+      ],
+      "scientific_decisions": [
+        "Array and sequencing filters differ; repeated tissues and chip effects must remain visible when combining CpG evidence."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1038_s42003-022-03654-9_v1",
+      "task_number": 8,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s42003-022-03654-9_v1/agent/task_body.json",
+      "source_metadata_sha256": "50eee5e646d963dd651ccdea0a131924457513c549361ec4222ae4820bfd96d2",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "xenograft-and-tumorsphere-expression",
+      "required_stages": [
+        "separate species in xenograft alignments",
+        "quantify human genes",
+        "quantify decoy-aware tumorsphere transcripts",
+        "fit replicated drug contrasts",
+        "shrink effects",
+        "compute ranked pathway and leading-edge outputs"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "quantification tables",
+        "GMT"
+      ],
+      "required_tools": [
+        "HISAT2",
+        "XenofilteR",
+        "featureCounts",
+        "Salmon",
+        "tximport",
+        "DESeq2"
+      ],
+      "scientific_decisions": [
+        "Human and host reads require explicit disambiguation; assay-specific quantifiers and reference versions must not be mixed."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10_1186_s12915_024_01879_0_v1",
+      "task_number": 9,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10_1186_s12915_024_01879_0_v1/agent/task_body.json",
+      "source_metadata_sha256": "834af9eee3188c2f6b42da5d2884b7cb4ea35049c9f5fe3192a2432da088c733",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "tagseq-clone-signatures",
+      "required_stages": [
+        "merge technical runs within biological samples",
+        "clip and deduplicate tag reads",
+        "align and count stranded genes",
+        "fit clone-specific contrasts",
+        "intersect direction-consistent signatures",
+        "test clone-specific gene-set enrichment"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "TSV"
+      ],
+      "required_tools": [
+        "Cutadapt",
+        "HISAT2",
+        "featureCounts",
+        "DESeq2",
+        "clusterProfiler"
+      ],
+      "scientific_decisions": [
+        "Technical lanes are not biological replicates; gene-set intersections must preserve direction and comparison context."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1038_s41467-023-44243-6_v1",
+      "task_number": 10,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s41467-023-44243-6_v1/agent/task_body.json",
+      "source_metadata_sha256": "99e06b55234dc5b952a26e752ed0178dc0a92498da335416df5d7512138cf493",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "transcript-level-compound-controls",
+      "required_stages": [
+        "assign independent biological replicates",
+        "align to pinned genome",
+        "count transcript and repeat features",
+        "fit active and control compound contrasts",
+        "retain feature identities and effect directions"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "TSV"
+      ],
+      "required_tools": [
+        "STAR",
+        "HOMER",
+        "edgeR"
+      ],
+      "scientific_decisions": [
+        "Distinguish active treatment, related control compound and vehicle; verify cited package versions before requiring execution."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1016_j.crtox.2021.01.003_v1",
+      "task_number": 11,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1016_j.crtox.2021.01.003_v1/agent/task_body.json",
+      "source_metadata_sha256": "dfe32457b444965a3356ab0f6a9f1334b5ab3675b8eed66030b160283a053d62",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "probe-transcriptomics-pathways",
+      "required_stages": [
+        "align reads to assay-specific probes",
+        "retain probe-level counts",
+        "fit within-timepoint dose contrasts",
+        "map ortholog identifiers",
+        "run ranked and selected-set enrichment",
+        "test curated response sets"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "probe CSV",
+        "TSV",
+        "XLSX",
+        "GMT"
+      ],
+      "required_tools": [
+        "QuasR",
+        "DESeq2",
+        "biomaRt",
+        "PIANO"
+      ],
+      "scientific_decisions": [
+        "Probe IDs remain separate from gene symbols; curated gene-set backgrounds and cross-species mappings require frozen provenance."
+      ],
+      "source_accessions_mentioned": [
+        "GSE154899"
+      ],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.06.02.657493_v1",
+      "task_number": 12,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.02.657493_v1/agent/task_body.json",
+      "source_metadata_sha256": "8e750ad1072d93e4ed1925fb1bdb3cc6da119be2785be7bffb57b9ad53e416b9",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "probiotic-timecourse-expression",
+      "required_stages": [
+        "QC and trim reads",
+        "align to annotated genome",
+        "count strand-specific loci",
+        "fit within-timepoint treatment contrasts",
+        "shrink effects and classify directions",
+        "check assignment rates and replicate structure"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF3",
+        "BAM",
+        "TSV"
+      ],
+      "required_tools": [
+        "Trimmomatic",
+        "Bowtie2",
+        "featureCounts",
+        "DESeq2"
+      ],
+      "scientific_decisions": [
+        "Overlapping genes, multimapping and reverse-stranded counting have distinct counting rules; do not pool timepoints."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.03.10.709901_v1",
+      "task_number": 13,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.03.10.709901_v1/agent/task_body.json",
+      "source_metadata_sha256": "b4a4a0a592f9f808b95b15f63ec9a4edfe9a678e72ff05f48f3b01f76b63f7b0",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "microsatellite-cell-lineage",
+      "required_stages": [
+        "process each amplicon panel",
+        "align and measure full-locus coverage",
+        "filter cells and call repeat genotypes",
+        "handle allelic dropout in pairwise distances",
+        "infer a rooted lineage tree",
+        "compare resolvable clone triplets"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "BED",
+        "BAM",
+        "VCF",
+        "distance matrix",
+        "Newick"
+      ],
+      "required_tools": [
+        "Nextflow",
+        "BWA",
+        "SAMtools",
+        "HipSTR",
+        "scikit-bio"
+      ],
+      "scientific_decisions": [
+        "Missing alleles change the comparable-locus denominator; unresolved triplets cannot be counted as agreement or disagreement."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.21.665972_v1",
+      "task_number": 14,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.21.665972_v1/agent/task_body.json",
+      "source_metadata_sha256": "46d01784e110481ec4a1ba16b2ed954974a3fa1a97e52cafb545d0a16462ee3e",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "mrna-mirna-tumor-contrasts",
+      "required_stages": [
+        "combine technical runs by biological sample",
+        "process paired mRNA and single-end small RNA separately",
+        "quantify transcripts and mature microRNAs",
+        "fit each assay over all condition groups",
+        "retain directional contrast tables"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "GFF3",
+        "quantification tables"
+      ],
+      "required_tools": [
+        "Kallisto",
+        "tximport",
+        "PatMaN",
+        "DESeq2"
+      ],
+      "scientific_decisions": [
+        "Do not mix assay count matrices; transcript-to-gene aggregation and mature-miRNA identities define different row universes."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.01.09.698641_v1",
+      "task_number": 15,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.09.698641_v1/agent/task_body.json",
+      "source_metadata_sha256": "6a2be5ef4b5c41d632a2294e7e4629639c709510180340760ca290f5d02cfe63",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "transposable-elements-splicing-isoforms",
+      "required_stages": [
+        "retain multi-mapping evidence",
+        "quantify genes and repeat families",
+        "fit replicated short-read contrasts",
+        "test differential intron usage",
+        "discover and quantify long-read transcripts"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "junction tables"
+      ],
+      "required_tools": [
+        "STAR",
+        "TEtranscripts",
+        "DESeq2",
+        "Leafcutter",
+        "minimap2",
+        "bambu"
+      ],
+      "scientific_decisions": [
+        "Stable intron coordinates differ from run-specific cluster labels; one long-read library per condition does not support replicated significance."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.31.667834_v1",
+      "task_number": 16,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.31.667834_v1/agent/task_body.json",
+      "source_metadata_sha256": "e39a06676161882ed573d8fe47de5f6eeeeee2efa35d6d94f508ade69ed1b003",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "restricted/excluded",
+      "training_mapping_allowed": false,
+      "assessment": "Identifier retained only; pathogen-enhancement objective excluded from training authoring.",
+      "workflow_family": "excluded-objective",
+      "required_stages": [],
+      "required_formats": [],
+      "required_tools": [],
+      "remaining_gaps": [
+        "No training adaptation of the pathogen-enhancement objective."
+      ]
+    },
+    {
+      "task_id": "10.1101_2025.07.18.664654_v1",
+      "task_number": 17,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.18.664654_v1/agent/task_body.json",
+      "source_metadata_sha256": "ac92dcaec68ace8ed2edb95fdce7ea9e81ebc7460f88468cf09dc30e0287ebee",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "chromatin-reporter-integration",
+      "required_stages": [
+        "align paired chromatin reads",
+        "normalize signal with experimental library factors",
+        "filter input artifacts and summarize windows",
+        "assign chromatin classes",
+        "recover replicate-consistent reporter integrations",
+        "normalize reporter abundance and join genomic classes"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "BAM",
+        "bedGraph",
+        "BED",
+        "TSV"
+      ],
+      "required_tools": [
+        "Bowtie2",
+        "SAMtools",
+        "MACS3",
+        "BEDTools",
+        "TASK"
+      ],
+      "scientific_decisions": [
+        "Preserve terminal partial windows and normalization constants; reporter DNA abundance is distinct from transcript abundance."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.01.02.697332_v1",
+      "task_number": 18,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.02.697332_v1/agent/task_body.json",
+      "source_metadata_sha256": "ae7be29b02e4c7049f07aa2047e9eda5003d32ca386f383a2cc59432bbbd7d4b",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "expression-accessibility-integration",
+      "required_stages": [
+        "construct merged gene models",
+        "quantify expression and fit filtered contrasts",
+        "trim and align accessibility reads",
+        "merge and blacklist peaks",
+        "count fragments and test accessibility"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "BED",
+        "count matrices"
+      ],
+      "required_tools": [
+        "STAR",
+        "featureCounts",
+        "edgeR",
+        "MACS2",
+        "BEDTools",
+        "DESeq2"
+      ],
+      "scientific_decisions": [
+        "The two assays use different genome assemblies; coordinate joins require explicit harmonization and biological-replicate preservation."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.01.31.702960_v1",
+      "task_number": 19,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.31.702960_v1/agent/task_body.json",
+      "source_metadata_sha256": "8b67abbad80fa9d5500985c40abf11c2f481c972692eae82b7a60734d09c4d3c",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "paired-small-rna-mrna-regulation",
+      "required_stages": [
+        "quantify mRNA and small-RNA classes separately",
+        "fit both mutant contrasts against shared controls",
+        "identify direction-consistent changes",
+        "pair class-specific small-RNA targets with mRNA",
+        "compare opposing effect directions"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "GFF3",
+        "feature-rule CSV",
+        "count matrices"
+      ],
+      "required_tools": [
+        "fastp",
+        "STAR",
+        "RSEM",
+        "tinyRNA",
+        "DESeq2",
+        "RNA-integrate"
+      ],
+      "scientific_decisions": [
+        "Keep small-RNA classes attached to gene identities; opposing transcript changes are associations, not evidence of a direct mechanism."
+      ],
+      "source_accessions_mentioned": [
+        "PRJNA13758"
+      ],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    },
+    {
+      "task_id": "10.64898_2026.02.04.703711_v1",
+      "task_number": 20,
+      "source_metadata_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.04.703711_v1/agent/task_body.json",
+      "source_metadata_sha256": "3a1819ab13b37f3e3ff56a4458c14de7c9d03c922dafb70c2e1fea6084a1c2ba",
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "status": "unmapped",
+      "training_mapping_allowed": true,
+      "assessment": "Research objective and method guidance manually assessed. Full output contracts and source graders require endpoint-level inspection.",
+      "workflow_family": "observed-community-and-growth-model",
+      "required_stages": [
+        "infer amplicon sequence variants",
+        "remove chimeras and assign taxa",
+        "correct operon copy-number bias",
+        "combine composition with measured counts and biomass",
+        "summarize biological replicates",
+        "compare measured growth with a parameterized null model"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "microscopy images",
+        "flow counts",
+        "growth curves",
+        "TSV",
+        "MATLAB parameters"
+      ],
+      "required_tools": [
+        "Cutadapt",
+        "DADA2",
+        "phyloseq",
+        "GNU Octave"
+      ],
+      "scientific_decisions": [
+        "An experimentally assembled community still yields real observations; stochastic null-model trajectories are derived simulations and need separate reproducibility checks."
+      ],
+      "source_accessions_mentioned": [],
+      "remaining_gaps": [
+        "Inspect complete artifact contracts and quantitative acceptance rules; the separate source process judge is not an acceptance rule.",
+        "Validate an independent observed study and a connected analysis boundary that finishes within 30 minutes; the original raw-data workflow has not been run."
+      ]
+    }
+  ]
+}

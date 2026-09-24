@@ -235,9 +235,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) | 50 (all overlap original IDs) | — |
 | [CellBench](../../experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json) | 50 analysis-planning contexts | — |
 | [BioML-bench](../../experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json) | 406 registry definitions; 24 selected by the released experiment | — |
+| [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 task bodies assessed, one objective excluded | — |
 
-Of these 1,221 ID task/protocol/definition records, 23 have manually assessed component mappings and
-1,198 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 1,241 ID task/protocol/definition records, 23 have manually assessed component mappings,
+1,217 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -301,6 +302,16 @@ need review. The spatial-gene protocol uses simulated observations; the communic
 protocol uses activity proxies. Neither supplies real training inputs or a biological
 ground truth by itself. Public assay labels also mean that a prediction-file score
 cannot establish whether each fold was excluded during fitting.
+
+BixBench3 contributes 20 research-scale paper tasks. Nineteen task bodies have
+assessed workflow stages; full artifact contracts still need endpoint-level review.
+One pathogen-enhancement objective remains an excluded identifier. The source
+grades artifacts deterministically and uses a separate process judge; our acceptance
+rules require quantitative artifacts. Its reported runs average roughly eight hours,
+so adaptations need an explicit analysis boundary and measured runtime. Multi-assay
+joins, technical versus biological replication, missing observations and complete
+output tables must survive that reduction. Simulated community-growth trajectories
+remain distinct from observed microbial measurements.
 
 For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
