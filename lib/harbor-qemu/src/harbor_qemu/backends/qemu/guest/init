@@ -21,7 +21,10 @@ while IFS= read -r request < /dev/ttyS0; do
       if [ -x /bin/bash ]; then shell=/bin/bash; else shell=/bin/sh; fi
       (cd /workspace; "$shell" /tmp/harbor-command.sh) > /tmp/harbor-out 2> /tmp/harbor-err
       code=$?
-      printf 'RESULT|%s|%s|%s\n' "$code" "$($busybox base64 -w 0 /tmp/harbor-out)" "$($busybox base64 -w 0 /tmp/harbor-err)" > /dev/ttyS0
+      printf 'RESULT|%s\n' "$code" > /dev/ttyS0
+      $busybox base64 -w 4096 /tmp/harbor-out | $busybox sed 's/^/OUT|/' > /dev/ttyS0
+      $busybox base64 -w 4096 /tmp/harbor-err | $busybox sed 's/^/ERR|/' > /dev/ttyS0
+      printf 'ENDRESULT\n' > /dev/ttyS0
       ;;
   esac
 done

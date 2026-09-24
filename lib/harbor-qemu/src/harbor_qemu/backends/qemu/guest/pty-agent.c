@@ -74,6 +74,17 @@ static void send_output(const char *data, size_t length) {
     write_all(port_fd, line, 5 + length * 2);
 }
 
+static void drain_output(void) {
+    for (;;) {
+        struct pollfd fd = {master_fd, POLLIN, 0};
+        if (poll(&fd, 1, 0) <= 0 || !(fd.revents & POLLIN)) return;
+        char bytes[CHUNK_BYTES];
+        ssize_t count = read(master_fd, bytes, sizeof(bytes));
+        if (count <= 0) return;
+        send_output(bytes, (size_t)count);
+    }
+}
+
 static void start_shell(void) {
     int slave;
     int status_pipe[2];
@@ -231,6 +242,7 @@ int main(void) {
                     status[status_length] = '\0';
                     if (!strcmp(status, "READY")) send_text("READY\n");
                     else if (!strncmp(status, "DONE|", 5)) {
+                        drain_output();
                         send_text(status);
                         send_text("\n");
                         active_id[0] = '\0';

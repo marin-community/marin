@@ -65,7 +65,7 @@ The factory uses a process-local `ImageCache` to call `prepare_image` once per s
 
 `DockerfileSource(context=..., dockerfile=...)` is the other source type. It requires a local Docker builder, builds for `linux/amd64`, and copies the result into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. A base image referenced by a mutable tag can change without a context edit, so pin `FROM` by digest for repeatable builds. `DockerMachineFactory` loads a prepared layout under a digest-derived local tag when needed. `QemuMachineFactory` needs `QemuAssets` and a `bundle_cache` to stage the same prepared layout into a guest bundle on first use. `examples/check_prepared_image.py` shows both backends running one public GHCR image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
-`run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest before applying the result limit; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `examples/check_machine.py` exercises one-shot command results, persistent files, and file transfer. `examples/check_shell.py` exercises shell state, input, interruption, jobs, bounded output, and reset.
+`run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest and streams it to the host in bounded chunks; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `examples/check_machine.py` exercises one-shot command results, persistent files, and file transfer. `examples/check_shell.py` exercises shell state, input, interruption, jobs, bounded output, and reset.
 
 The wheel contains Python integration, guest init code, and the source for a small PTY helper. Staging compiles that helper with `cc -static` and `-lutil`; the runtime host does not need a compiler when it uses a prebuilt bundle. The runtime host needs QEMU, its libraries, firmware, a Linux kernel, and a **static** BusyBox staged into a bundle. A minimal guest can be staged with:
 
@@ -80,6 +80,7 @@ harbor-qemu-stage \
 ```
 
 The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libraries` directory must contain every shared library required by the QEMU executable on the runtime host. The bundle can be prepared on a build machine and copied to the runtime host.
+Re-stage bundles built with an earlier prototype when updating this package; the guest and host serial protocols must match.
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
 
@@ -133,7 +134,7 @@ Staging uses `umoci unpack --rootless` to apply OCI layers and whiteouts, then b
 
 Harbor can prepare a task's `environment/Dockerfile` or `docker_image` automatically when configured as shown below. For prebuilt bundles, pass `--task-dockerfile` when staging a Dockerfile image or `--image-reference` when staging a registry image. Harbor checks the recorded Dockerfile SHA-256 or image reference before starting QEMU. These checks catch mismatched task inputs; they do not prove which Dockerfile built an OCI image. Compose tasks remain unsupported.
 
-This staging step requires `umoci`, `mkfs.ext4`, and `cpio` on the build machine. A runtime host using only prebuilt bundles needs none of them. For repeatable builds, pin the source image by digest before copying it to the OCI layout. See the [OCI image layout](https://specs.opencontainers.org/image-spec/image-layout/) and [umoci unpack](https://umo.ci/quick-start/workflow/) documentation for the source format and layer unpacking.
+This staging step requires `umoci`, `mkfs.ext4` built with libarchive support, and `cpio` on the build machine. `mkfs.ext4 -d` reads a tarball so the guest filesystem retains OCI file ownership. A runtime host using only prebuilt bundles needs none of these tools. For repeatable builds, pin the source image by digest before copying it to the OCI layout. See the [OCI image layout](https://specs.opencontainers.org/image-spec/image-layout/) and [umoci unpack](https://umo.ci/quick-start/workflow/) documentation for the source format and layer unpacking.
 
 Use the import paths in a Harbor job config:
 

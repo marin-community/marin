@@ -299,17 +299,38 @@ class QemuMachine:
             process.stdin.write(b"END\n")
             await process.stdin.drain()
             try:
+                exit_code: int | None = None
+                stdout = bytearray()
+                stderr = bytearray()
+                stdout_truncated = False
+                stderr_truncated = False
+                deadline = asyncio.get_running_loop().time() + (command.timeout or 120)
                 while True:
-                    line = await asyncio.wait_for(process.stdout.readline(), timeout=command.timeout or 120)
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    line = await asyncio.wait_for(process.stdout.readline(), timeout=max(remaining, 0.001))
                     if not line:
                         raise RuntimeError("QEMU guest stopped during command")
                     if line.startswith(b"RESULT|"):
-                        _, code, stdout, stderr = line.strip().split(b"|", 3)
-                        out = base64.b64decode(stdout)
-                        err = base64.b64decode(stderr)
-                        limit = command.output_limit_bytes
+                        exit_code = int(line.strip().split(b"|", 1)[1])
+                    elif line.startswith((b"OUT|", b"ERR|")):
+                        chunk = base64.b64decode(line[4:].strip())
+                        output = stdout if line.startswith(b"OUT|") else stderr
+                        available = max(0, command.output_limit_bytes - len(output))
+                        output.extend(chunk[:available])
+                        if line.startswith(b"OUT|"):
+                            stdout_truncated |= len(chunk) > available
+                        else:
+                            stderr_truncated |= len(chunk) > available
+                    elif line.strip() == b"ENDRESULT":
+                        if exit_code is None:
+                            raise RuntimeError("QEMU guest ended result without exit code")
                         return Result(
-                            int(code), out[:limit], err[:limit], len(out) > limit, len(err) > limit, ExitReason.EXITED
+                            exit_code,
+                            bytes(stdout),
+                            bytes(stderr),
+                            stdout_truncated,
+                            stderr_truncated,
+                            ExitReason.EXITED,
                         )
             except TimeoutError:
                 await self.close()
