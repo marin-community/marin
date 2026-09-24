@@ -229,7 +229,7 @@ def generate_conversations(config: GenerateCurriculumSFTConfig) -> Artifact:
     chat_path.parent.mkdirs()
     write_parquet_file(task_records, str(tasks_path), schema=TASK_SCHEMA)
     write_parquet_file(chat_documents, str(chat_path), schema=CHAT_SCHEMA)
-    (output / RAW_RESPONSES_FILENAME).write_text(batch_output.output.rstrip() + "\n")
+    (output / RAW_RESPONSES_FILENAME).write_text(batch_output.output)
     (output / MANIFEST_FILENAME).write_text(
         json.dumps(
             {
