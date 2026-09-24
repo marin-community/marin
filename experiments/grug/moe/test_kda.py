@@ -126,3 +126,69 @@ def test_chunk_kda_gradients_finite():
 
     grads = jax.grad(loss, argnums=(0, 1, 2))(q, g, beta)
     assert all(jnp.all(jnp.isfinite(grad)) for grad in grads)
+
+
+# --- Fused Pallas/Triton kernel (kda_pallas), validated in the CPU interpreter ---
+# Layout there is (B, T, H, D); we reuse _inputs (which is (B, H, T, D)) transposed.
+def _bthd(x):
+    return jnp.swapaxes(x, 1, 2)
+
+
+@pytest.mark.parametrize(("length", "chunk_size", "dk", "dv"), [(128, 64, 16, 16), (192, 64, 32, 16), (200, 64, 16, 32)])
+def test_pallas_kda_fwd_matches_recurrent(length, chunk_size, dk, dv):
+    """Fused Pallas KDA (interpret mode, fp32) equals the sequential recurrence.
+
+    Realistic regime (use_qk_l2norm=True: bounded k, stable I - beta k k^T)."""
+    from experiments.grug.moe.kda_pallas import kda as pallas_kda  # noqa: PLC0415
+
+    q, k, v, g, beta = _inputs(2, 2, length, dk, dv, seed=length)
+    out_ref, _ = recurrent_kda(q, k, v, g, beta, use_qk_l2norm=True)
+    out_p = pallas_kda(
+        _bthd(q),
+        _bthd(k),
+        _bthd(v),
+        _bthd(g),
+        _bthd(beta),
+        chunk_size=chunk_size,
+        mm_dtype=jnp.float32,
+        use_qk_l2norm=True,
+        interpret=True,
+    )
+    np.testing.assert_allclose(np.asarray(_bthd(out_p)), np.asarray(out_ref), rtol=1e-4, atol=1e-4)
+
+
+def test_pallas_kda_grad_matches_reference():
+    """The hand-derived Pallas VJP matches autodiff of the fp32 reference (interpret)."""
+    from experiments.grug.moe.kda_pallas import kda as pallas_kda  # noqa: PLC0415
+    from experiments.grug.moe.kda_pallas import kda_reference  # noqa: PLC0415
+
+    q, k, v, g, beta = _inputs(2, 2, 192, 32, 32, seed=5)
+    q, k, v, g, beta = (_bthd(x) for x in (q, k, v, g, beta))
+    s0 = jnp.asarray(np.random.RandomState(11).randn(2, 2, 32, 32) * 0.1, jnp.float32)
+    wo = jnp.asarray(np.random.RandomState(1).randn(2, 192, 2, 32), jnp.float32)
+    ws = jnp.asarray(np.random.RandomState(2).randn(2, 2, 32, 32), jnp.float32)
+
+    def loss_pallas(q, k, v, g, beta, s0):
+        o, sT = pallas_kda(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            chunk_size=64,
+            mm_dtype=jnp.float32,
+            use_qk_l2norm=True,
+            interpret=True,
+            initial_state=s0,
+            output_final_state=True,
+        )
+        return jnp.sum(wo * o) + jnp.sum(ws * sT)
+
+    def loss_ref(q, k, v, g, beta, s0):
+        o, sT = kda_reference(q, k, v, g, beta, use_qk_l2norm=True, initial_state=s0)
+        return jnp.sum(wo * o) + jnp.sum(ws * sT)
+
+    gp = jax.grad(loss_pallas, argnums=(0, 1, 2, 3, 4, 5))(q, k, v, g, beta, s0)
+    gr = jax.grad(loss_ref, argnums=(0, 1, 2, 3, 4, 5))(q, k, v, g, beta, s0)
+    for a, b in zip(gp, gr, strict=True):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=2e-4, atol=2e-4)

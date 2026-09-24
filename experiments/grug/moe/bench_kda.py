@@ -31,6 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
+from experiments.grug.moe.kda_pallas import kda as pallas_kda
 
 # H100 SXM peak (dense, no sparsity), TFLOP/s.
 _H100_BF16_PEAK = 989.0
@@ -75,7 +76,7 @@ def _analytic_matmul_flops(g_batch, length, c, d, mode):
 RESULTS: list[str] = []
 
 
-def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None):
+def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None, seq_len=None):
     fwd = functools.partial(kernel, chunk_size=chunk_size)
 
     def fwd_out(*a):
@@ -88,10 +89,11 @@ def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None):
     with jax.default_matmul_precision(precision) if precision else _nullctx():
         fn = jax.jit(raw)
         med, _best = _time_fn(fn, args)
-    b, h, length = args[0].shape[0], args[0].shape[1], args[0].shape[2]
+    s0, s1, s2 = args[0].shape[0], args[0].shape[1], args[0].shape[2]
     d = args[0].shape[3]
-    tokens = b * h * length
-    flops = _analytic_matmul_flops(b * h, length, chunk_size, d, mode)
+    tokens = s0 * s1 * s2  # B*H*L regardless of (B,H,L,D) or (B,T,H,D) layout
+    length = seq_len if seq_len is not None else s2
+    flops = _analytic_matmul_flops(tokens // length, length, chunk_size, d, mode)
     tflops = flops / med / 1e12
     mfu = 100.0 * tflops / peak
     line = (
@@ -162,6 +164,47 @@ def main():
     dk = int(os.environ.get("KDA_DK", "128"))
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
+
+    if os.environ.get("KDA_PALLAS") == "1":
+        # (B,H,L,D) for chunk_kda; (B,T,H,D) for the Pallas kernel -- same data.
+        qh, kh, vh, gh, bh = _make_inputs(b, h, lengths[0], dk, dv)
+        qt, kt, vt, gt = (jnp.swapaxes(x, 1, 2) for x in (qh, kh, vh, gh))
+        bt = jnp.swapaxes(bh, 1, 2)
+
+        # GPU correctness (real Triton codegen, not interpret): bf16 kernel vs fp32 oracle.
+        cq, ck, cv, cg, cb = _make_inputs(2, 2, 512, dk, dv, seed=5)
+        ref = recurrent_kda(cq, ck, cv, cg, cb, use_qk_l2norm=True)[0]  # (B,H,L,V)
+        po = pallas_kda(
+            jnp.swapaxes(cq, 1, 2),
+            jnp.swapaxes(ck, 1, 2),
+            jnp.swapaxes(cv, 1, 2),
+            jnp.swapaxes(cg, 1, 2),
+            jnp.swapaxes(cb, 1, 2),
+            chunk_size=64,
+            mm_dtype=jnp.bfloat16,
+            use_qk_l2norm=True,
+        )
+        po = jnp.swapaxes(po, 1, 2)
+        rel = float(jnp.max(jnp.abs(po - ref)) / (jnp.max(jnp.abs(ref)) + 1e-9))
+        RESULTS.append(f"GPU correctness pallas-bf16 vs recurrent-fp32 max_rel_err={rel:.4e}")
+        print(RESULTS[-1], flush=True)
+
+        def pk(q_, k_, v_, g_, b_, *, chunk_size):
+            return (pallas_kda(q_, k_, v_, g_, b_, chunk_size=chunk_size, mm_dtype=jnp.bfloat16, use_qk_l2norm=True),)
+
+        assoc = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16)
+        for mode in ("fwd", "fwd_bwd"):
+            # reference: my associative-scan kernel (bf16) at its best chunk
+            _try("assoc C=128", assoc, (qh, kh, vh, gh, bh), 128, _H100_BF16_PEAK, mode, seq_len=lengths[0])
+            for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128").split(",")):
+                _try(f"pallas C={c}", pk, (qt, kt, vt, gt, bt), c, _H100_BF16_PEAK, mode, seq_len=lengths[0])
+        marker = "###KDA_RESULTS###"
+        print("\n" + marker, flush=True)
+        for ln in RESULTS:
+            print(ln, flush=True)
+        print(marker, flush=True)
+        sys.stdout.flush()
+        sys.exit(3)
 
     if os.environ.get("KDA_UNROLL") == "1":
         c = int(os.environ.get("KDA_C", "128"))
@@ -241,9 +284,9 @@ def main():
     sys.exit(3)
 
 
-def _try(name, kernel, args, c, peak, mode, precision=None):
+def _try(name, kernel, args, c, peak, mode, precision=None, seq_len=None):
     try:
-        return _run_variant(name, kernel, args, c, peak, mode, precision=precision)
+        return _run_variant(name, kernel, args, c, peak, mode, precision=precision, seq_len=seq_len)
     except Exception as e:
         msg = f"ERR {name} C={c} {mode}: {type(e).__name__}: {str(e)[:120]}"
         RESULTS.append(msg)
