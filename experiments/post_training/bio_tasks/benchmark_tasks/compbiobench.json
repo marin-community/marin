@@ -1649,9 +1649,11 @@
         "Genomics",
         "Coding"
       ],
-      "status": "unmapped",
-      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "status": "composed-unvalidated",
+      "assessment": "All four N50 workflow stages are authored on independently observed PhiX read-derived contigs. The permitted ID prompt names a Drosophila reference FASTA (GCF_000001215.4), which is not used as a training input or answer source. Native reference and independent oracle checks passed; packaged-task and Harbor checks remain pending.",
+      "recipes": [
+        "real-phix-assembly"
+      ],
       "required_stages": [
         "read full assembly",
         "define eligible sequence records",
@@ -1659,16 +1661,21 @@
         "compute length-weighted N50"
       ],
       "remaining_gaps": [
-        "Use authentic assembly contigs and specify gaps/record eligibility; a supplied length ledger only covers arithmetic.",
-        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+        "Run the exact packaged task and fresh Harbor oracle with artifact corruption controls before marking the workflow adaptation validated.",
+        "Broad release-level benchmark-lineage screening remains pending; this mapping is to the assembly-contiguity pattern, not a score on the original benchmark."
       ],
       "required_formats": [
         "FASTA"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "ENA:ERR266411",
+        "RefSeq:NC_001422.1"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/cd4c5520958b.json"
+      ],
+      "runtime_seconds": 4.663212667001062,
       "workflow_family": "assembly-contiguity",
       "original_internet_required": false,
       "original_gpu_preferred": false

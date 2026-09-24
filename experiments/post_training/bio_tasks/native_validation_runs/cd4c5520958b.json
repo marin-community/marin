@@ -1,0 +1,1756 @@
+{
+  "schema_version": 1,
+  "source_revision": "279982c9463c7dc4b39061c158e9df579c968f43",
+  "source_state": "Exact committed observed systematic read sample; checksum-locked native assembly and independent long-cs oracle. Recipe registration and Harbor checks pending.",
+  "source_file_hashes": {
+    "experiments/post_training/bio_tasks/__init__.py": "681b9fa35486410cce668c751a27abef703c3c6f1edca2b23ecd29374aa146b3",
+    "experiments/post_training/bio_tasks/benchmark_coverage.json": "3b3a69b09749d8184280510c7a211451fc8e7d9166c98beb49c0a9b6d65de77e",
+    "experiments/post_training/bio_tasks/benchmark_sources.json": "96b02e4aeadfebcb3e4c7e383b91fc7678598397b76763741c65b3e7e683c269",
+    "experiments/post_training/bio_tasks/benchmark_tasks/README.md": "a868217b16bc3055edd683df74ae203b634408d0d6fdaf03db903c1f34fb9357",
+    "experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json": "2182bf10688d9f096d5f9db2f0f25212aa32c7f9e90f2c4a25ecba6cb3ba0c8b",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bio-task-bench.json": "4a57d1f711e32b135ab59323ef09fa529be85e63477080f57890c7592359635e",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bioagent.json": "2915e369b49c11ee83d90c4aa7521d6155230751d7a2205b3b36a114466cdc8d",
+    "experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json": "cecdac5f28f15c1cdbb79c21082c8813a32cf50b2877b143f4858c09441e0811",
+    "experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json": "186ef625bb8d6cce60260e01aff8b42f4da899b1d22a43193ff035d3e499a4a2",
+    "experiments/post_training/bio_tasks/benchmark_tasks/biomni-eval1.json": "312dabda1c34eec6f061c33f1f1578a0847fc84fa96de4f6813e2b34ba7ae388",
+    "experiments/post_training/bio_tasks/benchmark_tasks/biomnibench-da.json": "dff90709c7bfbc913b70d6f6fc53a1ba48e17cb4716b221ed2f4350d0d6d4b43",
+    "experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json": "518b614ecd67217dc17c62b4482955261a68b9f3c860920a01a873b1ad92a122",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json": "64662961415375a64cf826e631e8feac44eab961c9ec1e92f957102a82517032",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json": "2521fbbc67d7fa8e57e3c3f20820d71c92c0cb2477a4f541bb8a465cd473682f",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json": "95b687d8f3cb30c0aa126a0136624551974f0151779fff6d57a9fa60d4b13795",
+    "experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json": "c8afe307e2e9ad2826c713da597da36e6dca1e3e1ccd84d3d41f041ef0e35d29",
+    "experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json": "3269a79bf813494be6679a5c45ca16b21d798f2cca7d1536b7dd5a6421f21536",
+    "experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json": "5c359b6044fda04f0e8ba2130483f4cd96e3e99d003c43fd330aaa2f952dd99a",
+    "experiments/post_training/bio_tasks/benchmark_tasks/core-bench.json": "f6c0719ee736d6e87734e9dff74a4447f5b5ff7c2e9756947b344a9b213964a8",
+    "experiments/post_training/bio_tasks/benchmark_tasks/discoverybench.json": "2e2b6156b4c9dbd7b39c3c1e5a2cf20baf0c924cb26ac1f457ffaecbecc9542d",
+    "experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json": "3b513073c4fa4af5de592a94215bb3947d2e7def5340b2ad88d5ccd92ebc82af",
+    "experiments/post_training/bio_tasks/benchmark_tasks/epibench.json": "4bc94b5110637fb11e97195bbbcd0ffb0a9e2c670c9299008deb62f657214c58",
+    "experiments/post_training/bio_tasks/benchmark_tasks/liu-single-cell.json": "d722bb44228cf72c04b1bfa6bc084f7aa2ebfb6b5218fe6614f6f19f349fbdc9",
+    "experiments/post_training/bio_tasks/benchmark_tasks/promptbio-bench.json": "f05fb3099d64276e9c983867b31f09775cd9dbf268348bf53249fd896cd4b80d",
+    "experiments/post_training/bio_tasks/benchmark_tasks/sc-heurekabench.json": "ed065ba6502918c4e83fdb5f870d4b54e7393bf34438d8c333390e148a17c0ef",
+    "experiments/post_training/bio_tasks/benchmark_tasks/scbench-long.json": "895ae27af87709a0ca31cf41edd75625a8c54b98aa38d94453fb24c3fe1dcd09",
+    "experiments/post_training/bio_tasks/benchmark_tasks/scbench.json": "b379b4d840d43afd612f6bd260e2b9312dc2658d8bf61d790b52e02b81b5a76d",
+    "experiments/post_training/bio_tasks/benchmark_tasks/scienceagentbench.json": "6f85405ff563ada594d6ea9744d4f71c0497f77bcdb197e99e3dd5843e7ac12a",
+    "experiments/post_training/bio_tasks/benchmark_tasks/scigym.json": "55f7ad165b748ca2422aeb57ebe52f27c3e349da78c201fe1d7544a3a1f50cef",
+    "experiments/post_training/bio_tasks/benchmark_tasks/spatialbench-long.json": "24dd539da4663c1df96568d5427757c6007a2e10b2930e2d32e2e8455b806bf9",
+    "experiments/post_training/bio_tasks/benchmark_tasks/spatialbench.json": "b138c8b13681528766f364a173cb22bcd38ebe568bf6be8200d51ddcba883b94",
+    "experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json": "576cbc70ee3173d5a58916de782f843235ffad688608c1771afc4faa241d2f38",
+    "experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json": "f254c9dad29559fa625f08d235d7ef9947cce4ff2b328c1ddc39aded9094c486",
+    "experiments/post_training/bio_tasks/benchmark_tasks/txbench-pp.json": "18deb4b9c36c4555d12e27c6e0f061df8b6deb73c7681ed3d011e31386c51af0",
+    "experiments/post_training/bio_tasks/benchmark_tasks/variantbench.json": "6d8d2de14109a7f188edeaed073cfcdf51ac67ba555debc9abae17be6cea3e67",
+    "experiments/post_training/bio_tasks/build.py": "9d01a1836c30b36a513eb6d64323c67f25f7bc1bfdf898e8daaba16133b3e8b3",
+    "experiments/post_training/bio_tasks/container_validation.json": "73db98d024aa04354b70e4d6e021ff8c18fdba94ec213d6c8a72c3b46c2556e8",
+    "experiments/post_training/bio_tasks/contract.py": "ef1814efc7897632a0b448c359c074d5255f8a24675e23d8268483e27b35dfc9",
+    "experiments/post_training/bio_tasks/data/1crn.cif.gz": "e1e74a7d90b33c3091fe4724f84ef46fe0f8b53809db0e4869c7a037510c468c",
+    "experiments/post_training/bio_tasks/data/1crn.pdb.gz": "69b42cc6d162011c9f3cea8a6c07c2fb40124ae46062c81c7efa4d5f0e5efc13",
+    "experiments/post_training/bio_tasks/data/1ubq.cif.gz": "0bcbea0555fb80fbe377086937940b58a6d53ab8668d628e8b5df186086f9348",
+    "experiments/post_training/bio_tasks/data/1ubq.pdb.gz": "c199abef72c83cda4760f3dc57a943fbbba51b154c69c459a440fa53baa2720b",
+    "experiments/post_training/bio_tasks/data/4hhb.cif.gz": "a77520e751acf78c4e67707582ec5a8bff08a84a532fc380a14f521a2f1346b4",
+    "experiments/post_training/bio_tasks/data/4hhb.pdb.gz": "1ab440874c602aee36e330f2cb8cbaf5a2e39b988cd5a1d63f7361ed1288e7e0",
+    "experiments/post_training/bio_tasks/data/cox1-accessions.tsv.gz": "d4a7c9cb12c62b140a0bf4c8aa48aa1a2e8b28493a472696e2a74b52162ada8a",
+    "experiments/post_training/bio_tasks/data/cox1-alignment.fa.gz": "41b79bf184e24fcc79446e61ee921f56fd244c19b59d81a3a9879741bf97215f",
+    "experiments/post_training/bio_tasks/data/cox1-tree-reference.json.gz": "bb9b32912545dfb9d0cd8c77376166c61270bc073e1a6bfbc75adcefce0146fd",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-cluster-reference.json.gz": "4457cc56e41cdd049499171f38c7e9eca596b2b69324d6ef2407ef85d897f73f",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-domain-reference.json.gz": "cb5f241d8e59835c26fe77f87005feca268ee863d1ba2cd866f9001e6ac761d2",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-metadata.tsv.gz": "9c9b9c0451677c0156f3249a2664c90182783089bd38935496f4f0005e70466e",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-proteins.fasta.gz": "e11df6b604362a3290f997ca3fd32af72de53b695a5263fc6cabb7be93a93aa1",
+    "experiments/post_training/bio_tasks/data/ecoli-k12-proteome.json.gz": "2910920c8a9141667cb92b59fd9c9e748107166bbb0e34af6dd5bb661b5a5d38",
+    "experiments/post_training/bio_tasks/data/err266411-block1-r1.fastq.gz": "b0f694323435b3df516976e928bb0bab3d3e2fcaf1e58d26ef86138850a69716",
+    "experiments/post_training/bio_tasks/data/err266411-block1-r2.fastq.gz": "88fe67319b2e7e051c1d7c6bed591e4be1843d61f5a7dbd246e09da75f401f72",
+    "experiments/post_training/bio_tasks/data/err266411-block2-r1.fastq.gz": "31c5ab6e3479f72839d0aa89630a436a040e26507330374593004c833c4362a5",
+    "experiments/post_training/bio_tasks/data/err266411-block2-r2.fastq.gz": "1744e841958a668cf7689f4dcb272d7069b75e711711f8aeefd41caee57e363f",
+    "experiments/post_training/bio_tasks/data/err266411-block3-r1.fastq.gz": "b5391c1ce05ba75a1bde6b381a774e08ee1504eebb15c9c26983a63277dc1c04",
+    "experiments/post_training/bio_tasks/data/err266411-block3-r2.fastq.gz": "fc5d7d43248d2ba4087c4e2e0225ed28dab527e884715ebffdd3c6dabc0616cc",
+    "experiments/post_training/bio_tasks/data/err266411-spread-r1.fastq.gz": "b618f1d3ad4232638f2286fa38b486533c2c3e67d409c0e29adf090306e69063",
+    "experiments/post_training/bio_tasks/data/err266411-spread-r2.fastq.gz": "1813922dc6f57e6060a8af64d93f6964fff1f0780e567f4cd9c74340e22038a7",
+    "experiments/post_training/bio_tasks/data/err266411-spread-sampling.json.gz": "0b92f9dc126374b07d5b5dd0126c51d5a7176c92ab268619b3d61d53a834a78e",
+    "experiments/post_training/bio_tasks/data/go-terms-3.22.0.tsv.gz": "df5b839e524a1352b41828103f3cf474ab79f5f22baedd21aa6f190e127b606e",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-1-2-results.tsv.gz": "78b30b6f27a63f1e2d34c0f80b6247498ab8371d0468d67b9d5e16963258e142",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-1-3-results.tsv.gz": "e525298b5d0f0c0b4fbaae8a7bd817fcdc6ca66ed73b91ca3f39069cfbba9f0b",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-2-1-results.tsv.gz": "50a2937acf23df4f735424f3812ba55bfbd213a69d44cf40686e132a4e3784cb",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-2-3-results.tsv.gz": "109b2e30c4269d0301e1ea39d50dcfd8c642bd25e56589e3358ef2e805563cc2",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-3-1-results.tsv.gz": "3d35867dd7892558cac3ea8a69faaa08670f7fcac3995f81e01ac4dc8511f564",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-3-2-results.tsv.gz": "a0f0dd7fafe69663bef096475683d9681c1ba6303e71576b5820c217e51932fe",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-dispersions.tsv.gz": "31722bb84365248e8c163998cdf6e77f4a74cd8b86c30c6db2639151e2679eeb",
+    "experiments/post_training/bio_tasks/data/gse60450-basal-size-factors.tsv.gz": "f70e8a7df43a957472a78b22a59d6be939e7529921745c4c6f44998cc3b7edb8",
+    "experiments/post_training/bio_tasks/data/gse60450-counts.txt.gz": "7ab2ad6376df1c6bf72618c26ef30b4dc206d8edb9e98e6e7fec291697b60a1c",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-1-2-results.tsv.gz": "f2f967f68a41b1ba6b65790f2e7cb61164c5fda10ef3a7d0565ec56e9803e377",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-1-3-results.tsv.gz": "af366721352c9d055ad0f2442a6993b67c866b4e9a2913205cae56bd497dfe56",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-2-1-results.tsv.gz": "bb68a6c1eb2927d43b6bc35ba4d537edc904e47b2f3f5a97fbb2916343093eff",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-2-3-results.tsv.gz": "abe96ff9ef0c84afdaee8863ecb2215e31df9bf384b527794065463ce8d994cb",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-3-1-results.tsv.gz": "423732e87c8ea2e546ca1ab5c3cca61830a15b03e6a84ef307abe85022ccb2f7",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-3-2-results.tsv.gz": "86d2ad9554d6dbe745700c23aadd70bdfa4d36fc37d421039c2c684f8fc3c577",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-dispersions.tsv.gz": "a5c9ddba2c14127ef9291adf0180c13177ec2f1205b3e88d694871b3fd00ab0e",
+    "experiments/post_training/bio_tasks/data/gse60450-luminal-size-factors.tsv.gz": "a671dd9f072f04d4a87dc6a056a6cc24d4c241343f8dbf1ea871020d4bca9b3f",
+    "experiments/post_training/bio_tasks/data/gse60450-population-interaction-basal-results.tsv.gz": "92c958020f7ab14699fcd403d3a277146d1f59909afbc4427d0bb9ddbeff6aed",
+    "experiments/post_training/bio_tasks/data/gse60450-population-interaction-contrasts.tsv.gz": "23fadf0d5506dc87f795a56573d68414e680a277b3b1c021d8bb9d8b7d642656",
+    "experiments/post_training/bio_tasks/data/gse60450-population-interaction-interaction-results.tsv.gz": "c1b657cc9ee2d84c697dcc7a08890d58577de8c0be8f355d80c5b0d24a69b80e",
+    "experiments/post_training/bio_tasks/data/gse60450-population-interaction-luminal-results.tsv.gz": "87aba838db69355346c46e1ad7b566a9295c36026831c25c0ce4d9fd6cfbb97c",
+    "experiments/post_training/bio_tasks/data/gse60450-population-interaction-size-factors.tsv.gz": "b2cdfad255c05b78549601ff5c6281aef293f6a6f7e3aca4ebeefe416f7c27ed",
+    "experiments/post_training/bio_tasks/data/gse60450-reference-metadata.json.gz": "d1ebe6c645115eb3d5b050230339b1d616bac0591dc016963b8bcde0aff92ed5",
+    "experiments/post_training/bio_tasks/data/gse60450-series.txt.gz": "0e9c986ffc5090ca79aa7ff3923eee3e822f10c17511688ccb30224f8e185b25",
+    "experiments/post_training/bio_tasks/data/gse60450-session-info.txt.gz": "5a9d02c7af685bb57fd7195649097cd838a6463c5f34dea62be74a0488eaecd8",
+    "experiments/post_training/bio_tasks/data/gse81682-qc-reference.json.gz": "b0868aaac2df1ba6251eba90466e31778f8a19e76920bf60ce17bd9d5e1dc81f",
+    "experiments/post_training/bio_tasks/data/mouse-go-bp-3.22.0.tsv.gz": "b232bcb236eb7218b04be966a4efe4feae264f89ccfaafe53e91f701a9fb3eea",
+    "experiments/post_training/bio_tasks/data/nc_001416-1-reference.json.gz": "544cc8db4fec8e961896683e1900af47f5c2b17d1b643149c6f0e38ddfb2666a",
+    "experiments/post_training/bio_tasks/data/nc_001416-1.fa.gz": "df6b4f55e21d90555b0dd09a7673717d4ce699e56a13d70ac4230d16db7ed820",
+    "experiments/post_training/bio_tasks/data/nc_001416-1.gb.gz": "022025ff73836148eb3029a28ec48797dd7b9ebe5c35089e19071c7c26e43e04",
+    "experiments/post_training/bio_tasks/data/nc_001416-1.gff3.gz": "079c692cee7220473e89ed31f12bf5085a7d20b4828bb3ad60206c78c65290b4",
+    "experiments/post_training/bio_tasks/data/nc_001422-1-reference.json.gz": "d9174a26db4ec54ff550693b47320839a8b76f5cabeed89fc995ad91c60bed83",
+    "experiments/post_training/bio_tasks/data/nc_001422-1.fa.gz": "084411f193e11c5056519aadc729c3d05491a487f8c5b06957aa59510baca862",
+    "experiments/post_training/bio_tasks/data/nc_001422-1.gb.gz": "cad091e48738214291f8db205b1701d9016030b36bf5c2c012fb5ead1093f077",
+    "experiments/post_training/bio_tasks/data/nc_001422-1.gff3.gz": "e350904ec14b586c83c95bdab81dcd9bc62ce6c10e68bc81d253a881f709c9f1",
+    "experiments/post_training/bio_tasks/data/nc_001604-1-reference.json.gz": "d760f6c2cd8e0492c48be1a93c81adfb34959618ada11a11b0eea88b1ae9da52",
+    "experiments/post_training/bio_tasks/data/nc_001604-1.fa.gz": "b83eea50c707d5d5fc0a3364bb415a23ea82456d0a1703977eb63c6884c52d99",
+    "experiments/post_training/bio_tasks/data/nc_001604-1.gb.gz": "b9ece1a62288fb3cdf21bef59b79b25a54b03f2ff113bd3f6dacd02d25719d97",
+    "experiments/post_training/bio_tasks/data/nc_001604-1.gff3.gz": "02a4fda81172c89f18f1e5b81f8f039049d974afacfb5ac42feca037fd1754f1",
+    "experiments/post_training/bio_tasks/data/pbc-cox-reference.json.gz": "87ddb13cf21c45e5aed4b6645e7fb0195a69e6d2eaf303fa58ce6d7ee54be1e5",
+    "experiments/post_training/bio_tasks/data/pbc-pbc.tsv.gz": "a89ea253723e54ad89be2c7458bba2db3d0784f0682c8672f2266cb837657728",
+    "experiments/post_training/bio_tasks/data/pbc-pbcseq.tsv.gz": "2f72efb43c9f615e1fee2fd0f59bcd514390728559a5f5c4ff1da42c1a7e2eeb",
+    "experiments/post_training/bio_tasks/data/pf00042.hmm.gz": "cb3c0dfa7fefd070439a273e8552c84f193b7dd4506c9aea150d191839e866c2",
+    "experiments/post_training/bio_tasks/data/pf00109.hmm.gz": "9a0f57f498c8fac7d6894860d8f4051706af4a33fa5ea49871059d7d64dd210d",
+    "experiments/post_training/bio_tasks/data/pf00115.hmm.gz": "b1d9cba22bc9492274533da73bc90f6cbf5ccde27b5354da063ae8adef7ee756",
+    "experiments/post_training/bio_tasks/data/uniprot-globins.json.gz": "3a8bc3220b15c438d4b5b14aa6ef52a54ae8f4074ed0bf483dc7a21b5ff35fc0",
+    "experiments/post_training/bio_tasks/data/uniprot-metazoan-cox1.json.gz": "529d5d42f48777c0fc286666c51ae68aaa9d54787fd025ec3c52a6e631df1586",
+    "experiments/post_training/bio_tasks/data_sources.json": "10a98a53fc0e2f0ebadcd39dfd5a2f13839f573f7a71f745354203202ed1adc1",
+    "experiments/post_training/bio_tasks/environments.py": "4bc3c9d341ae959673cef76e6fd0c90a63882f2b1cafb44e611586443d7cf915",
+    "experiments/post_training/bio_tasks/generators/__init__.py": "8d3b30b32e1bd05520cc3119e156b1985b9e96b60e55be72174dd170db985fb7",
+    "experiments/post_training/bio_tasks/generators/assays.py": "cced70385f171eaacc4fc241613f6a59b08b8078cbc013192d9ed6b305ec5ddc",
+    "experiments/post_training/bio_tasks/generators/assembly.py": "c9495206a0eba1d3ce3881a85366a54dfa17e05e327110f913932afda5db35aa",
+    "experiments/post_training/bio_tasks/generators/expression.py": "336b94b7b9dac0cb6c914ae0a32155778c2697987ad1c36716e07b59e5611eba",
+    "experiments/post_training/bio_tasks/generators/imaging.py": "7f8dadcb94f64790811fe1f84ff9e005b519a8a3497ce6a3ef92ff71e4b83224",
+    "experiments/post_training/bio_tasks/generators/intervals.py": "087570337ab103e45cbb5e738976f8dbb75a57328963252975b7e45da73f3927",
+    "experiments/post_training/bio_tasks/generators/networks.py": "fcf8fd58f1babc9d19d19ffdb0661b51b7ce04ebeefdce02911acf1910f52b12",
+    "experiments/post_training/bio_tasks/generators/phylogeny.py": "e0fec86328654993985abf9947583c8c29eba4591e6693ebf26d95cb592bc336",
+    "experiments/post_training/bio_tasks/generators/reads.py": "e86b0538a61eec74452378ec292909c46031bbfeaaa955ca8820e40c49d35878",
+    "experiments/post_training/bio_tasks/generators/real_assembly.py": "e509776f77a1bb0ca9d46e744b60f34561a738fbebe2d3cfab98ec1355201004",
+    "experiments/post_training/bio_tasks/generators/real_clinical.py": "cfb55726002c1cf59f8de8146accc4d7b5987dd2e2828f74f3ae8d6f15c30c1f",
+    "experiments/post_training/bio_tasks/generators/real_clusters.py": "e1165242a0b7faa612214e73603bfc1a1d1db2261ca2f4ba0f94dbda070dc4f9",
+    "experiments/post_training/bio_tasks/generators/real_domains.py": "c90e470d336fcf3bc0b546d1937a2d718d2ab4f2c8cb5a3ef15187451e4c19a9",
+    "experiments/post_training/bio_tasks/generators/real_expression.py": "b61856dd2dea89b4a71b2dc25fe40fb5d8eff73b873a5d19d0f3013cf5182824",
+    "experiments/post_training/bio_tasks/generators/real_genomes.py": "538ccadffe46a035f3a7ab60a80c2a23dc27d940fd23b16e1d6b61f2607b799f",
+    "experiments/post_training/bio_tasks/generators/real_interaction.py": "c379c46a105fba0385f24e6542dbd19fc21e22b380da7f8d782588208b3e3bb3",
+    "experiments/post_training/bio_tasks/generators/real_phylogeny.py": "4ba1cc9797bb504485903e9508641c4e7fa67f44e4794e9ada7308de6602be05",
+    "experiments/post_training/bio_tasks/generators/real_proteins.py": "e91b487a9292bf5a43ab8f5e0033a2a5cb7b3fddf0cbf96a7fd8e5d6a0f7f6de",
+    "experiments/post_training/bio_tasks/generators/real_reads.py": "b0368730f681de87eecc4dcfc96e52805c3f228a594cc7d283d58150819d642f",
+    "experiments/post_training/bio_tasks/generators/real_rnaseq.py": "91f636f04bdf60c8bbf72743fabde6651179b510df7219d400ed35d530eb86e8",
+    "experiments/post_training/bio_tasks/generators/real_singlecell.py": "23a087d9fd1133954d3cb2b699f5317d0e08e6c6e7fe67cf4be2f31fb3a04531",
+    "experiments/post_training/bio_tasks/generators/real_structure.py": "dcbf90cf3db312defbd7bb6c5b2311a77e5f1b898092b734752e0a47cc52ec0e",
+    "experiments/post_training/bio_tasks/generators/repo_formats.py": "73479478303d43c785844643bc230a19f00cad4341aec7efa8a33d7913ef3618",
+    "experiments/post_training/bio_tasks/generators/repo_sequences.py": "57291908d616d169c40f00b47c277a8522b3123307160812fcf43fc4bb672969",
+    "experiments/post_training/bio_tasks/generators/sequence.py": "4a12c015c57441944454cb596769b76708cd78194bdd3c29afb9dcd0121a1a67",
+    "experiments/post_training/bio_tasks/generators/statistics.py": "52aedb4351e38b1f1f16197fd5a36e6bfe89ada7f01d3e9c443e9f04164a7bae",
+    "experiments/post_training/bio_tasks/generators/structure.py": "a4780422ea99d4fad09c33ee7bbaf1a7588016af62493dd77fc4fcb42b6831d2",
+    "experiments/post_training/bio_tasks/generators/variants.py": "a18e398c0f870fff6c755f942a58a60f00c79f348625be569e82b3877163413e",
+    "experiments/post_training/bio_tasks/generators/workflow.py": "59af4728263b54ac9fbb140a226ea08711a5a4358f0a6855cb8adfa75929e9a6",
+    "experiments/post_training/bio_tasks/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+    "experiments/post_training/bio_tasks/native/__init__.py": "ffb6aac1a0b6c0176b57ba79e2ffe689a55ac44c03112784e2e65dfda136d8ae",
+    "experiments/post_training/bio_tasks/native/api.py": "2efc06b239f177b8ebaf05ec7fae7f4b7dbedc801a20ff7fa793bb08a888664b",
+    "experiments/post_training/bio_tasks/native/check.py": "5ff2afa652fc20013068192edee06edc9dab9d668f7c68c4b58f778d54728e60",
+    "experiments/post_training/bio_tasks/native/commands.py": "8492cb40fd5c40337f98736d7d97c19d952c19bfce65eeb7193bbdf4777db4eb",
+    "experiments/post_training/bio_tasks/native/htslib.py": "1001462702e9879c187121f4da469c29881b2411adfd500571f84dea82bb2731",
+    "experiments/post_training/bio_tasks/native/intervals.py": "ffefee6d01b5e7fc3295a6e891abd981bb3cb75bfbb1816e6a41eb127d81d81f",
+    "experiments/post_training/bio_tasks/native/mapping.py": "b29fbcdfa1ffb82d6d61f4f6ea17f5911d1c62b59aed62824491aaf29762eb09",
+    "experiments/post_training/bio_tasks/native/prepare.py": "09d6a869ca6bdac6484460dff8c412a1f89cf7fe9e8b47d912d7fd96ee69e612",
+    "experiments/post_training/bio_tasks/native/proteins.py": "cb7f302da03305d2b256d685c5d849bb3214190101ce9101233b3cb7b96f840a",
+    "experiments/post_training/bio_tasks/native/qc.py": "2813dfc04d3857a2b795170ce0e7b8315549549c9f58d71914d9e41168c3376a",
+    "experiments/post_training/bio_tasks/native/reads.py": "a563e412deba4e365174c88f8cce24d48678932ed527116a255055ea335d00c2",
+    "experiments/post_training/bio_tasks/native/real_reads.py": "8c16c69dd892c0a3bd0097735c2c2f40659f67848ba1abfcc0ec0a0740877d14",
+    "experiments/post_training/bio_tasks/native/remote.py": "530cabc32318cdc3017dbb4e5b7b5bc9d1076c9f2718713f8c0c3b1110dcc55e",
+    "experiments/post_training/bio_tasks/native/report.py": "0ac4f3784105252be838715fe2e987483b40b85cc47be9ddcb6507c3a80c312b",
+    "experiments/post_training/bio_tasks/native/variants.py": "13db9427dfbd1070e2a0ab46bcfe8329e56cd09eb8c5411935f4acdc0170bffb",
+    "experiments/post_training/bio_tasks/native/workflow.py": "e9e12f0d19282a4facd5ec59dac59e595657901601706ff38a027335556deb4c",
+    "experiments/post_training/bio_tasks/native_validation.json": "7e3a61946ababcdafd8a2518b1fc41af100ec1b412d50a773d1838c9e81311ca",
+    "experiments/post_training/bio_tasks/native_validation_runs/035bb3a42edc.json": "e25bee47ed821c39f57ee02694466eb72ca8a36356bef346ee6de1757fe34ddd",
+    "experiments/post_training/bio_tasks/native_validation_runs/40ed93019b52.json": "40ed93019b52f58d4b851be2c991f9d77afa872a84aa79110dc4ce17477d2d2f",
+    "experiments/post_training/bio_tasks/native_validation_runs/45a03d765a19.json": "c356825e53f7043e25ec111a8d5b135ace9e893b504c9a71a43db847d2bebfaf",
+    "experiments/post_training/bio_tasks/native_validation_runs/5436d9bd3811.json": "5436d9bd3811fdd30cb2b1419b42f8e4e660ee124799cef650ee481d1796c22c",
+    "experiments/post_training/bio_tasks/native_validation_runs/873bf55b231f.json": "ecceb6a141e85a8734ddad1790794e96739dff40e91acaff9aea1e075dc43ef6",
+    "experiments/post_training/bio_tasks/native_validation_runs/9d28dd15e082.json": "9d28dd15e082525c9e41d5548f3ac7737f15c67be4fce95aa8fb38205f3a4906",
+    "experiments/post_training/bio_tasks/native_validation_runs/a619ee74f5b8.json": "a619ee74f5b83667286a885d8eda388904c0b94f6dea139fed16531d8dc65ab5",
+    "experiments/post_training/bio_tasks/native_validation_runs/bcb69270b1f9.json": "62b17c5983f7e56e4e284cfc74c5ec97ed8852743e0335e60d0eb059d4bf3c15",
+    "experiments/post_training/bio_tasks/native_validation_runs/c87ce544187a.json": "15a2617330d09452fe0cff11c71f36bedcf40532ce30d83096a9107aa7c49934",
+    "experiments/post_training/bio_tasks/native_validation_runs/d0af51268717.json": "77cf62fce93feb12b27652f30719ccdacc2a3fb41e2fed37b6bc90bb5df05f40",
+    "experiments/post_training/bio_tasks/native_validation_runs/e2f647365a6f.json": "e2f647365a6f96b33f5970a0152e02eef4fe4bce433a744879ec3e7fb0af378f",
+    "experiments/post_training/bio_tasks/native_validation_runs/e39ec1c86f62.json": "e39ec1c86f62f3609bdddca5e36a16217776d4da7d9213ffa41fb6e42f17fd4c",
+    "experiments/post_training/bio_tasks/native_validation_runs/e6f1c7cbf14e.json": "e8e26303a41e7a330189d653109c83c12b7259d75ddcd4ec8cdab58f24df93ce",
+    "experiments/post_training/bio_tasks/native_validation_runs/f333b7fc62c2.json": "0dad0e6471bb882b48d7969cb00ae9219ef8413114c65557974526325b9d87d3",
+    "experiments/post_training/bio_tasks/native_validation_runs/f8dcfe3590ab.json": "0e13af34fb0f41d8d5efbfceae5d2a32dd5096429460f09e9beab9fd831e62b7",
+    "experiments/post_training/bio_tasks/native_validation_runs/fd1f4c3a31f1.json": "9a3ea2a1acb13d31a957ebded136984fc79a8e96cc4af1c18b2ebcf0b3c3a803",
+    "experiments/post_training/bio_tasks/oracle.py": "50c1efabfad1ff788d6a3a9d7b9511ad7fb22abe3d7cf663fdb070b699727905",
+    "experiments/post_training/bio_tasks/real_data.py": "a3969a0b5bd92223b13518940b23ba0fc481a03eba050bdc91f5aa8a30cf3b30",
+    "experiments/post_training/bio_tasks/recipe_types.py": "aea8dfc21c7bb98d78a363ad71870be1dbb1b5e61d6c96f5f9fde5fbee58456e",
+    "experiments/post_training/bio_tasks/recipes.py": "07c807dd349d6c47ebd9980d781d7b66acd901751d549c4688624405e37b9663",
+    "experiments/post_training/bio_tasks/repository_coverage.json": "87d1b733021eca5c1cd0f16671866328995b7a7a0252e3172b7f1314cc878d76",
+    "experiments/post_training/bio_tasks/solvers/__init__.py": "378156776fb8c8f53d5b372b17b3c435f130ceb833d295c7730e824df026c4c3",
+    "experiments/post_training/bio_tasks/solvers/assays.py": "2bf3e4b674d40e6b8f58c9dd18f2b2543289c8b526d7749f8fcb6ae05ed036b9",
+    "experiments/post_training/bio_tasks/solvers/assembly.py": "bd06b9c26d0d0d97db4c1f59862567e4e161c5e709aabe34bf099add76543b86",
+    "experiments/post_training/bio_tasks/solvers/expression.py": "9a8f735f2affcaf174060cfb766f71b0bf937cf25183d4a601d401cef4a9a0ec",
+    "experiments/post_training/bio_tasks/solvers/formats.py": "e87b9caa33ea05f8500f893374192107ab52ed9176fc6b340f245f32ddee300b",
+    "experiments/post_training/bio_tasks/solvers/imaging.py": "22e2cbde470a15502040c42143d9d55b841201b6401dc311b590780f871f27b4",
+    "experiments/post_training/bio_tasks/solvers/intervals.py": "97735065dbef6361ca78fd4a6feb816d8e41d9559b0a59583032e266f7d746e2",
+    "experiments/post_training/bio_tasks/solvers/networks.py": "c83b3d4777a9cdfdf64fc87a02737abd46d9cc6bd58caa4122eb8b2f2be8f696",
+    "experiments/post_training/bio_tasks/solvers/newick.py": "ca08023ed5a93fdf53f20850045667cdfe5a67a65ea75080f9c293886cceeda9",
+    "experiments/post_training/bio_tasks/solvers/phylogeny.py": "7fd3b7a95e1d37c13aaa96d97ee6ab3b68e19f468f3d63e2e56ecd2c8edfdda6",
+    "experiments/post_training/bio_tasks/solvers/protein_alignment.py": "c4d8e35450dffb433eff75aea3067abe9ffa976fe1c610dfe6891d1a1cdebaac",
+    "experiments/post_training/bio_tasks/solvers/reads.py": "578819803940df2b17a1ea155f3e10dabff29dfc6336646bf9803f6516cff993",
+    "experiments/post_training/bio_tasks/solvers/real_assembly.py": "947a7d00c8208d31cdccab4334deecde18dcbae08e5a01cbf3f39ba224b38faf",
+    "experiments/post_training/bio_tasks/solvers/real_clinical.py": "98b6309244b2e2e79c75c73555b0c9a543eb82c48450f6ed32d910778a59695a",
+    "experiments/post_training/bio_tasks/solvers/real_clusters.py": "dca414880eb0c1fccff5a97ea9c16351858c84dfe828a448916d7758d9d47b6d",
+    "experiments/post_training/bio_tasks/solvers/real_domains.py": "007f952c4c4b930b9469da93516138f6dc786a4e4d76e521abfe520ca3f916c4",
+    "experiments/post_training/bio_tasks/solvers/real_expression.py": "0322ba765f127b4aa4258ab54b841a8fb1252c721e6a42445ead57b6244db2e9",
+    "experiments/post_training/bio_tasks/solvers/real_genomes.py": "7b79783e92f9b6d2d1a94938d3c4ac68765c555bbdcd601ee63aa50d35eacc8a",
+    "experiments/post_training/bio_tasks/solvers/real_interaction.R": "8a11fc9f833364a6ba5f9ed3d71a67f64537f32e5bc2b3f833c5565008bf6e9c",
+    "experiments/post_training/bio_tasks/solvers/real_interaction.py": "86f0289f828a1af6d03a1cd45c3961b81d7d9b756f9c1af4d0684c6c08fecfbe",
+    "experiments/post_training/bio_tasks/solvers/real_phylogeny.py": "e6d54ca5054ddfdd4777fe352ba10b2c8e7a9a6a8cb1850dd6bfa2da9035eedb",
+    "experiments/post_training/bio_tasks/solvers/real_reads.py": "0fe51fe72a195e664035e092ce5b59ca79dfeee6f2178856b4719f4539ba12bf",
+    "experiments/post_training/bio_tasks/solvers/real_rnaseq.R": "ed4fb04a3e8a6a749864ec1fc1b78ab5745e6f255bae5941580191e328378c27",
+    "experiments/post_training/bio_tasks/solvers/real_rnaseq.py": "cb1858e1c10b3a0ddaac6e5d431dddbbbc4045393ce9049b83f7386141b6c553",
+    "experiments/post_training/bio_tasks/solvers/real_singlecell.py": "c205656843a4b99bb9a63029ba90d98a957bedbfb5894e9eb7a8714ea10c2a25",
+    "experiments/post_training/bio_tasks/solvers/real_structure.py": "c07161624caab55193c6de65497f5e22961b539067a1811ff49338a5fb5aa363",
+    "experiments/post_training/bio_tasks/solvers/repo_formats.py": "3dffec41f3dcd7324f63a806457003b73f4fa7271351a6ac547aa0456fdbf209",
+    "experiments/post_training/bio_tasks/solvers/repo_sequences.py": "2077926572303541cc9c41faf2d7a0b5089c9e43cc0e3a784e6ce22d7b2977c7",
+    "experiments/post_training/bio_tasks/solvers/sequence.py": "7a2ed57a95c66667b3cef0a3ea32109aa2882e0e367fb717aa3ebc928efb46b7",
+    "experiments/post_training/bio_tasks/solvers/statistics.py": "8332dbdb871e65e27f693156d91ec0e8df5baeb46a2c1d13c32818e9022fb37d",
+    "experiments/post_training/bio_tasks/solvers/structure.py": "05b798a21a041dc198834dad8fa28c998a1778c141d422ef96c4918ec2c9a36e",
+    "experiments/post_training/bio_tasks/solvers/variants.py": "cec78e2eb5efb757e7b67d41a45996b633dbc7d6de536613e8143629e478a591",
+    "experiments/post_training/bio_tasks/solvers/workflow.py": "bf845af66f18161f15575acc7376de38347952f40683d948ecaa143d63351a12",
+    "experiments/post_training/bio_tasks/source_inventory.json": "599c817f2a82826f8d78a48facb0f0ce7fe991170ded24b0e2bdd78b09afc8d1",
+    "experiments/post_training/bio_tasks/sources/deseq2-preparation.lock.json": "2b8a9401ae3801b295fd3983173d01da00b862d1c1802082fac50c03beb80709",
+    "experiments/post_training/bio_tasks/sources/phylogeny-preparation.lock.json": "31356d3b938be13a17e12119f555db3259a9d34012e26effd2e4ce3a9f57ef67",
+    "experiments/post_training/bio_tasks/sources/prepare_assembly.py": "a4e64e918b1fe3035d431b5823aafe711406eb96c14b18ce8bd0803e3f49c21f",
+    "experiments/post_training/bio_tasks/sources/prepare_clinical.py": "784926d8e0271cf9321a365ca15b89a9344350834bfaa5947b899e3063d1acce",
+    "experiments/post_training/bio_tasks/sources/prepare_clusters.py": "d1f77b96010bff298c094ba9db0a36e8ca09f40b3ebffd1fcc1d9f3580030c0f",
+    "experiments/post_training/bio_tasks/sources/prepare_cox1_trees.py": "0806b57978cf1b33f133d2aff4cb946194cd92559766fcf44210de06b4f3b330",
+    "experiments/post_training/bio_tasks/sources/prepare_deseq.R": "696c88370829e9b7895669ad8f8a20d1d54ba3743000e799a0dc134f14b66e8b",
+    "experiments/post_training/bio_tasks/sources/prepare_domains.py": "61ede48cdcbff49935d79d86440f8991f4112b127ad34a91c0c9cb297df418f8",
+    "experiments/post_training/bio_tasks/sources/prepare_genbank.py": "3e1cbb69cce30dc85198c6b68c0607d8b97151642e5e9ad165bc4c8b12393564",
+    "experiments/post_training/bio_tasks/sources/prepare_interaction.R": "125f0bb37ce585000af242d4fdc16407f9a406d449340c022bda03e00545f30b",
+    "experiments/post_training/bio_tasks/sources/prepare_phylogeny.py": "200d2f4a2cc5620176187c65be2414bf4b926f04ee95dfaea96f8caccf0c5c9d",
+    "experiments/post_training/bio_tasks/sources/prepare_proteins.py": "820503e29d040e2c42475d99437cbe7183ea730103a3e31d559ab8b0980b5ee8",
+    "experiments/post_training/bio_tasks/sources/prepare_reads.py": "0fecef9d540765d8024ac64b1df4ae741fac511a5457828699e51594e8848d48",
+    "experiments/post_training/bio_tasks/sources/prepare_singlecell.py": "f067a057b9bba83a95cbfece89988cc7d743d481adae38b9c8c92912afbf1bf2",
+    "experiments/post_training/bio_tasks/sources/prepare_singlecell_qc.py": "829d651a42ab325c1aedebbac4e20bf817e86675c091118f1f7ce3d17d69bc58",
+    "experiments/post_training/bio_tasks/sources/sample_ena_pairs.py": "529d3bcdc6c539a1a116545831a8916672e703b785abc47113cfcd9b8679d39c",
+    "experiments/post_training/bio_tasks/sources/scanpy-preparation.lock.json": "c89452bda066f0b1235bcce92453babbf0c7801ef9cd2bf333e1813bdc972d4a",
+    "experiments/post_training/bio_tasks/sources/validate_rnaseq.py": "e3728138275f3af8d0b76782ab39e0b245b2151fda3981497250917f997ac794",
+    "experiments/post_training/bio_tasks/sources/vendor_deseq.py": "5ce6979ae11eeeafdf8fe3209989942549f2ce84e6251261fec55b631f96cf17",
+    "experiments/post_training/bio_tasks/tests/conftest.py": "5e94464c7bd7ac064174a347dd40ca494fe5ca4135ebf825d3086e4008a086d0",
+    "experiments/post_training/bio_tasks/tests/test_alignment.py": "47cea7eb6dbe44c611d6b3c188f786ac03b1b130113e8cd140ecd4d65b656b67",
+    "experiments/post_training/bio_tasks/tests/test_bio_tasks.py": "04088c4c16af91f6ec6fe54c8d9308d339a7c58eee1a680fa71375b86bd296e3",
+    "experiments/post_training/bio_tasks/tests/test_clinical.py": "518e5b5cd2586288af4e5ba3eb0f9216d906e2502e9889d6ef08a3edab75f739",
+    "experiments/post_training/bio_tasks/tests/test_domains.py": "feb34d0ff3f921bcef042fedb849d21bbece96127579d73a0b5c60c0e4875713",
+    "experiments/post_training/bio_tasks/tests/test_environments.py": "a835a460e901d674c23ab699a184a8473af783c472db3286128aacf91d989633",
+    "experiments/post_training/bio_tasks/tests/test_matrix_artifacts.py": "8fe5ac579e375d520ab63bf8a0cf9988b444f26c4ff1bab3a8d2353b5a13c076",
+    "experiments/post_training/bio_tasks/tests/test_singlecell.py": "b5fc64b191f230f812d74e04c94f856dc5fa3533092dd88351787e1d8e4e2425",
+    "experiments/post_training/bio_tasks/tests/test_table_artifacts.py": "d7d191cb7b87cdd18f9e12513c1c16beb79f0ae365281435c5002e6277e07478",
+    "experiments/post_training/bio_tasks/tests/test_tree_artifacts.py": "48e2409fb033ce50ae83825fc824bb165f3cd89c0735030333aab4d73cec3c20",
+    "experiments/post_training/bio_tasks/tool_environments.json": "56dd7cbe39d25734585cba867035293d57dc3dd15bb23a6e31f5d02877671ede",
+    "lib/tasktrove-verify/src/tasktrove_verify/__init__.py": "79521278dbeceeac7a5684f2972df3070d760df0cb08d91d1a1913470eda0d02",
+    "lib/tasktrove-verify/src/tasktrove_verify/grade.py": "d9379923176dc2775462da5be33c8bacba55c99cb7518851085f6d6391ffdeb4",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/__init__.py": "207b72f73983eca0ce90517260d7992004921464d0e7e88402bbc9354d6580a6",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/extract.py": "d09ec7941888a42c3b8092966e24957cfe6ca24ac150e5099c22dc25418e55ef",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_csv.py": "048a1ec8892c17e9adcf16fea2f6cfd04441a01f0f4b67af9d080e63a93c949a",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_exact.py": "8a9e1a88bb6b60ea0d7413584542ad51d65b099dc72d06fead9dff2e831a694d",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_gotest.py": "1570d9514d6ae9daeb84fe2df936f4a063e3938dee1b5542fbae2fbde9758c02",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_ifeval.py": "cd87dd6ecfdce218c659751ad59c308e7c999a9b13bc857d43a9f68f49ff2484",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_json_schema.py": "6419bbe5a52f35c55d82a308f0ad31534f1efcbf064434ef7c4c7bdbd7534f15",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_judge.py": "406da1eeed4525172f0f2475fbeffd2e1ad6a63eb4ed6f77111eab6165736d4b",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_junit.py": "f7a0c3d7e6642b72dc1d5b3d7b0806b40ec7c5cb4a43f578f0d744fbce25f874",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_math.py": "4f9c2741f7b1c9f483b3c43ad01604a1aaa9d903398f53898e2a86284edbb6f2",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_mcq.py": "708d41ec19033f0b477ccc6a703172248757e2b15fc748a8d81739750dbe0289",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_pytest.py": "e2ff2836a5364811c7d9f074152e8a7bcc1d36a85942843c285f6b5087bfb004",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_reasoning_gym.py": "57e507046975f40549b5b458ce7fb5e5215c29bcfeee234bef711b464e44db8c",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_script.py": "f802d8d6ff4cc71073a0b563eca61f662820b337632d3203d564899d9899eb99",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_stdio.py": "81dde171838d0e6045f1cc45c9cddda36beb7b4c044bace1677a6ce3e8a77efe",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/grade_xml.py": "fbaad7bff0e440fee62f9bdcff2cdf833cf6b63bc8b9105e30a3f5f88bb61536",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/ifeval.py": "bb2b0215144e6901ae2c58dc75c407df0d5735732a007267f93502778c2fd248",
+    "lib/tasktrove-verify/src/tasktrove_verify/modes/run.py": "ef6ca11ee17cdf58ec5b4a4ca7d2c0db41b211784dc185c65930f5f154423613",
+    "lib/tasktrove-verify/src/tasktrove_verify/spec.py": "d3f28347ed0c84b3409b032d0d70f2be69e1e28db81864b9648b716bfd052535"
+  },
+  "scope": "Native assembly of 12,000 observed pairs and complete contig/reference reconciliation. No model calls.",
+  "checks": [
+    {
+      "repository_index": 27,
+      "repository": "SPAdes",
+      "recipe": "real-phix-assembly",
+      "status": "passed",
+      "execution": "completed",
+      "cases": [
+        {
+          "case_id": "ERR266411-systematic-assembly",
+          "recipe": "real-phix-assembly",
+          "execution": "completed",
+          "input_artifacts": {
+            "sampling.json": {
+              "bytes": 143597,
+              "sha256": "a40126d66f8630a94d720259fc47ea14a402e5679f64030fa973da863e22d1db"
+            },
+            "query.json": {
+              "bytes": 44,
+              "sha256": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032"
+            },
+            "reference.fa": {
+              "bytes": 5476,
+              "sha256": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85"
+            },
+            "reads_R2.fastq": {
+              "bytes": 3088099,
+              "sha256": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801"
+            },
+            "reads_R1.fastq": {
+              "bytes": 3088099,
+              "sha256": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625"
+            }
+          },
+          "query": {
+            "kmers": [
+              21,
+              33,
+              55
+            ]
+          },
+          "summary": {
+            "assembly": {
+              "read_pairs": 12000,
+              "input_bases": 2400000,
+              "contigs": 4,
+              "assembled_bases": 6364,
+              "reference_length": 5386,
+              "n50": 5441,
+              "l50": 1,
+              "ng50": 5441,
+              "lg50": 1,
+              "aligned_contigs": 1,
+              "reference_covered_bases": 5386,
+              "reference_uncovered_bases": 0,
+              "multiply_covered_reference_bases": 55,
+              "aligned_query_bases": 5441,
+              "matches": 5436,
+              "substitutions": 5,
+              "inserted_bases": 0,
+              "deleted_bases": 0
+            }
+          },
+          "commands": {
+            "reference": [
+              {
+                "argv": [
+                  "spades.py",
+                  "--version"
+                ],
+                "exit_code": 0,
+                "stdout": "spades-version.txt",
+                "stderr": "spades-version.txt.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.16543382201052736
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "--version"
+                ],
+                "exit_code": 0,
+                "stdout": "minimap2-version.txt",
+                "stderr": "minimap2-version.txt.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.0024307800049427897
+              },
+              {
+                "argv": [
+                  "spades.py",
+                  "--isolate",
+                  "--only-assembler",
+                  "-1",
+                  "/iris/outputs/inputs/reads_R1.fastq",
+                  "-2",
+                  "/iris/outputs/inputs/reads_R2.fastq",
+                  "-k",
+                  "21,33,55",
+                  "-t",
+                  "1",
+                  "-m",
+                  "4",
+                  "-o",
+                  "/iris/outputs/reference/native-assembly"
+                ],
+                "exit_code": 0,
+                "stdout": "spades.stdout",
+                "stderr": "spades.stdout.stderr",
+                "timeout_seconds": 900,
+                "elapsed_seconds": 3.4705064989975654
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "-x",
+                  "asm5",
+                  "--secondary=no",
+                  "--eqx",
+                  "-c",
+                  "--cs=long",
+                  "-t",
+                  "1",
+                  "/iris/outputs/inputs/reference.fa",
+                  "/iris/outputs/reference/contigs.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "native-alignments.paf",
+                "stderr": "native-alignments.paf.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008412289011175744
+              }
+            ],
+            "oracle": [
+              {
+                "argv": [
+                  "spades.py",
+                  "-o",
+                  "/iris/outputs/oracle/assembly-oracle-1faq5eii/spades",
+                  "-1",
+                  "/iris/outputs/inputs/reads_R1.fastq",
+                  "-2",
+                  "/iris/outputs/inputs/reads_R2.fastq",
+                  "--only-assembler",
+                  "--isolate",
+                  "-k",
+                  "21,33,55",
+                  "-t",
+                  "1",
+                  "-m",
+                  "4"
+                ],
+                "exit_code": 0,
+                "stdout": "spades.stdout",
+                "stderr": "spades.stdout.stderr",
+                "timeout_seconds": 900,
+                "elapsed_seconds": 3.419094023993239
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "-x",
+                  "asm5",
+                  "-t",
+                  "1",
+                  "-c",
+                  "--eqx",
+                  "--cs=long",
+                  "--secondary=no",
+                  "/iris/outputs/inputs/reference.fa",
+                  "/iris/outputs/oracle/contigs.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "native-alignments.paf",
+                "stderr": "native-alignments.paf.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008268638994195499
+              }
+            ]
+          },
+          "artifacts": {
+            "reference/alignments.tsv": {
+              "bytes": 485,
+              "sha256": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53"
+            },
+            "reference/answer.json": {
+              "bytes": 497,
+              "sha256": "caaae0e769159cde26325cbb646d6fce7448735018c5bfc4e205de18b779f02c"
+            },
+            "reference/commands.jsonl": {
+              "bytes": 1084,
+              "sha256": "252925bd9582c87b856e695ca5e1e6101d01b39aa36451b1c621ec95845244bf"
+            },
+            "reference/contig_metrics.tsv": {
+              "bytes": 249,
+              "sha256": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397"
+            },
+            "reference/contigs.fa": {
+              "bytes": 6601,
+              "sha256": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab"
+            },
+            "reference/minimap2-version.txt": {
+              "bytes": 11,
+              "sha256": "741e4fe85b9e0667151c8d350b0f052ea74020babeee9462f35a8964ae53243a"
+            },
+            "reference/minimap2-version.txt.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/native-alignments.paf": {
+              "bytes": 5869,
+              "sha256": "e39239dd4842a5445f72897322f924e2fd5fa768c04a79a4efece94c35f02779"
+            },
+            "reference/native-alignments.paf.stderr": {
+              "bytes": 714,
+              "sha256": "0b385a305004fc8b7aab99c2ac546a8702b8312a44b105452e1971f0105f8d49"
+            },
+            "reference/read_qc.tsv": {
+              "bytes": 115,
+              "sha256": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3"
+            },
+            "reference/reference.json.gz": {
+              "bytes": 17849,
+              "sha256": "c36ee87924fcdeea730d120656f56bedeca7fb4df51624cee93964e5395497f9"
+            },
+            "reference/reference_coverage.tsv": {
+              "bytes": 101240,
+              "sha256": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce"
+            },
+            "reference/spades-version.txt": {
+              "bytes": 31,
+              "sha256": "a170f751b2bb8213242f57adcf53e40a8dc8a4ff25c249206a65402815d8a2de"
+            },
+            "reference/spades-version.txt.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/spades.stdout": {
+              "bytes": 102245,
+              "sha256": "d68d60259ad7722209564f8a56fcb4294e34139ddabbc525b907d3f5cb9af85f"
+            },
+            "reference/spades.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/alignments.tsv": {
+              "bytes": 485,
+              "sha256": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53"
+            },
+            "oracle/answer.json": {
+              "bytes": 413,
+              "sha256": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142"
+            },
+            "oracle/commands.jsonl": {
+              "bytes": 712,
+              "sha256": "c6a7d2d691160b5105ea2c8a277c1f04877aa1c55693322ba34ca6a7839e3793"
+            },
+            "oracle/contig_metrics.tsv": {
+              "bytes": 249,
+              "sha256": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397"
+            },
+            "oracle/contigs.fa": {
+              "bytes": 6601,
+              "sha256": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab"
+            },
+            "oracle/native-alignments.paf": {
+              "bytes": 5869,
+              "sha256": "e39239dd4842a5445f72897322f924e2fd5fa768c04a79a4efece94c35f02779"
+            },
+            "oracle/native-alignments.paf.stderr": {
+              "bytes": 711,
+              "sha256": "6c4588bada7b183dc4bb50c01e5efbfbd53eca4c4d92887dbb12f8d70bc4ec0b"
+            },
+            "oracle/read_qc.tsv": {
+              "bytes": 115,
+              "sha256": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3"
+            },
+            "oracle/reference.json": {
+              "bytes": 218676,
+              "sha256": "3045107e02f7a869692e713088c189c9bf6d3435c298eae055dca9b4684da732"
+            },
+            "oracle/reference_coverage.tsv": {
+              "bytes": 101240,
+              "sha256": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce"
+            },
+            "oracle/spades.stdout": {
+              "bytes": 103038,
+              "sha256": "37826cd348da2dca84cf752c170a8f71da85f005696e194c37bf1ecaf17b751f"
+            },
+            "oracle/spades.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/validation.json": {
+              "bytes": 1675,
+              "sha256": "f4fcfa061da1c1a1291dd456b628a43eb39000ab1cfa22b55ea3091bef7dea11"
+            }
+          },
+          "verification": {
+            "reference": 1.0,
+            "oracle": 1.0,
+            "missing:contigs.fa": 0.0,
+            "changed_residue": 0.0,
+            "duplicated_fasta": 0.0,
+            "missing:read_qc.tsv": 0.0,
+            "missing_row:read_qc.tsv": 0.0,
+            "duplicated_row:read_qc.tsv": 0.0,
+            "changed_value:read_qc.tsv": 0.0,
+            "missing:contig_metrics.tsv": 0.0,
+            "missing_row:contig_metrics.tsv": 0.0,
+            "duplicated_row:contig_metrics.tsv": 0.0,
+            "changed_value:contig_metrics.tsv": 0.0,
+            "missing:alignments.tsv": 0.0,
+            "missing_row:alignments.tsv": 0.0,
+            "duplicated_row:alignments.tsv": 0.0,
+            "changed_value:alignments.tsv": 0.0,
+            "missing:reference_coverage.tsv": 0.0,
+            "missing_row:reference_coverage.tsv": 0.0,
+            "duplicated_row:reference_coverage.tsv": 0.0,
+            "changed_value:reference_coverage.tsv": 0.0
+          },
+          "resources": {
+            "reference": {
+              "module": "experiments.post_training.bio_tasks.sources.prepare_assembly",
+              "status": "passed",
+              "seconds": 4.516776003001723,
+              "parent_peak_rss_kib": 51840,
+              "child_peak_rss_kib": 53532,
+              "finished_at": "2026-09-24T11:41:41.395965+00:00"
+            },
+            "oracle": {
+              "module": "validate",
+              "status": "passed",
+              "seconds": 4.663212667001062,
+              "parent_peak_rss_kib": 42940,
+              "child_peak_rss_kib": 53504,
+              "finished_at": "2026-09-24T11:41:46.167417+00:00"
+            }
+          }
+        }
+      ],
+      "environment": {
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "md5": "a9f577daf3de00bca7c3c76c0ecbd1de",
+            "size": 28948
+          },
+          {
+            "name": "bzip2",
+            "version": "1.0.8",
+            "build": "hda65f42_10",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+            "sha256": "1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96",
+            "md5": "e675fabcf81499adc7edf58124fb1e01",
+            "size": 257808
+          },
+          {
+            "name": "ca-certificates",
+            "version": "2026.7.22",
+            "build": "hbd8a1cb_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+            "sha256": "0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6",
+            "md5": "0f51e2391ade309db462a55611263e9c",
+            "size": 131780
+          },
+          {
+            "name": "icu",
+            "version": "78.3",
+            "build": "py310h44b86e0_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+            "sha256": "9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432",
+            "md5": "72a381cbad04f24b1c2a43ef707f45b4",
+            "size": 14459115
+          },
+          {
+            "name": "k8",
+            "version": "1.2",
+            "build": "he8db53b_6",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/k8-1.2-he8db53b_6.tar.bz2",
+            "sha256": "35143205ef4684f417f047c649aea110e0ceb1d6891001511dbceb2dea08be3d",
+            "md5": "6c44663f234185cc54d7a90c4d7a555a",
+            "size": 7535090
+          },
+          {
+            "name": "kernel-headers_linux-64",
+            "version": "5.14.0",
+            "build": "he073ed8_3",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-64-5.14.0-he073ed8_3.conda",
+            "sha256": "c4d973dd80ab10028b3e4c58c1c6d8f437bfeaf6069dafb1130dabc550e9caf4",
+            "md5": "1e453742ed8f6b4250c66be1dd6ba4fe",
+            "size": 1410267
+          },
+          {
+            "name": "ld_impl_linux-64",
+            "version": "2.46.1",
+            "build": "default_hbd61a6d_102",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+            "sha256": "27d83f1188cd19bcb7754a078b3fa7f4cfb8527f8eb2fde54dd01fc529d1adec",
+            "md5": "449500f2c089da11c40f5c21312e3e07",
+            "size": 745303
+          },
+          {
+            "name": "libexpat",
+            "version": "2.8.4",
+            "build": "hd2095e1_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+            "sha256": "2f5e90b621f7bf64c35d5c972bd85a645555d82404130569149a129dcbc8b8dd",
+            "md5": "a77b44d6cbaad97f3ad050ab35fad55a",
+            "size": 77595
+          },
+          {
+            "name": "libffi",
+            "version": "3.7.0",
+            "build": "h81df57d_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+            "sha256": "c8c7583ef063bc3c430f1d48298e5ad24f796a35c22ed5b14183325825a61106",
+            "md5": "6525a0b06aa4fd390795f0740636a9dd",
+            "size": 68004
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "md5": "3b62b92f0f082b67c59618ebf07617a7",
+            "size": 1057064
+          },
+          {
+            "name": "libgcc-ng",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-ng-16.2.0-h69a702a_5.conda",
+            "sha256": "d298972e17697a5e96806d5f2c151c53efd0afa0ef10db5d6757a5b186817219",
+            "md5": "e7c34906139296448e3554fafa3dbec2",
+            "size": 28535
+          },
+          {
+            "name": "libgfortran",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran-16.2.0-h69a702a_5.conda",
+            "sha256": "7e694578cbabd46251d7a069d89da6479c5edd962d78bbc66a847c1b722a8365",
+            "md5": "34ddf93e56ee44924ce76a614e5fb379",
+            "size": 28520
+          },
+          {
+            "name": "libgfortran-ng",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran-ng-16.2.0-h69a702a_5.conda",
+            "sha256": "0e1634874f61e2dcf1f68bea872d7ca6085351e7c6027e2b0a8ff8ade63fe41f",
+            "md5": "3b3b5b0f484a99d3ed9c9e563ea90d34",
+            "size": 28530
+          },
+          {
+            "name": "libgfortran5",
+            "version": "16.2.0",
+            "build": "h6b99dfc_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran5-16.2.0-h6b99dfc_5.conda",
+            "sha256": "cc767363e3148a18d3a3015eeaed722bbf8ca0acc3a29157df2965e97caa9803",
+            "md5": "a7eb3f9540094247ec8a2fa800cf9bbf",
+            "size": 2528103
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "md5": "af44890f8a2beefd3a83805a59a65014",
+            "size": 641644
+          },
+          {
+            "name": "liblzma",
+            "version": "5.8.3",
+            "build": "hb03c661_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+            "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+            "md5": "1390b7c5ac0b1d8e447bc5efa6d3c8c2",
+            "size": 112995
+          },
+          {
+            "name": "libmpdec",
+            "version": "4.0.0",
+            "build": "hb03c661_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda",
+            "sha256": "46820b4a835e175940ae20bec00fdddaff804cda27a1408ab1b95e77a2196437",
+            "md5": "fcfed1dc5053eb1901b66e7b1fc32588",
+            "size": 92759
+          },
+          {
+            "name": "libpython",
+            "version": "3.14.7",
+            "build": "hdc7f604_106_cp314",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.7-hdc7f604_106_cp314.conda",
+            "sha256": "5f879892bd439c3d94f4a97b06c214b9a19c4b92f74d84f0305c6ca1b2b239b2",
+            "md5": "28af2158bb8dbb62e55b0af3b44f9d4a",
+            "size": 10520530
+          },
+          {
+            "name": "libsqlite",
+            "version": "3.53.4",
+            "build": "h13e7031_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+            "sha256": "f20d70da54e5b31dd4a51fb1efeaafafd5ab6dd8d7ac9d1438eaa2526ac4ed3d",
+            "md5": "e72bbec309c2b0f37823ee7d4fabfcd3",
+            "size": 974348
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "md5": "75b43a2912a0354204696708e4f34b8d",
+            "size": 6618916
+          },
+          {
+            "name": "libstdcxx-ng",
+            "version": "16.2.0",
+            "build": "hdf11a46_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-ng-16.2.0-hdf11a46_5.conda",
+            "sha256": "855cee8f4b7abe06dc5918a66e0009492964926d5f5d6a033438dd6cab4e91e4",
+            "md5": "c37fb00cb15b16cf1601914d68a509ea",
+            "size": 28561
+          },
+          {
+            "name": "libuuid",
+            "version": "2.42.4",
+            "build": "hcfc3c73_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+            "sha256": "f34b8d1de9a2bf62476d8608057d9b8a918d97444236dc53a47128f2fae79041",
+            "md5": "54a948337e66706380ff24d6b5fde63f",
+            "size": 34442
+          },
+          {
+            "name": "libzlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+            "md5": "0de0122d9570a8ab637c6b73db268389",
+            "size": 63713
+          },
+          {
+            "name": "minimap2",
+            "version": "2.31",
+            "build": "h118bc1c_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/minimap2-2.31-h118bc1c_0.conda",
+            "sha256": "344fe7b5328ff635dc2b8914b05e003053e136446e456b81e1b4b5fca1a9cedd",
+            "md5": "9134876c84df5b48841bfe743cfd7b67",
+            "size": 1041274
+          },
+          {
+            "name": "mpi",
+            "version": "1.0",
+            "build": "openmpi",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/mpi-1.0-openmpi.tar.bz2",
+            "sha256": "54cf44ee2c122bce206f834a825af06e3b14fc4fd58c968ae9329715cc281d1e",
+            "md5": "1dcc49e16749ff79ba2194fa5d4ca5e7",
+            "size": 4204
+          },
+          {
+            "name": "ncurses",
+            "version": "6.6",
+            "build": "hdb14827_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+            "sha256": "5d46557214ed184381dafe835b7c94a474a1c3b307a08a250b1ea4779b44ffb3",
+            "md5": "ee6c0cd80a60961a1f48aa3e0b91f986",
+            "size": 911196
+          },
+          {
+            "name": "openmpi",
+            "version": "4.1.6",
+            "build": "hc5af2df_101",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openmpi-4.1.6-hc5af2df_101.conda",
+            "sha256": "f0769dd891e1735be4606ec8643951e5cbca199f774e58c7d933f70a70134ce4",
+            "md5": "f9a2ad0088ee38f396350515fa37d243",
+            "size": 4069632
+          },
+          {
+            "name": "openssl",
+            "version": "3.6.4",
+            "build": "h781a0a9_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+            "sha256": "4747b2d6a8336f52343bceb8a1ebf41a9e6e665b9d2e3f989972de53a310599e",
+            "md5": "16e3034a330cc625f2c685edec60cf4e",
+            "size": 3202955
+          },
+          {
+            "name": "pigz",
+            "version": "2.8",
+            "build": "h421ea60_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/pigz-2.8-h421ea60_2.conda",
+            "sha256": "3d535f86f6eb4243cc47c51a3694e01bfc1aa72d80d9789c053f0154b531f974",
+            "md5": "3d71c0550440051500a14e13f691580d",
+            "size": 81228
+          },
+          {
+            "name": "pip",
+            "version": "26.2.1",
+            "build": "pyh145f28c_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh145f28c_0.conda",
+            "sha256": "0f7021cfb3ff454c91a5e28e1f5060906a52c6d1cde3f879a7d03ac33c28b1c3",
+            "md5": "573cb3ed111004230ed3de650653cd4d",
+            "size": 1198163
+          },
+          {
+            "name": "python",
+            "version": "3.14.7",
+            "build": "hcd007b5_106_cp314",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.14.7-hcd007b5_106_cp314.conda",
+            "sha256": "4cd05407d6b07d00fd5b6cc78bd2f60ae5e21f777eb26ead82be2e3751c610a1",
+            "md5": "56ee91e118243e46bfc0c41e4030d354",
+            "size": 26484459
+          },
+          {
+            "name": "python_abi",
+            "version": "3.14",
+            "build": "9_cp314",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda",
+            "sha256": "e7f8e965bbfb98e08feb2365cacdad8bb218fa5b5a0a2752f747287f425f213c",
+            "md5": "350d89b50d7de805abf2e63e29dee451",
+            "size": 6791
+          },
+          {
+            "name": "readline",
+            "version": "8.3",
+            "build": "hd6e31c0_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+            "sha256": "01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d",
+            "md5": "69c01c781e7c8190bbdaf79e3848c5ca",
+            "size": 348899
+          },
+          {
+            "name": "spades",
+            "version": "4.3.0",
+            "build": "hde4eca7_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/spades-4.3.0-hde4eca7_1.conda",
+            "sha256": "85e0652e6c0bb1ff888ea8eb54a9a914adc91dec98c2594bdc4707047477a2e3",
+            "md5": "63f079a3fb187cb854e11e90d02d7456",
+            "size": 18750876
+          },
+          {
+            "name": "sysroot_linux-64",
+            "version": "2.34",
+            "build": "h087de78_3",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.34-h087de78_3.conda",
+            "sha256": "08c50c314b331730eeb8f87c39a45e5426a5463e078392ab283e2552d753443e",
+            "md5": "b04e3a97151611d6a35c8c068b2a03a2",
+            "size": 40779381
+          },
+          {
+            "name": "tk",
+            "version": "8.6.13",
+            "build": "noxft_h1df4ec4_4",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+            "sha256": "a1a241d172c1ccab067ba245206dd048bc3c2d1b84504b53c9468e99adfc16a1",
+            "md5": "676a2f9b1c4fcf57b70aa5c65f6c60d0",
+            "size": 3566806
+          },
+          {
+            "name": "tzdata",
+            "version": "2026c",
+            "build": "h151e31d_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+            "sha256": "b928c30ddcb0e3f544c6eade8352737e6e610e263276b90232db6a578ef899d8",
+            "md5": "fcb489df604d100968b737f2cb6076c6",
+            "size": 118849
+          },
+          {
+            "name": "zlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "16080a1c7724f7d25727cdc23c7658e0cec2db52448c1dc0c33467ee2c6e1c62",
+            "md5": "6acb86426229f96f93e5468d1df3a5e8",
+            "size": 96132
+          },
+          {
+            "name": "zstd",
+            "version": "1.5.7",
+            "build": "hb78ec9c_7",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda",
+            "sha256": "47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+            "md5": "aa459086047c0e5e27023ab19f8cb86a",
+            "size": 601301
+          }
+        ],
+        "runtime_lock_sha256": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+        "versions": {
+          "spades": "SPAdes genome assembler v4.3.0",
+          "minimap2": "2.31-r1302"
+        },
+        "build_note": "SPAdes 4.3.0 hde4eca7_1 and minimap2 2.31 h118bc1c_0; complete checksum-locked Conda environment; one execution thread."
+      },
+      "limits": "One systematically sampled observed PhiX run. Complete native contigs are retained, including unaligned contigs; the deposited genome is a comparator, not assembly truth. Reference and oracle share pinned assembly/alignment engines with independent CIGAR versus long-cs nucleotide measurements. Packaged-task and Harbor checks and broad benchmark-lineage review remain pending."
+    },
+    {
+      "repository_index": 13,
+      "repository": "minimap2",
+      "recipe": "real-phix-assembly",
+      "status": "passed",
+      "execution": "completed",
+      "cases": [
+        {
+          "case_id": "ERR266411-systematic-assembly",
+          "recipe": "real-phix-assembly",
+          "execution": "completed",
+          "input_artifacts": {
+            "sampling.json": {
+              "bytes": 143597,
+              "sha256": "a40126d66f8630a94d720259fc47ea14a402e5679f64030fa973da863e22d1db"
+            },
+            "query.json": {
+              "bytes": 44,
+              "sha256": "76cf097fd85cb7bcb799ec41d0b3d750db7825ccc8bf6ca9927fcaa2f72f2032"
+            },
+            "reference.fa": {
+              "bytes": 5476,
+              "sha256": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85"
+            },
+            "reads_R2.fastq": {
+              "bytes": 3088099,
+              "sha256": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801"
+            },
+            "reads_R1.fastq": {
+              "bytes": 3088099,
+              "sha256": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625"
+            }
+          },
+          "query": {
+            "kmers": [
+              21,
+              33,
+              55
+            ]
+          },
+          "summary": {
+            "assembly": {
+              "read_pairs": 12000,
+              "input_bases": 2400000,
+              "contigs": 4,
+              "assembled_bases": 6364,
+              "reference_length": 5386,
+              "n50": 5441,
+              "l50": 1,
+              "ng50": 5441,
+              "lg50": 1,
+              "aligned_contigs": 1,
+              "reference_covered_bases": 5386,
+              "reference_uncovered_bases": 0,
+              "multiply_covered_reference_bases": 55,
+              "aligned_query_bases": 5441,
+              "matches": 5436,
+              "substitutions": 5,
+              "inserted_bases": 0,
+              "deleted_bases": 0
+            }
+          },
+          "commands": {
+            "reference": [
+              {
+                "argv": [
+                  "spades.py",
+                  "--version"
+                ],
+                "exit_code": 0,
+                "stdout": "spades-version.txt",
+                "stderr": "spades-version.txt.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.16543382201052736
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "--version"
+                ],
+                "exit_code": 0,
+                "stdout": "minimap2-version.txt",
+                "stderr": "minimap2-version.txt.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.0024307800049427897
+              },
+              {
+                "argv": [
+                  "spades.py",
+                  "--isolate",
+                  "--only-assembler",
+                  "-1",
+                  "/iris/outputs/inputs/reads_R1.fastq",
+                  "-2",
+                  "/iris/outputs/inputs/reads_R2.fastq",
+                  "-k",
+                  "21,33,55",
+                  "-t",
+                  "1",
+                  "-m",
+                  "4",
+                  "-o",
+                  "/iris/outputs/reference/native-assembly"
+                ],
+                "exit_code": 0,
+                "stdout": "spades.stdout",
+                "stderr": "spades.stdout.stderr",
+                "timeout_seconds": 900,
+                "elapsed_seconds": 3.4705064989975654
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "-x",
+                  "asm5",
+                  "--secondary=no",
+                  "--eqx",
+                  "-c",
+                  "--cs=long",
+                  "-t",
+                  "1",
+                  "/iris/outputs/inputs/reference.fa",
+                  "/iris/outputs/reference/contigs.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "native-alignments.paf",
+                "stderr": "native-alignments.paf.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008412289011175744
+              }
+            ],
+            "oracle": [
+              {
+                "argv": [
+                  "spades.py",
+                  "-o",
+                  "/iris/outputs/oracle/assembly-oracle-1faq5eii/spades",
+                  "-1",
+                  "/iris/outputs/inputs/reads_R1.fastq",
+                  "-2",
+                  "/iris/outputs/inputs/reads_R2.fastq",
+                  "--only-assembler",
+                  "--isolate",
+                  "-k",
+                  "21,33,55",
+                  "-t",
+                  "1",
+                  "-m",
+                  "4"
+                ],
+                "exit_code": 0,
+                "stdout": "spades.stdout",
+                "stderr": "spades.stdout.stderr",
+                "timeout_seconds": 900,
+                "elapsed_seconds": 3.419094023993239
+              },
+              {
+                "argv": [
+                  "minimap2",
+                  "-x",
+                  "asm5",
+                  "-t",
+                  "1",
+                  "-c",
+                  "--eqx",
+                  "--cs=long",
+                  "--secondary=no",
+                  "/iris/outputs/inputs/reference.fa",
+                  "/iris/outputs/oracle/contigs.fa"
+                ],
+                "exit_code": 0,
+                "stdout": "native-alignments.paf",
+                "stderr": "native-alignments.paf.stderr",
+                "timeout_seconds": 300,
+                "elapsed_seconds": 0.008268638994195499
+              }
+            ]
+          },
+          "artifacts": {
+            "reference/alignments.tsv": {
+              "bytes": 485,
+              "sha256": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53"
+            },
+            "reference/answer.json": {
+              "bytes": 497,
+              "sha256": "caaae0e769159cde26325cbb646d6fce7448735018c5bfc4e205de18b779f02c"
+            },
+            "reference/commands.jsonl": {
+              "bytes": 1084,
+              "sha256": "252925bd9582c87b856e695ca5e1e6101d01b39aa36451b1c621ec95845244bf"
+            },
+            "reference/contig_metrics.tsv": {
+              "bytes": 249,
+              "sha256": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397"
+            },
+            "reference/contigs.fa": {
+              "bytes": 6601,
+              "sha256": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab"
+            },
+            "reference/minimap2-version.txt": {
+              "bytes": 11,
+              "sha256": "741e4fe85b9e0667151c8d350b0f052ea74020babeee9462f35a8964ae53243a"
+            },
+            "reference/minimap2-version.txt.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/native-alignments.paf": {
+              "bytes": 5869,
+              "sha256": "e39239dd4842a5445f72897322f924e2fd5fa768c04a79a4efece94c35f02779"
+            },
+            "reference/native-alignments.paf.stderr": {
+              "bytes": 714,
+              "sha256": "0b385a305004fc8b7aab99c2ac546a8702b8312a44b105452e1971f0105f8d49"
+            },
+            "reference/read_qc.tsv": {
+              "bytes": 115,
+              "sha256": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3"
+            },
+            "reference/reference.json.gz": {
+              "bytes": 17849,
+              "sha256": "c36ee87924fcdeea730d120656f56bedeca7fb4df51624cee93964e5395497f9"
+            },
+            "reference/reference_coverage.tsv": {
+              "bytes": 101240,
+              "sha256": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce"
+            },
+            "reference/spades-version.txt": {
+              "bytes": 31,
+              "sha256": "a170f751b2bb8213242f57adcf53e40a8dc8a4ff25c249206a65402815d8a2de"
+            },
+            "reference/spades-version.txt.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/spades.stdout": {
+              "bytes": 102245,
+              "sha256": "d68d60259ad7722209564f8a56fcb4294e34139ddabbc525b907d3f5cb9af85f"
+            },
+            "reference/spades.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/alignments.tsv": {
+              "bytes": 485,
+              "sha256": "bc1596a1f8bf731c6d63ac7e079138978a9b4dc67229cc3992c22a4e759e1c53"
+            },
+            "oracle/answer.json": {
+              "bytes": 413,
+              "sha256": "812bb15a146930d217be558457b23055be61a50c1882963a1aff39c046de2142"
+            },
+            "oracle/commands.jsonl": {
+              "bytes": 712,
+              "sha256": "c6a7d2d691160b5105ea2c8a277c1f04877aa1c55693322ba34ca6a7839e3793"
+            },
+            "oracle/contig_metrics.tsv": {
+              "bytes": 249,
+              "sha256": "da7f4a47e2a3be3211c36facb012118fbcebe5a9454fe6184cbc16cbd27d3397"
+            },
+            "oracle/contigs.fa": {
+              "bytes": 6601,
+              "sha256": "4f0dd190f852fb3872929e48d21d4d938eaa5aa8efd6c25da62455a3419d6bab"
+            },
+            "oracle/native-alignments.paf": {
+              "bytes": 5869,
+              "sha256": "e39239dd4842a5445f72897322f924e2fd5fa768c04a79a4efece94c35f02779"
+            },
+            "oracle/native-alignments.paf.stderr": {
+              "bytes": 711,
+              "sha256": "6c4588bada7b183dc4bb50c01e5efbfbd53eca4c4d92887dbb12f8d70bc4ec0b"
+            },
+            "oracle/read_qc.tsv": {
+              "bytes": 115,
+              "sha256": "0db85a576b2729ea57e22f1fcdeb40ce319aa9498defa59fde092248c32adca3"
+            },
+            "oracle/reference.json": {
+              "bytes": 218676,
+              "sha256": "3045107e02f7a869692e713088c189c9bf6d3435c298eae055dca9b4684da732"
+            },
+            "oracle/reference_coverage.tsv": {
+              "bytes": 101240,
+              "sha256": "2ddd81afcaee29af3b476e350ad0571c0f91c3bfe5979965658d89b131e56bce"
+            },
+            "oracle/spades.stdout": {
+              "bytes": 103038,
+              "sha256": "37826cd348da2dca84cf752c170a8f71da85f005696e194c37bf1ecaf17b751f"
+            },
+            "oracle/spades.stdout.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/validation.json": {
+              "bytes": 1675,
+              "sha256": "f4fcfa061da1c1a1291dd456b628a43eb39000ab1cfa22b55ea3091bef7dea11"
+            }
+          },
+          "verification": {
+            "reference": 1.0,
+            "oracle": 1.0,
+            "missing:contigs.fa": 0.0,
+            "changed_residue": 0.0,
+            "duplicated_fasta": 0.0,
+            "missing:read_qc.tsv": 0.0,
+            "missing_row:read_qc.tsv": 0.0,
+            "duplicated_row:read_qc.tsv": 0.0,
+            "changed_value:read_qc.tsv": 0.0,
+            "missing:contig_metrics.tsv": 0.0,
+            "missing_row:contig_metrics.tsv": 0.0,
+            "duplicated_row:contig_metrics.tsv": 0.0,
+            "changed_value:contig_metrics.tsv": 0.0,
+            "missing:alignments.tsv": 0.0,
+            "missing_row:alignments.tsv": 0.0,
+            "duplicated_row:alignments.tsv": 0.0,
+            "changed_value:alignments.tsv": 0.0,
+            "missing:reference_coverage.tsv": 0.0,
+            "missing_row:reference_coverage.tsv": 0.0,
+            "duplicated_row:reference_coverage.tsv": 0.0,
+            "changed_value:reference_coverage.tsv": 0.0
+          },
+          "resources": {
+            "reference": {
+              "module": "experiments.post_training.bio_tasks.sources.prepare_assembly",
+              "status": "passed",
+              "seconds": 4.516776003001723,
+              "parent_peak_rss_kib": 51840,
+              "child_peak_rss_kib": 53532,
+              "finished_at": "2026-09-24T11:41:41.395965+00:00"
+            },
+            "oracle": {
+              "module": "validate",
+              "status": "passed",
+              "seconds": 4.663212667001062,
+              "parent_peak_rss_kib": 42940,
+              "child_peak_rss_kib": 53504,
+              "finished_at": "2026-09-24T11:41:46.167417+00:00"
+            }
+          }
+        }
+      ],
+      "environment": {
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "md5": "a9f577daf3de00bca7c3c76c0ecbd1de",
+            "size": 28948
+          },
+          {
+            "name": "bzip2",
+            "version": "1.0.8",
+            "build": "hda65f42_10",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+            "sha256": "1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96",
+            "md5": "e675fabcf81499adc7edf58124fb1e01",
+            "size": 257808
+          },
+          {
+            "name": "ca-certificates",
+            "version": "2026.7.22",
+            "build": "hbd8a1cb_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+            "sha256": "0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6",
+            "md5": "0f51e2391ade309db462a55611263e9c",
+            "size": 131780
+          },
+          {
+            "name": "icu",
+            "version": "78.3",
+            "build": "py310h44b86e0_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+            "sha256": "9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432",
+            "md5": "72a381cbad04f24b1c2a43ef707f45b4",
+            "size": 14459115
+          },
+          {
+            "name": "k8",
+            "version": "1.2",
+            "build": "he8db53b_6",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/k8-1.2-he8db53b_6.tar.bz2",
+            "sha256": "35143205ef4684f417f047c649aea110e0ceb1d6891001511dbceb2dea08be3d",
+            "md5": "6c44663f234185cc54d7a90c4d7a555a",
+            "size": 7535090
+          },
+          {
+            "name": "kernel-headers_linux-64",
+            "version": "5.14.0",
+            "build": "he073ed8_3",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-64-5.14.0-he073ed8_3.conda",
+            "sha256": "c4d973dd80ab10028b3e4c58c1c6d8f437bfeaf6069dafb1130dabc550e9caf4",
+            "md5": "1e453742ed8f6b4250c66be1dd6ba4fe",
+            "size": 1410267
+          },
+          {
+            "name": "ld_impl_linux-64",
+            "version": "2.46.1",
+            "build": "default_hbd61a6d_102",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+            "sha256": "27d83f1188cd19bcb7754a078b3fa7f4cfb8527f8eb2fde54dd01fc529d1adec",
+            "md5": "449500f2c089da11c40f5c21312e3e07",
+            "size": 745303
+          },
+          {
+            "name": "libexpat",
+            "version": "2.8.4",
+            "build": "hd2095e1_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+            "sha256": "2f5e90b621f7bf64c35d5c972bd85a645555d82404130569149a129dcbc8b8dd",
+            "md5": "a77b44d6cbaad97f3ad050ab35fad55a",
+            "size": 77595
+          },
+          {
+            "name": "libffi",
+            "version": "3.7.0",
+            "build": "h81df57d_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+            "sha256": "c8c7583ef063bc3c430f1d48298e5ad24f796a35c22ed5b14183325825a61106",
+            "md5": "6525a0b06aa4fd390795f0740636a9dd",
+            "size": 68004
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "md5": "3b62b92f0f082b67c59618ebf07617a7",
+            "size": 1057064
+          },
+          {
+            "name": "libgcc-ng",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-ng-16.2.0-h69a702a_5.conda",
+            "sha256": "d298972e17697a5e96806d5f2c151c53efd0afa0ef10db5d6757a5b186817219",
+            "md5": "e7c34906139296448e3554fafa3dbec2",
+            "size": 28535
+          },
+          {
+            "name": "libgfortran",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran-16.2.0-h69a702a_5.conda",
+            "sha256": "7e694578cbabd46251d7a069d89da6479c5edd962d78bbc66a847c1b722a8365",
+            "md5": "34ddf93e56ee44924ce76a614e5fb379",
+            "size": 28520
+          },
+          {
+            "name": "libgfortran-ng",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran-ng-16.2.0-h69a702a_5.conda",
+            "sha256": "0e1634874f61e2dcf1f68bea872d7ca6085351e7c6027e2b0a8ff8ade63fe41f",
+            "md5": "3b3b5b0f484a99d3ed9c9e563ea90d34",
+            "size": 28530
+          },
+          {
+            "name": "libgfortran5",
+            "version": "16.2.0",
+            "build": "h6b99dfc_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran5-16.2.0-h6b99dfc_5.conda",
+            "sha256": "cc767363e3148a18d3a3015eeaed722bbf8ca0acc3a29157df2965e97caa9803",
+            "md5": "a7eb3f9540094247ec8a2fa800cf9bbf",
+            "size": 2528103
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "md5": "af44890f8a2beefd3a83805a59a65014",
+            "size": 641644
+          },
+          {
+            "name": "liblzma",
+            "version": "5.8.3",
+            "build": "hb03c661_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+            "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+            "md5": "1390b7c5ac0b1d8e447bc5efa6d3c8c2",
+            "size": 112995
+          },
+          {
+            "name": "libmpdec",
+            "version": "4.0.0",
+            "build": "hb03c661_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda",
+            "sha256": "46820b4a835e175940ae20bec00fdddaff804cda27a1408ab1b95e77a2196437",
+            "md5": "fcfed1dc5053eb1901b66e7b1fc32588",
+            "size": 92759
+          },
+          {
+            "name": "libpython",
+            "version": "3.14.7",
+            "build": "hdc7f604_106_cp314",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.7-hdc7f604_106_cp314.conda",
+            "sha256": "5f879892bd439c3d94f4a97b06c214b9a19c4b92f74d84f0305c6ca1b2b239b2",
+            "md5": "28af2158bb8dbb62e55b0af3b44f9d4a",
+            "size": 10520530
+          },
+          {
+            "name": "libsqlite",
+            "version": "3.53.4",
+            "build": "h13e7031_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+            "sha256": "f20d70da54e5b31dd4a51fb1efeaafafd5ab6dd8d7ac9d1438eaa2526ac4ed3d",
+            "md5": "e72bbec309c2b0f37823ee7d4fabfcd3",
+            "size": 974348
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "md5": "75b43a2912a0354204696708e4f34b8d",
+            "size": 6618916
+          },
+          {
+            "name": "libstdcxx-ng",
+            "version": "16.2.0",
+            "build": "hdf11a46_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-ng-16.2.0-hdf11a46_5.conda",
+            "sha256": "855cee8f4b7abe06dc5918a66e0009492964926d5f5d6a033438dd6cab4e91e4",
+            "md5": "c37fb00cb15b16cf1601914d68a509ea",
+            "size": 28561
+          },
+          {
+            "name": "libuuid",
+            "version": "2.42.4",
+            "build": "hcfc3c73_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+            "sha256": "f34b8d1de9a2bf62476d8608057d9b8a918d97444236dc53a47128f2fae79041",
+            "md5": "54a948337e66706380ff24d6b5fde63f",
+            "size": 34442
+          },
+          {
+            "name": "libzlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+            "md5": "0de0122d9570a8ab637c6b73db268389",
+            "size": 63713
+          },
+          {
+            "name": "minimap2",
+            "version": "2.31",
+            "build": "h118bc1c_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/minimap2-2.31-h118bc1c_0.conda",
+            "sha256": "344fe7b5328ff635dc2b8914b05e003053e136446e456b81e1b4b5fca1a9cedd",
+            "md5": "9134876c84df5b48841bfe743cfd7b67",
+            "size": 1041274
+          },
+          {
+            "name": "mpi",
+            "version": "1.0",
+            "build": "openmpi",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/mpi-1.0-openmpi.tar.bz2",
+            "sha256": "54cf44ee2c122bce206f834a825af06e3b14fc4fd58c968ae9329715cc281d1e",
+            "md5": "1dcc49e16749ff79ba2194fa5d4ca5e7",
+            "size": 4204
+          },
+          {
+            "name": "ncurses",
+            "version": "6.6",
+            "build": "hdb14827_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+            "sha256": "5d46557214ed184381dafe835b7c94a474a1c3b307a08a250b1ea4779b44ffb3",
+            "md5": "ee6c0cd80a60961a1f48aa3e0b91f986",
+            "size": 911196
+          },
+          {
+            "name": "openmpi",
+            "version": "4.1.6",
+            "build": "hc5af2df_101",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openmpi-4.1.6-hc5af2df_101.conda",
+            "sha256": "f0769dd891e1735be4606ec8643951e5cbca199f774e58c7d933f70a70134ce4",
+            "md5": "f9a2ad0088ee38f396350515fa37d243",
+            "size": 4069632
+          },
+          {
+            "name": "openssl",
+            "version": "3.6.4",
+            "build": "h781a0a9_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+            "sha256": "4747b2d6a8336f52343bceb8a1ebf41a9e6e665b9d2e3f989972de53a310599e",
+            "md5": "16e3034a330cc625f2c685edec60cf4e",
+            "size": 3202955
+          },
+          {
+            "name": "pigz",
+            "version": "2.8",
+            "build": "h421ea60_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/pigz-2.8-h421ea60_2.conda",
+            "sha256": "3d535f86f6eb4243cc47c51a3694e01bfc1aa72d80d9789c053f0154b531f974",
+            "md5": "3d71c0550440051500a14e13f691580d",
+            "size": 81228
+          },
+          {
+            "name": "pip",
+            "version": "26.2.1",
+            "build": "pyh145f28c_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh145f28c_0.conda",
+            "sha256": "0f7021cfb3ff454c91a5e28e1f5060906a52c6d1cde3f879a7d03ac33c28b1c3",
+            "md5": "573cb3ed111004230ed3de650653cd4d",
+            "size": 1198163
+          },
+          {
+            "name": "python",
+            "version": "3.14.7",
+            "build": "hcd007b5_106_cp314",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.14.7-hcd007b5_106_cp314.conda",
+            "sha256": "4cd05407d6b07d00fd5b6cc78bd2f60ae5e21f777eb26ead82be2e3751c610a1",
+            "md5": "56ee91e118243e46bfc0c41e4030d354",
+            "size": 26484459
+          },
+          {
+            "name": "python_abi",
+            "version": "3.14",
+            "build": "9_cp314",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda",
+            "sha256": "e7f8e965bbfb98e08feb2365cacdad8bb218fa5b5a0a2752f747287f425f213c",
+            "md5": "350d89b50d7de805abf2e63e29dee451",
+            "size": 6791
+          },
+          {
+            "name": "readline",
+            "version": "8.3",
+            "build": "hd6e31c0_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+            "sha256": "01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d",
+            "md5": "69c01c781e7c8190bbdaf79e3848c5ca",
+            "size": 348899
+          },
+          {
+            "name": "spades",
+            "version": "4.3.0",
+            "build": "hde4eca7_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/spades-4.3.0-hde4eca7_1.conda",
+            "sha256": "85e0652e6c0bb1ff888ea8eb54a9a914adc91dec98c2594bdc4707047477a2e3",
+            "md5": "63f079a3fb187cb854e11e90d02d7456",
+            "size": 18750876
+          },
+          {
+            "name": "sysroot_linux-64",
+            "version": "2.34",
+            "build": "h087de78_3",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.34-h087de78_3.conda",
+            "sha256": "08c50c314b331730eeb8f87c39a45e5426a5463e078392ab283e2552d753443e",
+            "md5": "b04e3a97151611d6a35c8c068b2a03a2",
+            "size": 40779381
+          },
+          {
+            "name": "tk",
+            "version": "8.6.13",
+            "build": "noxft_h1df4ec4_4",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+            "sha256": "a1a241d172c1ccab067ba245206dd048bc3c2d1b84504b53c9468e99adfc16a1",
+            "md5": "676a2f9b1c4fcf57b70aa5c65f6c60d0",
+            "size": 3566806
+          },
+          {
+            "name": "tzdata",
+            "version": "2026c",
+            "build": "h151e31d_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+            "sha256": "b928c30ddcb0e3f544c6eade8352737e6e610e263276b90232db6a578ef899d8",
+            "md5": "fcb489df604d100968b737f2cb6076c6",
+            "size": 118849
+          },
+          {
+            "name": "zlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "16080a1c7724f7d25727cdc23c7658e0cec2db52448c1dc0c33467ee2c6e1c62",
+            "md5": "6acb86426229f96f93e5468d1df3a5e8",
+            "size": 96132
+          },
+          {
+            "name": "zstd",
+            "version": "1.5.7",
+            "build": "hb78ec9c_7",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda",
+            "sha256": "47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+            "md5": "aa459086047c0e5e27023ab19f8cb86a",
+            "size": 601301
+          }
+        ],
+        "runtime_lock_sha256": "54775dd0652412ff75caa20142aa02274a311d401b80ecc1f9fe446100085db7",
+        "versions": {
+          "spades": "SPAdes genome assembler v4.3.0",
+          "minimap2": "2.31-r1302"
+        },
+        "build_note": "SPAdes 4.3.0 hde4eca7_1 and minimap2 2.31 h118bc1c_0; complete checksum-locked Conda environment; one execution thread."
+      },
+      "limits": "One systematically sampled observed PhiX run. Complete native contigs are retained, including unaligned contigs; the deposited genome is a comparator, not assembly truth. Reference and oracle share pinned assembly/alignment engines with independent CIGAR versus long-cs nucleotide measurements. Packaged-task and Harbor checks and broad benchmark-lineage review remain pending."
+    }
+  ]
+}

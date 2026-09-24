@@ -677,6 +677,14 @@
           "content_bytes": 143597,
           "vendored_bytes": 31444,
           "transformation": "Complete source-archive checksums, selected zero-based ordinal positions and retained FASTQ content hashes; source sampling recipe sample_ena_pairs.py."
+        },
+        "err266411-assembly-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/5ba822c09505fddd926bd251eefd3f8a206c600a18e82beaf1e710d8482922fe/outputs.tar.zst",
+          "content_sha256": "891faa020b9ee2a61a56fcda958fb5664c3986e5470ae40c268a7e0e47ca740c",
+          "vendored_sha256": "c36ee87924fcdeea730d120656f56bedeca7fb4df51624cee93964e5395497f9",
+          "content_bytes": 347920,
+          "vendored_bytes": 17849,
+          "transformation": "Private complete assembly and alignment reference measured with Biopython/CIGAR and checked by a fresh native run using independent standard-library long-cs measurements. Never supplied as solver input."
         }
       },
       "systematic_sampling": {
@@ -687,6 +695,11 @@
         "sampler": "sources/sample_ena_pairs.py",
         "protocol_documentation": "https://ena-docs.readthedocs.io/en/latest/retrieval/file-download.html",
         "downloaded_at": "2026-09-24"
+      },
+      "assembly_native_check": {
+        "checks_file": "native_validation_runs/cd4c5520958b.json",
+        "checks_sha256": "cd4c5520958bdf16d45585e700530efbe9e90c37faaea99ba6a140f909cd24f1",
+        "source_revision": "279982c9463c7dc4b39061c158e9df579c968f43"
       }
     },
     "UniProt:globins-20260923": {

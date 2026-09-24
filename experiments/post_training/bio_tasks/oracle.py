@@ -19,6 +19,7 @@ from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETW
 from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
 from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_assembly import solve_assembly
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clusters
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
@@ -47,6 +48,7 @@ OUTPUT_SOLVERS = {
     "real-proteome-domain-search": solve_domains,
     "real-proteome-clustering": solve_clusters,
     "real-rnaseq-population-interaction": solve_interaction,
+    "real-phix-assembly": solve_assembly,
 }
 
 

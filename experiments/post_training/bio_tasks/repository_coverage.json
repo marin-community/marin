@@ -250,7 +250,8 @@
       "name": "minimap2",
       "recipes": [
         "paf-query-coverage",
-        "dna-unique-mapping"
+        "dna-unique-mapping",
+        "real-phix-assembly"
       ],
       "source_url": "https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c",
       "tool_execution": {
@@ -541,15 +542,20 @@
       "name": "SPAdes",
       "recipes": [
         "assembly-nx",
-        "assembly-gap-runs"
+        "assembly-gap-runs",
+        "real-phix-assembly"
       ],
       "source_url": "https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/cd4c5520958b.json",
+        "source_revision": "279982c9463c7dc4b39061c158e9df579c968f43",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-phix-assembly"
       },
-      "scope": "Reconstruct a deliberately unambiguous tiny genome, or calculate assembly summaries from supplied contigs.",
-      "limitations": "For reconstruction, compare full sequences modulo permitted orientation/circular rotation and check missing/extra contigs. N50 and contig-length checks alone are insufficient: the inspected smoke test checks number and length, not sequence identity."
+      "scope": "Assemble observed paired FASTQs with SPAdes, align every native contig and independently reconcile all residues, contiguity statistics and reference-position coverage.",
+      "limitations": "One systematically sampled observed PhiX run. Complete native contigs are retained, including unaligned contigs; the deposited genome is a comparator, not assembly truth. Reference and oracle share pinned assembly/alignment engines with independent CIGAR versus long-cs nucleotide measurements. Packaged-task and Harbor checks and broad benchmark-lineage review remain pending."
     },
     {
       "index": 28,

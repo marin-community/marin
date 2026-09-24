@@ -139,6 +139,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Supplied formats | Skills | Repository operations |
 |---|---|---|---|
+| `real-phix-assembly` | paired FASTQ, FASTA, PAF, CIGAR, minimap2 cs, TSV, JSON | paired-read QC, de novo assembly, contiguity assessment, alignment interpretation, coverage union | SPAdes, minimap2 |
 | `busco-summary` | csv-header | ortholog-identity, deduplication, completeness-categories | BUSCO |
 | `taxonomy-counts` | csv-header | taxonomy, hierarchical-counts, unclassified-denominator | Kraken 2 |
 | `assembly-nx` | fasta | length-weighted-contiguity, genome-size, unreached-thresholds | SPAdes |

@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **144 recipes across 13 domains**, with one task per
+The implementation has **145 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -44,12 +44,12 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The authoring recipes have input-reading Python, R or native-tool oracles.
-Native CLI/API execution is recorded separately below. **39 of 50 packages have passing native checks**: 34 on three reference cases each,
-IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER and MMseqs2 on a complete observed bacterial proteome. The first CoreWeave run passed 22 packages; correction batches
+Native CLI/API execution is recorded separately below. **40 of 50 packages have passing native checks**: 34 on three reference cases each,
+IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, HMMER and MMseqs2 on a complete observed bacterial proteome, and SPAdes on 12,000 observed PhiX pairs. The first CoreWeave run passed 22 packages; correction batches
 on an existing reserved TRC host in `us-central2` passed 12 more, with outputs
 retrieved from regional GCS. MAFFT and MUSCLE each passed three real-protein alignments. MAFFT required the
 same version from conda-forge after a Bioconda channel-priority conflict; the failed
-installation remains in the evidence. Eleven repositories still need scripts. Picard and fastp passed on
+installation remains in the evidence. Ten repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
@@ -91,7 +91,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment`, `real-cox1-tree-comparison` | 3 reference checks passed (`real-protein-alignment`) |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction`, `real-proteome-domain-search` | 1 observed proteome reference and artifact check passed |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
-| 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
+| 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping`, `real-phix-assembly` | 3 reference checks passed (`dna-unique-mapping`) |
 | 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | 3 reference checks passed (`vcf-allelic-depth`) |
 | 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance`, `real-fastq-quality-yield` | 3 reference checks passed (`real-fastq-quality-yield`) |
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
@@ -105,7 +105,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter`, `real-rnaseq-library-qc`, `real-rnaseq-cpm-filter` | 3 reference checks passed (`bulk-cpm-filter`) |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | 3 reference checks passed (`adjusted-linear-effect`) |
-| 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs` | Pending |
+| 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs`, `real-phix-assembly` | 1 observed assembly and independent artifact check passed |
 | 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
 | 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
 | 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
@@ -308,7 +308,8 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 
 Of these 2,881 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,833 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+2,832 are unmapped, one assembly workflow is composed but awaits packaged validation,
+and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -498,7 +499,7 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-Twenty-seven recipes supply unchanged biological observations or declared observed subsets:
+Thirty recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -526,6 +527,13 @@ Twenty-seven recipes supply unchanged biological observations or declared observ
   expected errors and yield. Filtering and trimming require native FASTQ outputs
   with exact ordered IDs, bases and qualities. These technical subsets do not
   establish biological replication or mixed-community metagenomic coverage.
+  A connected SPAdes/minimap2 workflow uses a separate systematic sample of 12,000 pairs
+  across the complete, checksum-verified run. It retains all four contigs, checks every
+  reference position and reports five substitutions and 55 multiply covered positions.
+  The fresh native oracle and all 19 artifact negatives passed in 4.7 seconds. This is
+  reference agreement, not proof of assembly truth. The initial 6,000-pair prefix
+  covered only 236 reference positions and remains recorded as a diagnostic run.
+  Packaged-task and Harbor validation of the assembly task remain pending.
 
 - **UniProt globins:** six full-length proteins per task selected from ten reviewed
   alpha/beta globin entries, with species and sequence versions retained. Produce

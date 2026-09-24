@@ -1132,6 +1132,42 @@
         "negative_checks": 33
       },
       "limitations": "One two-population developmental-stage study with two replicates per group; no established donor pairing. No drug intervention, dose/time response or four-cell-type endpoint. Reference and oracle share DESeq2. Packaged-task and Harbor checks, broader lineage screening and scientific review remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "279982c9463c7dc4b39061c158e9df579c968f43",
+      "source_state": "Exact committed observed systematic read sample; checksum-locked native assembly and independent long-cs oracle. Recipe registration and Harbor checks pending.",
+      "environment_kind": "Checksum-locked SPAdes/minimap2 on a reserved TRC CPU; independent CIGAR and long-cs residue measurements",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-assembly-frozen-20260924-114037",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "job_timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "001b09187aab02a6ab9606f105f421a27f8aa86f8d5e5d2e750b625a9d5c05f2",
+      "output_archive_sha256": "5ba822c09505fddd926bd251eefd3f8a206c600a18e82beaf1e710d8482922fe",
+      "output_archive_bytes": 28566742,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/5ba822c09505fddd926bd251eefd3f8a206c600a18e82beaf1e710d8482922fe/outputs.tar.zst",
+      "archive_storage_status": "uploaded; provider size and MD5 verified",
+      "checks_file": "native_validation_runs/cd4c5520958b.json",
+      "checks_sha256": "cd4c5520958bdf16d45585e700530efbe9e90c37faaea99ba6a140f909cd24f1",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 2,
+        "passed_repositories": 2,
+        "execution_failed_repositories": 0,
+        "planned_cases": 2,
+        "completed_cases": 2,
+        "passing_cases": 2,
+        "distinct_biological_inputs": 1
+      },
+      "limitations": "One systematically sampled observed PhiX run. Complete native contigs are retained, including unaligned contigs; the deposited genome is a comparator, not assembly truth. Reference and oracle share pinned assembly/alignment engines with independent CIGAR versus long-cs nucleotide measurements. Packaged-task and Harbor checks and broad benchmark-lineage review remain pending."
     }
   ],
   "numerical_portability": [

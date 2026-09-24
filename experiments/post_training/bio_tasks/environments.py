@@ -36,6 +36,7 @@ PROFILES = {
     "real-singlecell-read-qc": EnvironmentProfile(23, "native_validation_runs/40ed93019b52.json", 4096),
     "real-proteome-domain-search": EnvironmentProfile(11, "native_validation_runs/a619ee74f5b8.json", 2048),
     "real-proteome-clustering": EnvironmentProfile(42, "native_validation_runs/9d28dd15e082.json", 2048),
+    "real-phix-assembly": EnvironmentProfile(27, "native_validation_runs/cd4c5520958b.json", 4096),
 }
 
 
