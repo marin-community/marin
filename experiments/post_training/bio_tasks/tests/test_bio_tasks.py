@@ -411,10 +411,8 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
         assert config["environment"]["allow_internet"] is False
         assert config["verifier"]["environment_mode"] == "separate"
         assert not files.under("solution/")
-        assert set(files.under("environment/")) == {
-            "environment/Dockerfile",
-            *[p for p in files.files if p.startswith("environment/inputs/")],
-        }
+        assert not any(path.startswith("environment/inputs/") for path in files.files)
+        assert files.under("setup_files/inputs/")
         assert "solution/oracle.pyz" in read_task_binary(row["solution_binary"]).files
         task_dir = output / "harbor" / str(config["metadata"]["split"]) / row["path"]
         submission = tmp_path / "submissions" / row["path"]
@@ -430,7 +428,7 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
                     str(output / "oracles" / row["path"] / "solution" / "oracle.pyz"),
                     config["metadata"]["recipe"],
                     "--inputs",
-                    str(task_dir / "environment" / "inputs"),
+                    str(task_dir / "setup_files" / "inputs"),
                     "--answer",
                     str(answer),
                 ],

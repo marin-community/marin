@@ -44,13 +44,12 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The current authoring recipes use independent Python solvers. Native CLI/API
-execution is recorded separately below. **33 of 50 packages now pass all three
+execution is recorded separately below. **34 of 50 packages now pass all three
 reference cases**. The first CoreWeave run passed 22 packages; correction batches
-on an existing reserved TRC host in `us-central2` passed 11 more, with outputs
-retrieved from regional GCS. MUSCLE passed three real-protein alignments. MAFFT failed installation because its
-Bioconda candidate conflicts with strict channel priority; the same version is
-available in conda-forge and is queued for a separate check. Sixteen repositories
-still need scripts. Picard and fastp passed on
+on an existing reserved TRC host in `us-central2` passed 12 more, with outputs
+retrieved from regional GCS. MAFFT and MUSCLE each passed three real-protein alignments. MAFFT required the
+same version from conda-forge after a Bioconda channel-priority conflict; the failed
+installation remains in the evidence. Sixteen repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
@@ -80,7 +79,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
 | 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
-| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment` | Installation failed; channel correction pending |
+| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment` | 3 reference checks passed (`real-protein-alignment`) |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
@@ -203,10 +202,10 @@ assessment uses public benchmark descriptions and the program's prior source
 inspection; it is a qualitative gap analysis, not a benchmark coverage score.
 
 The [task-level registry](../../experiments/post_training/bio_tasks/benchmark_coverage.json)
-retains 455 identifiers at pinned dataset revisions: 205 BixBench, 100 CompBioBench,
-50 BiomniBench-DA, 10 BioAgent and 90 BioMysteryBench. Eighteen have manually assessed
-component mappings, 347 are unmapped, and the 90 BioMysteryBench task formulations
-remain excluded from training authoring. None is marked workflow-validated.
+retains 365 provisional ID identifiers at pinned dataset revisions: 205 BixBench,
+100 CompBioBench, 50 BiomniBench-DA and 10 BioAgent. Eighteen have manually assessed
+component mappings and 347 are unmapped. The 90 BioMysteryBench identifiers are
+tracked separately as OOD; their task formulations remain excluded from training authoring. None is marked workflow-validated.
 The inspection browser binds mappings to generated examples and their local reference
 results. These timings are solver-check runtimes, not teacher latency measurements.
 
@@ -249,7 +248,6 @@ No claim of independence is made merely because a query uses a different seed.
 | Provisional ID benchmark | Current relevant components | Missing dependent workflow behavior |
 |---|---|---|
 | [BixBench](https://github.com/Future-House/BixBench) | Cohort selection, expression summaries, enrichment, phylogeny and image measurements | Discover and join files, choose the eligible biological population, perform the analysis, and derive a requested result from its outputs. Current tasks usually prescribe each operation separately. |
-| [BioMysteryBench](https://huggingface.co/datasets/Anthropic/BioMysteryBench-full/blob/main/README.md) | Format interpretation and biological data analysis primitives | Open-ended identification and investigative reasoning over connected evidence. No item-level training mapping: questions, rubrics, and task formulations remain evaluation-only. |
 | [CompBioBench](https://github.com/Genentech/compbiobench-runner) | Common sequence, interval and expression operations | Broader tool selection, data acquisition and multi-step analyses. The offline corpus does not claim coverage of internet-dependent tasks. |
 | [BiomniBench-DA](https://huggingface.co/datasets/phylobio/BiomniBench-DA) | Patient/sample joins, composition, adjusted effects, expression and variant summaries | Connect raw/layer selection, QC, biological replication, contrast/model fitting, multiple testing, and the final association or composition result. |
 | [BioAgent Bench](https://arxiv.org/abs/2601.21800) | Read QC, mapping conventions, transcript arithmetic, variant filtering, taxonomy and assembly summaries | Actual RNA-seq, variant-calling and metagenomics pipelines, including dependency repair and distractor/corrupt-input handling. Supplied alignments, domain hits and taxonomy assignments omit their upstream inference. |
@@ -260,7 +258,9 @@ time. Composing outputs must change the downstream answer: running independent
 small commands in sequence does not establish workflow reasoning. No current row
 above has been certified as an end-to-end workflow match.
 
-Keep tiny corner-case inputs as correctness controls. The inspected HMMER example
+Target real biological data for every task in the final training release; record
+any necessary exception. Keep tiny corner-case inputs as correctness controls
+outside that release. The inspected HMMER example
 has one 65-residue protein and two supplied domain hits; its purpose is coordinate
 extraction, not HMM search. Matrix Market examples have five features and four
 cells. Such fixtures make errors inspectable but permit shortcuts and do not

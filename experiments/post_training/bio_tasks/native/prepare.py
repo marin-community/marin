@@ -45,7 +45,7 @@ def prepare(corpus: Path, output: Path) -> dict:
             task_id = task["task_id"]
             source = corpus / "harbor" / "train" / task_id
             case = output / "cases" / f"{index:02d}" / task_id
-            shutil.copytree(source / "environment" / "inputs", case / "inputs")
+            shutil.copytree(source / "setup_files" / "inputs", case / "inputs")
             private = output / "references" / f"{index:02d}" / task_id
             private.mkdir(parents=True)
             shutil.copyfile(source / "tests" / "reference.json", private / "reference.json")

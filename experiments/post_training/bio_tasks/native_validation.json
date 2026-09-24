@@ -870,6 +870,38 @@
       "checks_file": "native_validation_runs/035bb3a42edc.json",
       "checks_sha256": "e25bee47ed821c39f57ee02694466eb72ca8a36356bef346ee6de1757fe34ddd",
       "limitations": "Six complete curated UniProt globins per case, three distinct protein sets. MUSCLE aligned FASTA outputs meet the fixed 95% pairwise-bound objective and preserve all residues; MAFFT environment installation failed before execution. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
+    },
+    {
+      "checked_at": "2026-09-23",
+      "source_revision": "bcb69270b1f9751f68c4c598c9e26abb15805058",
+      "environment_kind": "CPU-only task on an existing reserved TRC v4 host; serial isolated Conda environments",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "corpus_manifest_sha256": "3ee01f06891b71e6aba462fdb333cbd0a14d09b7dfaf0dbc37c249fdf5da67a0",
+      "input_bundle_sha256": "1ce4fab430931010a71a9965c85ae1f84ea0fa4bd389a8cf46e1e4f67f022057",
+      "output_archive_sha256": "4b92a8f7a47afb0809f2a26d9b707ac57f2d1577ade82a208796f5b8a1f7c5f2",
+      "output_archive_bytes": 9661,
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 3,
+        "completed_cases": 3,
+        "passing_cases": 3
+      },
+      "checks_file": "native_validation_runs/bcb69270b1f9.json",
+      "checks_sha256": "62b17c5983f7e56e4e284cfc74c5ec97ed8852743e0335e60d0eb059d4bf3c15",
+      "limitations": "Six complete curated UniProt globins per case, three distinct protein sets. MAFFT aligned FASTA outputs meet the unchanged 95% pairwise-bound objective and preserve all residues, after selecting the same MAFFT version from conda-forge. Previous failed Bioconda installation is retained separately. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
     }
   ]
 }

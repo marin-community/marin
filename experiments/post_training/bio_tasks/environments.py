@@ -1,0 +1,59 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Reusable image contexts built from successfully checked native package locks."""
+
+import hashlib
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from experiments.post_training.tasktrove.taskbinary import TaskFiles
+
+SOURCE = Path(__file__).parent
+
+
+@dataclass(frozen=True)
+class EnvironmentProfile:
+    repository_index: int
+    evidence: str
+    memory_mb: int
+
+
+PROFILES = {
+    "real-fastq-pair-filter": EnvironmentProfile(35, "native_validation_runs/fd1f4c3a31f1.json", 4096),
+    "real-fastq-quality-yield": EnvironmentProfile(15, "native_validation_runs/fd1f4c3a31f1.json", 4096),
+    "real-protein-alignment": EnvironmentProfile(43, "native_validation_runs/035bb3a42edc.json", 2048),
+}
+
+
+def environment_files(recipe: str, base_image: str) -> TaskFiles:
+    """Keep variable task observations out of Harbor's environment snapshot hash."""
+    dockerfile = f"FROM {base_image}\nWORKDIR /app\nRUN ln -s /setup_files/inputs /app/inputs\n"
+    profile = PROFILES.get(recipe)
+    if profile is None:
+        return TaskFiles({"environment/Dockerfile": dockerfile.encode()})
+    index = json.loads((SOURCE / "native_validation.json").read_text())
+    record = next(run for run in index["runs"] if run["checks_file"] == profile.evidence)
+    raw = (SOURCE / profile.evidence).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != record["checks_sha256"]:
+        raise ValueError(f"Changed environment validation evidence: {profile.evidence}")
+    check = next(row for row in json.loads(raw)["checks"] if row["repository_index"] == profile.repository_index)
+    if check["status"] != "passed":
+        raise ValueError(f"Environment has no passing reference check: {recipe}")
+    packages = check["environment"]["resolved_packages"]
+    dockerfile += (
+        "COPY packages.lock.json install_environment.py /opt/bio-build/\n"
+        "RUN python3 /opt/bio-build/install_environment.py --lock /opt/bio-build/packages.lock.json "
+        "--prefix /opt/bio && rm /opt/bio-build/install_environment.py\n"
+        "ENV PATH=/opt/bio/bin:$PATH\n"
+        "ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 "
+        "POLARS_MAX_THREADS=1 RAYON_NUM_THREADS=1\n"
+    )
+    return TaskFiles(
+        {
+            "environment/Dockerfile": dockerfile.encode(),
+            "environment/packages.lock.json": (json.dumps(packages, indent=2) + "\n").encode(),
+            "environment/install_environment.py": (SOURCE / "install_environment.py").read_bytes(),
+        }
+    )

@@ -28,6 +28,7 @@ import pyarrow.parquet as pq
 import tomlkit
 
 from experiments.post_training.bio_tasks.contract import grade_answer, grade_files
+from experiments.post_training.bio_tasks.environments import PROFILES, environment_files
 from experiments.post_training.bio_tasks.real_data import source_catalog
 from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 from experiments.post_training.bio_tasks.recipes import RECIPES
@@ -201,8 +202,11 @@ def validate_instance(
 
 
 def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: str, tool_ref: str) -> TaskFiles:
+    profile = PROFILES.get(recipe.id)
+    solver_environment = environment_files(recipe.id, base_image)
     metadata = {
         "task_id": task.task_id,
+        "tool_environment": profile.evidence if profile else "python-only",
         "recipe": recipe.id,
         "recipe_version": recipe.version,
         "lineage": task.lineage,
@@ -227,8 +231,12 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "environment_mode": "separate",
         "environment": {"allow_internet": False, "cpus": 1, "memory_mb": 1024},
     }
-    config["environment"] = {"allow_internet": False, "cpus": 1, "memory_mb": 1024}
-    environment = f"FROM {base_image}\nWORKDIR /app\nCOPY inputs/ /app/inputs/\n"
+    config["environment"] = {
+        "allow_internet": False,
+        "cpus": 1,
+        "memory_mb": profile.memory_mb if profile else 1024,
+        "storage_mb": 8192,
+    }
     verifier = (
         f"FROM {base_image}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends git "
@@ -242,13 +250,13 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
     files = {
         "instruction.md": (instance.instruction + "\n\n" + instance.contract.instructions() + "\n").encode(),
         "task.toml": tomlkit.dumps(config).encode(),
-        "environment/Dockerfile": environment.encode(),
+        **solver_environment.files,
         "tests/Dockerfile": verifier.encode(),
         "tests/test.sh": b"#!/bin/sh\nset -eu\nexec /opt/verifier/bin/python -I /tests/contract.py\n",
         "tests/contract.py": (SOURCE_DIR / "contract.py").read_bytes(),
         "tests/reference.json": instance.contract.model_dump_json(indent=2).encode(),
     }
-    files.update({f"environment/inputs/{name}": text.encode() for name, text in instance.inputs.items()})
+    files.update({f"setup_files/inputs/{name}": text.encode() for name, text in instance.inputs.items()})
     return TaskFiles(files)
 
 
@@ -327,36 +335,52 @@ def benchmark_page(output: Path, registry: dict) -> None:
         )
         details = html.escape(json.dumps({key: value for key, value in task.items() if key != "examples"}, indent=2))
         rows.append(
-            f'<tr data-benchmark="{html.escape(task["benchmark"])}" data-status="{task["status"]}">'
-            f'<td>{html.escape(task["benchmark"])}</td><td><a href="{html.escape(source["source_url"])}">'
+            f'<tr data-benchmark="{html.escape(task["benchmark"])}" data-status="{task["status"]}" '
+            f'data-distribution="{source["distribution"]}">'
+            f'<td>{source["distribution"]}</td><td>{html.escape(task["benchmark"])}</td>'
+            f'<td><a href="{html.escape(source["source_url"])}">'
             f'{html.escape(task["task_id"])}</a></td><td>{task["status"]}</td>'
             "<td><details><summary>Stages, gaps and evidence</summary>"
             f"<pre>{details}</pre>{examples}</details></td></tr>"
         )
-    summaries = Counter(task["status"] for task in registry["tasks"])
+    summaries = {
+        distribution: dict(
+            Counter(
+                task["status"]
+                for task in registry["tasks"]
+                if registry["benchmarks"][task["benchmark"]]["distribution"] == distribution
+            )
+        )
+        for distribution in ("ID", "OOD")
+    }
     options = "".join(f"<option>{html.escape(name)}</option>" for name in registry["benchmarks"])
     statuses = "".join(f"<option>{name}</option>" for name in registry["status_definitions"])
     page = (
-        '<!doctype html><meta charset="utf-8"><title>ID task coverage</title>'
+        '<!doctype html><meta charset="utf-8"><title>Benchmark workflow coverage</title>'
         "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.5rem;text-align:left;vertical-align:top}"
         "pre{white-space:pre-wrap;max-width:70rem}select,input{padding:.5rem}[hidden]{display:none}</style>"
-        '<a href="index.html">Corpus</a><h1>ID task coverage</h1>'
+        '<a href="index.html">Corpus</a><h1>Benchmark workflow coverage</h1>'
         f'<p>{len(registry["tasks"])} task identifiers. {html.escape(str(dict(summaries)))}</p>'
         "<p>Component mappings identify shared operations. They do not establish benchmark workflow coverage. "
         "Reference runtimes below measure local solver checks, not teacher attempts. "
-        "Restricted task formulations remain evaluation-only.</p>"
+        "BioMysteryBench is OOD and excluded from training authoring. "
+        "ID workflow coverage is the task-dataset target.</p>"
         '<p><a href="benchmark_coverage.json">Download pinned registry</a></p>'
         '<input id="search" type="search" placeholder="Search IDs, stages or gaps" aria-label="Search tasks">'
+        '<select id="distribution" aria-label="Distribution"><option selected>ID</option><option>OOD</option>'
+        '<option value="">All distributions</option></select>'
         f'<select id="benchmark" aria-label="Benchmark"><option value="">All benchmarks</option>{options}</select>'
         f'<select id="status" aria-label="Coverage status"><option value="">All statuses</option>{statuses}</select>'
-        "<table><thead><tr><th>Benchmark</th><th>Task</th><th>Coverage</th><th>Details</th></tr></thead><tbody>"
+        "<table><thead><tr><th>Distribution</th><th>Benchmark</th><th>Task</th><th>Coverage</th><th>Details</th></tr></thead><tbody>"
         + "".join(rows)
         + '</tbody></table><script>const q=document.querySelector("#search"),b=document.querySelector("#benchmark"),'
-        's=document.querySelector("#status");function filter(){for(const r of document.querySelectorAll("tbody tr"))'
+        's=document.querySelector("#status"),d=document.querySelector("#distribution");'
+        'function filter(){for(const r of document.querySelectorAll("tbody tr"))'
         "{r.hidden=!(r.textContent.toLowerCase().includes(q.value.toLowerCase())&&"
-        "(!b.value||r.dataset.benchmark===b.value)&&(!s.value||r.dataset.status===s.value));}}"
+        "(!b.value||r.dataset.benchmark===b.value)&&(!s.value||r.dataset.status===s.value)&&"
+        "(!d.value||r.dataset.distribution===d.value));}}"
         'q.addEventListener("input",filter);b.addEventListener("change",filter);'
-        's.addEventListener("change",filter);</script>'
+        's.addEventListener("change",filter);d.addEventListener("change",filter);filter();</script>'
     )
     (output / "benchmark-coverage.html").write_text(page)
 
@@ -396,6 +420,11 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     benchmark_registry = json.loads(benchmark_bytes)
     known_recipes = {recipe.id for recipe in RECIPES}
     for task in benchmark_registry["tasks"]:
+        benchmark = benchmark_registry["benchmarks"][task["benchmark"]]
+        if benchmark["distribution"] not in {"ID", "OOD"}:
+            raise ValueError(f"Unknown benchmark distribution: {task['benchmark']}")
+        if task["recipes"] and (benchmark["distribution"] == "OOD" or not benchmark["training_mapping_allowed"]):
+            raise ValueError(f"Evaluation-only task mapped to training recipes: {task['task_id']}")
         if unknown := set(task["recipes"]) - known_recipes:
             raise ValueError(f"Unknown benchmark coverage recipes: {unknown}")
     counts: Counter = Counter()
@@ -584,6 +613,10 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     (output / "benchmark_coverage.json").write_bytes(registry_bytes)
     manifest["benchmark_coverage_sha256"] = hashlib.sha256(registry_bytes).hexdigest()
     manifest["benchmark_coverage_counts"] = dict(Counter(task["status"] for task in benchmark_registry["tasks"]))
+    distribution_counts = Counter(
+        benchmark_registry["benchmarks"][task["benchmark"]]["distribution"] for task in benchmark_registry["tasks"]
+    )
+    manifest["benchmark_distribution_counts"] = dict(distribution_counts)
     benchmark_page(output, benchmark_registry)
     domain_options = "".join(
         f'<option value="{html.escape(domain)}">{html.escape(domain)} ({count} recipes)</option>'
@@ -614,15 +647,16 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "simulated examples are small correctness controls. Benchmark data-lineage exclusion, scientific review "
         "and end-to-end workflow validation remain pending.</p>"
         "<p>All 50 source repositories have an explicit recipe mapping below. The table tracks separately "
-        "recorded package checks. Generated task environments still contain Python only; package checks "
-        "do not establish tool availability in Harbor or teacher tool use.</p>"
+        "recorded package checks. Locked MUSCLE, fastp and Picard image contexts are prepared "
+        "for their real-data tasks; "
+        "other environments contain Python only. Container execution and teacher tool use require separate checks.</p>"
         f"<p>{passed_packages}/50 packages have passed three reference cases each.</p>"
         "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish native format coverage. "
         "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
         "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
         '<p><a href="native_validation.json">Recorded package reference checks</a></p>'
-        '<p><a href="benchmark-coverage.html">Inspect coverage of all '
-        f'{len(benchmark_registry["tasks"])} ID tasks</a> · '
+        '<p><a href="benchmark-coverage.html">Inspect workflow coverage: '
+        f'{distribution_counts["ID"]} ID tasks; {distribution_counts["OOD"]} OOD tasks held out</a> · '
         '<a href="data_sources.json">Biological sources and provenance</a></p>'
         "<details><summary>All 50 repositories: scientific operation and execution status</summary>"
         "<table><thead><tr><th>#</th><th>Repository</th><th>Recipes</th><th>CLI/API execution</th></tr></thead><tbody>"

@@ -32,6 +32,10 @@ format profile, and repository mapping. The 134 recipes span 13 domains:
 Use three instances with distinct inputs and reference targets per recipe: 402 train tasks at this checkpoint.
 There are 57 real-data examples and 345 simulated controls. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
+The final training release targets real biological data for every task. Synthetic
+controls stay outside that release and remain available for verifier development.
+Every released task requires a private executable oracle that reads only public
+inputs, plus checks of alternative valid outputs and plausible scientific errors.
 Real examples use the unchanged 27,179-gene, 12-sample GSE60450 count matrix and
 experimental structures 1UBQ, 1CRN and 4HHB, complete annotated phage genomes
 NC_001422.1/NC_001416.1/NC_001604.1, 6,000 observed paired reads from ERR266411,
@@ -56,14 +60,17 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. 33 packages now pass three reference cases each. The
+for all 50 repositories. 34 packages now pass three reference cases each. The
 first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
-11 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
-fastp paired-filter checks pass on observed reads. MUSCLE passed three real-protein alignments; MAFFT needs a corrected channel pin
-after an installation conflict. Sixteen other repositories still need scripts. `native_validation.json` indexes separate checksum-pinned
+12 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
+fastp paired-filter checks pass on observed reads. MAFFT and MUSCLE passed three real-protein alignments each; the MAFFT channel
+correction and earlier installation failure are retained. Sixteen other repositories
+still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
-remain in that history. The current generated solver environment contains Python;
-it does not yet establish native tool execution. Repository source revisions and
+remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
+image-build contexts with the exact resolved package artifacts and checksums.
+Other recipes currently use Python-only environments. Package checks alone do not
+establish successful execution in these Harbor images. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
 `strand-extraction` v2 uses GFF3 gene/mRNA/exon parents and a multirecord FASTA.
@@ -82,6 +89,14 @@ uv run python -m experiments.post_training.bio_tasks.build \
   --base-image python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
   --tool-ref 12bbd5d45b1b176167ab3cfe905e06004c2f02e3
 ```
+
+Task observations live under `setup_files/inputs/`. The pinned Harbor runtime uploads
+that directory into each fresh sandbox; `/app/inputs` points to it. Biological inputs
+and private references therefore do not change the reusable image build context.
+For package-enabled recipes, image building verifies every downloaded artifact
+against the successful reference run, installs its explicit package set offline,
+and removes the download cache. Agent and verifier execution both disable internet.
+Image-build network access is separate from solve-time access.
 
 The output directory must not exist. Generation runs one small reference process
 at a time. Each instance must pass its independent oracle, preserve row-order
@@ -103,8 +118,8 @@ generation immediately and leaves the manifest marked `incomplete`.
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups three examples per recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
-50-repository execution-coverage table. A second page tracks all 455 ID task identifiers,
-with filters for benchmark and coverage status, recipe examples, explicit gaps and
+50-repository execution-coverage table. A second page tracks 365 provisional ID task identifiers and 90 held-out OOD
+BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
 local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers
 and must remain outside solver environments. The bundle contains:
@@ -118,7 +133,7 @@ and must remain outside solver environments. The bundle contains:
   and readiness status.
 - `source_inventory.json`: all 50 repository assessments and original adoption metadata.
 - `data_sources.json`: biological accessions, source licenses, content hashes and transformations.
-- `benchmark_coverage.json` and `benchmark-coverage.html`: pinned ID task inventory, mapping gaps and example evidence.
+- `benchmark_coverage.json` and `benchmark-coverage.html`: pinned ID/OOD task inventory, mapping gaps and example evidence.
 - `native_validation.json` and `native_validation_runs/`: indexed, checksum-pinned package execution evidence.
 - `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 
@@ -138,23 +153,23 @@ added. The generator does not reserve development or test tasks.
 
 ## Execution boundary
 
-Tasks request a 1,800-second solver limit and offline execution. Inputs are copied
-from `environment/inputs/`; references and verifier code live under `tests/`.
-Harbor creates a separate verifier sandbox and transfers `/app/answer.json` for
-grading. Only that answer artifact is requested. Use Harbor revision
+Tasks request a 1,800-second solver limit and offline execution. Inputs are staged
+from `setup_files/inputs/`; references and verifier code live under `tests/`.
+Harbor creates a separate verifier sandbox and transfers `/app/answer.json` plus
+every declared native output artifact for grading. Use Harbor revision
 `d072bef08e54050880b484eb81d892944d1d82fb` or a verified compatible version that
 supports this handoff and enforces `allow_internet=false` for the selected backend.
 
 The solver image requires Python 3.12, pip, venv, and a shell. The separate verifier
 image installs pinned Pydantic, TOMLKit, and TaskTrove verifier code during image
 build. Build requires network access; verification does not. Capture the resulting
-image digests before teacher collection: a pinned base image and source revision
+image digests for the task-dataset release: a pinned base image and source revision
 alone do not freeze all build-time transitive packages.
 
 `validated_locally` means input-reading oracle and negative-control checks passed
 on the host. It does not establish container execution, network isolation, or
 scientific approval. Both `container_validation` and `scientific_review` remain
-`pending`. Before collection, review at least three varied examples per recipe
+`pending`. Before task release, review at least three varied examples per recipe
 and validate reference/failing solutions through the selected Harbor backend.
 
 The verifier checks every record ID, field, type, missing value, and quantity.
@@ -164,7 +179,9 @@ A bad reference produces `invalid_task` and removes reward files; file-access
 failures produce `infra_error`. Solver answer errors receive reward 0.
 
 Teacher collection and successful-trace export are not part of this command.
-The program's five-attempt GLM-5.3 protocol remains in the issue. No teacher or
+The program's five-attempt GLM-5.3 protocol remains a later phase in the issue.
+Task-dataset completion is based on ID workflow coverage, private executable oracles,
+validated environments and scientific contracts, and screened biological provenance. No teacher or
 training job is launched when building or inspecting this corpus.
 
 ## Real-package reference checks
@@ -173,8 +190,8 @@ The scripts in `native/` run a package CLI or API on the same public inputs and
 translate its output into the existing answer contract. A separate reporting
 process grades it against the private construction reference. This is an
 integration check, not a model judge, replacement oracle, or proof of teacher
-package use. The 30 implemented scripts include unvalidated options and version
-assumptions; only recorded passing executions count as evidence.
+package use. Only recorded passing executions count as evidence; an unexecuted script or
+package import does not establish tool coverage.
 
 Prepare checks from a validated corpus without installing packages:
 
