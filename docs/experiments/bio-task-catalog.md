@@ -255,8 +255,11 @@ oracle plus artifact checks took 3.9 seconds. The
 pins all 26 package artifacts and retains the first launcher dependency failure.
 These heuristic similarity clusters do not establish orthology or function.
 The packaged task passed two positive checks and 17 negative controls in 6.1 seconds
-with 221 MiB peak RSS; its archive is preserved in regional GCS. Harbor checks and
-benchmark-lineage screening remain open.
+with 221 MiB peak RSS; its archive is preserved in regional GCS. A fresh Harbor
+oracle completed in 2.1 seconds; its separate verifier accepted all artifacts.
+Changed residues, a missing representative and a wrong membership each received
+zero with byte-identical correct summaries. Cleanup completed with no owned
+sandboxes remaining. Benchmark-lineage screening and scientific review remain open.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:

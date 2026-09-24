@@ -2159,6 +2159,598 @@
         }
       ],
       "limitations": "Two fresh oracle executions and four isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
+    },
+    {
+      "job_id": "/exedev/bio-harbor-clustering-20260924-094525",
+      "source_revision": "55853d267b6290c174b3cd59acfff294ad34a8ba",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 3,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "d5608292d00de747ed66598d4b400cdfb8f31936c132c66fbc7f3eda177f1479",
+      "canonical_corpus_manifest_sha256": "c86d41bdf16580126a7c138bdfc0dd038f4882271d307c025dd523f7c7e262e0",
+      "canonical_corpus_archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff/outputs.tar.zst",
+        "size_bytes": 5588956,
+        "sha256": "00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff"
+      },
+      "archive": {
+        "state": "preserved",
+        "uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/673418ae7f6965077d5e9c1a7d2fd410c9c4fe3a892e4aeedafb8b56713a0562/outputs.tar.zst",
+        "size_bytes": 1318585,
+        "sha256": "673418ae7f6965077d5e9c1a7d2fd410c9c4fe3a892e4aeedafb8b56713a0562",
+        "provider_md5": "XozFmmMd8PRyDQ6hif5i2g==",
+        "generation": "1790243973448280",
+        "temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-clustering-20260924-094525/0/567a45886b6b7c37/outputs.tar.zst"
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-clustering-20260924-094525",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T09:57:21.627551+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-24T09:48:40.020034+00:00",
+        "trials": [
+          "real-proteome-clustering-v1-2026__FRW5MEX",
+          "real-proteome-clustering-v1-2026__XCcipLB",
+          "real-proteome-clustering-v1-2026__us7ARVs",
+          "real-proteome-clustering-v1-2026__wHFsFGV"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-24T09:48:40.893125+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-24T09:48:40.936524+00:00"
+      },
+      "summary_identity_check": "Every negative answer.json has the same SHA-256 as the passing positive; FASTA failures return before reporting summary checks.",
+      "cases": [
+        {
+          "task_id": "real-proteome-clustering-v1-20260923-00000",
+          "recipe": "real-proteome-clustering",
+          "repository_indices": [
+            42
+          ],
+          "task_sha256": "92a4583ef8e7c051a139de4695f0cb12bf7312fd8967940aee4de5d649b278bd",
+          "contract_sha256": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+          "expected_reward": 1,
+          "control": "positive",
+          "source_ledger_validation": {
+            "missing_artifact:representatives.fa": 0.0,
+            "changed_residue:representatives.fa": 0.0,
+            "duplicate_sequence:representatives.fa": 0.0,
+            "missing_sequence:representatives.fa": 0.0,
+            "missing_artifact:membership.tsv": 0.0,
+            "missing_table_row:membership.tsv": 0.0,
+            "duplicate_table_row:membership.tsv": 0.0,
+            "changed_table_value:membership.tsv": 0.0,
+            "missing_artifact:clusters.tsv": 0.0,
+            "missing_table_row:clusters.tsv": 0.0,
+            "duplicate_table_row:clusters.tsv": 0.0,
+            "changed_table_value:clusters.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "omitted_singletons": 0.0,
+            "malformed": 0.0
+          },
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "proteome",
+                  "field": "proteins",
+                  "passed": true,
+                  "expected": 4403,
+                  "actual": 4403
+                },
+                {
+                  "id": "proteome",
+                  "field": "clusters",
+                  "passed": true,
+                  "expected": 4184,
+                  "actual": 4184
+                },
+                {
+                  "id": "proteome",
+                  "field": "singletons",
+                  "passed": true,
+                  "expected": 4029,
+                  "actual": 4029
+                },
+                {
+                  "id": "proteome",
+                  "field": "multimember_clusters",
+                  "passed": true,
+                  "expected": 155,
+                  "actual": 155
+                },
+                {
+                  "id": "proteome",
+                  "field": "nonrepresentative_proteins",
+                  "passed": true,
+                  "expected": 219,
+                  "actual": 219
+                },
+                {
+                  "id": "proteome",
+                  "field": "input_residues",
+                  "passed": true,
+                  "expected": 1354442,
+                  "actual": 1354442
+                },
+                {
+                  "id": "proteome",
+                  "field": "representative_residues",
+                  "passed": true,
+                  "expected": 1283177,
+                  "actual": 1283177
+                }
+              ],
+              "artifact_checks": {
+                "representatives.fa": {
+                  "passed": true,
+                  "records": 4184,
+                  "residues": 1283177
+                },
+                "membership.tsv": {
+                  "passed": true,
+                  "rows": 4403,
+                  "missing": [],
+                  "failures": []
+                },
+                "clusters.tsv": {
+                  "passed": true,
+                  "rows": 4184,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "representatives.fa": {
+              "passed": true,
+              "records": 4184,
+              "residues": 1283177
+            },
+            "membership.tsv": {
+              "passed": true,
+              "rows": 4403,
+              "missing": [],
+              "failures": []
+            },
+            "clusters.tsv": {
+              "passed": true,
+              "rows": 4184,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "22bd588889886d4c28e7e3e1cd430de778f4db4b0754314b42e7b2a067ad9e1e",
+            "instruction.md": "a6cbb0056f0cca0a5ef16d2b64f1f3555f9abf0a8b0fdfe73d477025144d4460",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "cbb4f48a5b092804013bcbe455781a454a4f4c0d46949995ad59e1861315cede",
+            "solution/oracle.pyz": "843ef97948f748a30ee94891eae84f3d779523bce040b3a9d82365126af73634",
+            "solution/solve.sh": "1b27bfc0a2816f2a71a1eab5c3463538d32829fbb037ab398705e72cce7c3f6b",
+            "task.toml": "e19588ee330444d3144cfc4cc5c9cd0e58f4a735dfca037cb99ce3b9dc2c545c",
+            "tests/Dockerfile": "f0d9029d63035a03ec7605bd29943187d58b04f2ebcdb13b62cb6686335ac46f",
+            "tests/reference.json": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "manifest.json": "d6332708f4924bfbef750015071268b0fe28988a024b8ae98fad08956d3fec1d",
+            "membership.tsv": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7",
+            "representatives.fa": "a27d34a3ae7de575fa67f76e9b6eb6d4371e4fac181ed2e363f98cc68fd9b5ed"
+          },
+          "seconds": {
+            "environment_setup": 1.417882,
+            "agent_setup": 8e-05,
+            "agent_execution": 2.062929,
+            "verifier": 10.129194
+          },
+          "started_at": "2026-09-24T09:48:21.049205Z",
+          "finished_at": "2026-09-24T09:48:36.406242Z"
+        },
+        {
+          "task_id": "real-proteome-clustering-v1-20260923-00000-changed-representative-residue",
+          "recipe": "real-proteome-clustering",
+          "repository_indices": [
+            42
+          ],
+          "task_sha256": "92a4583ef8e7c051a139de4695f0cb12bf7312fd8967940aee4de5d649b278bd",
+          "contract_sha256": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+          "expected_reward": 0,
+          "control": "changed-representative-residue-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:representatives.fa": 0.0,
+            "changed_residue:representatives.fa": 0.0,
+            "duplicate_sequence:representatives.fa": 0.0,
+            "missing_sequence:representatives.fa": 0.0,
+            "missing_artifact:membership.tsv": 0.0,
+            "missing_table_row:membership.tsv": 0.0,
+            "duplicate_table_row:membership.tsv": 0.0,
+            "changed_table_value:membership.tsv": 0.0,
+            "missing_artifact:clusters.tsv": 0.0,
+            "missing_table_row:clusters.tsv": 0.0,
+            "duplicate_table_row:clusters.tsv": 0.0,
+            "changed_table_value:clusters.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "omitted_singletons": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-proteome-clustering-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": null,
+          "summary_check_status": "artifact rejected before summary checks",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "fasta_changed_residues",
+              "artifact": "representatives.fa"
+            }
+          },
+          "artifact_checks": {
+            "representatives.fa": {
+              "passed": false,
+              "reason": "fasta_changed_residues"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "22bd588889886d4c28e7e3e1cd430de778f4db4b0754314b42e7b2a067ad9e1e",
+            "instruction.md": "a6cbb0056f0cca0a5ef16d2b64f1f3555f9abf0a8b0fdfe73d477025144d4460",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "cbb4f48a5b092804013bcbe455781a454a4f4c0d46949995ad59e1861315cede",
+            "solution/control/answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "solution/control/clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "solution/control/membership.tsv": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7",
+            "solution/control/representatives.fa": "6ef8ca33830151e0d448fe94b962703368dc575bd716b89c5849342e012c9f3e",
+            "solution/oracle.pyz": "843ef97948f748a30ee94891eae84f3d779523bce040b3a9d82365126af73634",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "e19588ee330444d3144cfc4cc5c9cd0e58f4a735dfca037cb99ce3b9dc2c545c",
+            "tests/Dockerfile": "f0d9029d63035a03ec7605bd29943187d58b04f2ebcdb13b62cb6686335ac46f",
+            "tests/reference.json": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "manifest.json": "d6332708f4924bfbef750015071268b0fe28988a024b8ae98fad08956d3fec1d",
+            "membership.tsv": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7",
+            "representatives.fa": "6ef8ca33830151e0d448fe94b962703368dc575bd716b89c5849342e012c9f3e"
+          },
+          "seconds": {
+            "environment_setup": 1.684999,
+            "agent_setup": 8.7e-05,
+            "agent_execution": 0.538311,
+            "verifier": 9.851603
+          },
+          "started_at": "2026-09-24T09:48:07.272386Z",
+          "finished_at": "2026-09-24T09:48:21.042296Z"
+        },
+        {
+          "task_id": "real-proteome-clustering-v1-20260923-00000-missing-representative",
+          "recipe": "real-proteome-clustering",
+          "repository_indices": [
+            42
+          ],
+          "task_sha256": "92a4583ef8e7c051a139de4695f0cb12bf7312fd8967940aee4de5d649b278bd",
+          "contract_sha256": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+          "expected_reward": 0,
+          "control": "missing-representative-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:representatives.fa": 0.0,
+            "changed_residue:representatives.fa": 0.0,
+            "duplicate_sequence:representatives.fa": 0.0,
+            "missing_sequence:representatives.fa": 0.0,
+            "missing_artifact:membership.tsv": 0.0,
+            "missing_table_row:membership.tsv": 0.0,
+            "duplicate_table_row:membership.tsv": 0.0,
+            "changed_table_value:membership.tsv": 0.0,
+            "missing_artifact:clusters.tsv": 0.0,
+            "missing_table_row:clusters.tsv": 0.0,
+            "duplicate_table_row:clusters.tsv": 0.0,
+            "changed_table_value:clusters.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "omitted_singletons": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-proteome-clustering-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": null,
+          "summary_check_status": "artifact rejected before summary checks",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "fasta_missing_records",
+              "artifact": "representatives.fa"
+            }
+          },
+          "artifact_checks": {
+            "representatives.fa": {
+              "passed": false,
+              "reason": "fasta_missing_records"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "22bd588889886d4c28e7e3e1cd430de778f4db4b0754314b42e7b2a067ad9e1e",
+            "instruction.md": "a6cbb0056f0cca0a5ef16d2b64f1f3555f9abf0a8b0fdfe73d477025144d4460",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "cbb4f48a5b092804013bcbe455781a454a4f4c0d46949995ad59e1861315cede",
+            "solution/control/answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "solution/control/clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "solution/control/membership.tsv": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7",
+            "solution/control/representatives.fa": "b0f26ef51104642deef962d59a056a7d86d39e983dd32a44a490f87eb4ac693c",
+            "solution/oracle.pyz": "843ef97948f748a30ee94891eae84f3d779523bce040b3a9d82365126af73634",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "e19588ee330444d3144cfc4cc5c9cd0e58f4a735dfca037cb99ce3b9dc2c545c",
+            "tests/Dockerfile": "f0d9029d63035a03ec7605bd29943187d58b04f2ebcdb13b62cb6686335ac46f",
+            "tests/reference.json": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "manifest.json": "d6332708f4924bfbef750015071268b0fe28988a024b8ae98fad08956d3fec1d",
+            "membership.tsv": "f3d80e28a81a7a0d054600d7bffeba0d7e8f71d12654464454831a0b70a931f7",
+            "representatives.fa": "b0f26ef51104642deef962d59a056a7d86d39e983dd32a44a490f87eb4ac693c"
+          },
+          "seconds": {
+            "environment_setup": 1.42324,
+            "agent_setup": 8e-05,
+            "agent_execution": 0.566701,
+            "verifier": 10.215184
+          },
+          "started_at": "2026-09-24T09:47:53.128391Z",
+          "finished_at": "2026-09-24T09:48:07.265045Z"
+        },
+        {
+          "task_id": "real-proteome-clustering-v1-20260923-00000-wrong-membership",
+          "recipe": "real-proteome-clustering",
+          "repository_indices": [
+            42
+          ],
+          "task_sha256": "92a4583ef8e7c051a139de4695f0cb12bf7312fd8967940aee4de5d649b278bd",
+          "contract_sha256": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+          "expected_reward": 0,
+          "control": "wrong-membership-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:representatives.fa": 0.0,
+            "changed_residue:representatives.fa": 0.0,
+            "duplicate_sequence:representatives.fa": 0.0,
+            "missing_sequence:representatives.fa": 0.0,
+            "missing_artifact:membership.tsv": 0.0,
+            "missing_table_row:membership.tsv": 0.0,
+            "duplicate_table_row:membership.tsv": 0.0,
+            "changed_table_value:membership.tsv": 0.0,
+            "missing_artifact:clusters.tsv": 0.0,
+            "missing_table_row:clusters.tsv": 0.0,
+            "duplicate_table_row:clusters.tsv": 0.0,
+            "changed_table_value:clusters.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "omitted_singletons": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-proteome-clustering-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "proteome",
+                  "field": "proteins",
+                  "passed": true,
+                  "expected": 4403,
+                  "actual": 4403
+                },
+                {
+                  "id": "proteome",
+                  "field": "clusters",
+                  "passed": true,
+                  "expected": 4184,
+                  "actual": 4184
+                },
+                {
+                  "id": "proteome",
+                  "field": "singletons",
+                  "passed": true,
+                  "expected": 4029,
+                  "actual": 4029
+                },
+                {
+                  "id": "proteome",
+                  "field": "multimember_clusters",
+                  "passed": true,
+                  "expected": 155,
+                  "actual": 155
+                },
+                {
+                  "id": "proteome",
+                  "field": "nonrepresentative_proteins",
+                  "passed": true,
+                  "expected": 219,
+                  "actual": 219
+                },
+                {
+                  "id": "proteome",
+                  "field": "input_residues",
+                  "passed": true,
+                  "expected": 1354442,
+                  "actual": 1354442
+                },
+                {
+                  "id": "proteome",
+                  "field": "representative_residues",
+                  "passed": true,
+                  "expected": 1283177,
+                  "actual": 1283177
+                }
+              ],
+              "artifact_checks": {
+                "representatives.fa": {
+                  "passed": true,
+                  "records": 4184,
+                  "residues": 1283177
+                },
+                "membership.tsv": {
+                  "passed": false,
+                  "rows": 4403,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "A0A385XJ53",
+                      "field": "representative"
+                    }
+                  ]
+                },
+                "clusters.tsv": {
+                  "passed": true,
+                  "rows": 4184,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "representatives.fa": {
+              "passed": true,
+              "records": 4184,
+              "residues": 1283177
+            },
+            "membership.tsv": {
+              "passed": false,
+              "rows": 4403,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "A0A385XJ53",
+                  "field": "representative"
+                }
+              ]
+            },
+            "clusters.tsv": {
+              "passed": true,
+              "rows": 4184,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "22bd588889886d4c28e7e3e1cd430de778f4db4b0754314b42e7b2a067ad9e1e",
+            "instruction.md": "a6cbb0056f0cca0a5ef16d2b64f1f3555f9abf0a8b0fdfe73d477025144d4460",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "cbb4f48a5b092804013bcbe455781a454a4f4c0d46949995ad59e1861315cede",
+            "solution/control/answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "solution/control/clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "solution/control/membership.tsv": "1be3a59a1842003f641f2182ca2fbc9cf90f575ffd0bbeca1e6d9d2e0143a81a",
+            "solution/control/representatives.fa": "a27d34a3ae7de575fa67f76e9b6eb6d4371e4fac181ed2e363f98cc68fd9b5ed",
+            "solution/oracle.pyz": "843ef97948f748a30ee94891eae84f3d779523bce040b3a9d82365126af73634",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "e19588ee330444d3144cfc4cc5c9cd0e58f4a735dfca037cb99ce3b9dc2c545c",
+            "tests/Dockerfile": "f0d9029d63035a03ec7605bd29943187d58b04f2ebcdb13b62cb6686335ac46f",
+            "tests/reference.json": "c8e90896b3b5aa5416f565158c2650cf49dbab86af1691b52015220e1a310f70",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "86eceeaa6ae20ee9f60142cac6c3d612666873de71c3cc1b128c5cbf1d6cd3b6",
+            "clusters.tsv": "ece76af58fa716136775b6f34312255389f6d9782bb7f6d82ab7edca5a48e2d4",
+            "manifest.json": "d6332708f4924bfbef750015071268b0fe28988a024b8ae98fad08956d3fec1d",
+            "membership.tsv": "1be3a59a1842003f641f2182ca2fbc9cf90f575ffd0bbeca1e6d9d2e0143a81a",
+            "representatives.fa": "a27d34a3ae7de575fa67f76e9b6eb6d4371e4fac181ed2e363f98cc68fd9b5ed"
+          },
+          "seconds": {
+            "environment_setup": 25.339137,
+            "agent_setup": 0.000108,
+            "agent_execution": 0.564301,
+            "verifier": 46.744396
+          },
+          "started_at": "2026-09-24T09:46:38.122629Z",
+          "finished_at": "2026-09-24T09:47:53.120714Z"
+        }
+      ],
+      "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
     }
   ]
 }

@@ -804,7 +804,7 @@
         "scope": "real-proteome-clustering"
       },
       "scope": "Cluster an observed complete proteome with native MMseqs2, extract its representatives and reconcile all member, sequence-version and cluster quantities.",
-      "limitations": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged-task and Harbor checks and biological lineage review remain pending."
+      "limitations": "One complete observed bacterial proteome under the specified Linclust heuristic. Similarity clusters do not establish orthology, function, exhaustive pairwise similarity or benchmark workflow coverage. Reference and oracle share the native clustering engine, with independent biological measurements. Packaged and Harbor oracle/artifact checks pass. Biological lineage review and scientific validation remain pending."
     },
     {
       "index": 43,

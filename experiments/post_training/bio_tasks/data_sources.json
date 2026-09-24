@@ -1202,7 +1202,7 @@
       "intended_workflow": "Search versioned profiles over the complete proteome and reconcile domain coverage; independently cluster the complete proteome with specified Linclust parameters and preserve native representative sequences and all member identities.",
       "remaining_checks": [
         "Benchmark data-lineage screening",
-        "Packaged task and Harbor validation"
+        "Scientific review and final training selection"
       ],
       "limits": "Three selected profiles do not annotate all protein families. A no-hit under this profile set does not establish absence of domains or biological function.",
       "status": "native-reference-and-independent-artifact-checks-passed; candidate-training-recipe",
@@ -1279,6 +1279,17 @@
         },
         "status": "passed-package-checks",
         "limits": "Host package validation. Harbor and scientific validation remain separate."
+      },
+      "clustering_container_validation": {
+        "job_id": "/exedev/bio-harbor-clustering-20260924-094525",
+        "source_revision": "55853d267b6290c174b3cd59acfff294ad34a8ba",
+        "evidence_file": "container_validation.json",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/673418ae7f6965077d5e9c1a7d2fd410c9c4fe3a892e4aeedafb8b56713a0562/outputs.tar.zst",
+        "archive_sha256": "673418ae7f6965077d5e9c1a7d2fd410c9c4fe3a892e4aeedafb8b56713a0562",
+        "positive_cases": 1,
+        "negative_cases": 3,
+        "status": "passed",
+        "cleanup_remaining": 0
       }
     },
     "Pfam:selected-models-20260924": {
