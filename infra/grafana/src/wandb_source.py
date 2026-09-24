@@ -59,6 +59,13 @@ _PROGRESS_KEY = "run_progress"
 # single bad step and matches the status strip's own AVG(tokens/s) tile.
 _TPS_KEY = "throughput/tokens_per_second"
 _TPS_SAMPLES = 500
+# The projected finish extrapolates the step rate over this many most recent steps: about
+# four hours of the hero at 15 s a step. A whole-life rate lags a throughput change for
+# days and keeps every past outage in the average; a trailing window sheds an outage once
+# the run has trained through it. Sampled by step, so the window stays dense however long
+# the run is.
+_RATE_WINDOW_STEPS = 1_000
+_RATE_WINDOW_SAMPLES = 50
 
 # The projects a run named by the training dashboard can live in, searched in this
 # order. The grug hero launchers default to marin_moe and marin.experiment.train
@@ -103,24 +110,22 @@ class _SampledHistory(NamedTuple):
 class _HistoryBaseline(NamedTuple):
     reference_tps: float
     tokens_baseline: float
-    first_step: float
-    first_timestamp: float
 
 
 def _projected_finish_ms(
-    *, step: float, progress: float, baseline: _HistoryBaseline, heartbeat_seconds: float
+    *, step: float, progress: float, anchor_step: float, anchor_timestamp: float, heartbeat_seconds: float
 ) -> int | None:
-    """Epoch milliseconds when the run reaches `step / progress` at its own step rate.
+    """Epoch milliseconds when the run reaches `step / progress` at its recent step rate.
 
-    The rate is `step` less the first sampled step, over the heartbeat less the first
-    sample's stamp. None until the run has advanced past its first sample.
+    The rate is `step` less the anchor's step, over the heartbeat less the anchor's
+    stamp. None until the run has advanced past the anchor.
     """
-    steps_since_first = step - baseline.first_step
-    seconds_since_first = heartbeat_seconds - baseline.first_timestamp
-    if progress <= 0 or steps_since_first <= 0 or seconds_since_first <= 0:
+    steps_since_anchor = step - anchor_step
+    seconds_since_anchor = heartbeat_seconds - anchor_timestamp
+    if progress <= 0 or steps_since_anchor <= 0 or seconds_since_anchor <= 0:
         return None
     steps_remaining = step / progress - step
-    return round((heartbeat_seconds + steps_remaining * seconds_since_first / steps_since_first) * 1000)
+    return round((heartbeat_seconds + steps_remaining * seconds_since_anchor / steps_since_anchor) * 1000)
 
 
 class WandbSource:
@@ -261,7 +266,7 @@ class WandbSource:
         return self._search_projects(run, project, read)
 
     def _history_baseline(self, *, project: str, run: str, min_step: int | None = None) -> _HistoryBaseline | None:
-        """The reference token rate and where this W&B run's own work begins.
+        """The reference token rate and the token count this W&B run started from.
 
         Forks restrict sampling to steps after the branch point, excluding inherited
         parent history from both the token baseline and reference speed.
@@ -278,15 +283,12 @@ class WandbSource:
         constant batch, `total_tokens` is proportional to `step + 1`, so the
         pre-first-step count is `first_tokens * first_step / (first_step + 1)` -- zero
         for a run started from scratch, the inherited count for a resumed one.
-
-        The first sample's step and stamp anchor the step rate: measured from there,
-        the steps a resumed run inherited and the time before its first step both drop
-        out. None before the first logged step.
+        None before the first logged step.
         """
         history = self._sampled_run_history(
             project=project,
             run=run,
-            keys=(_STEP_KEY, _TIMESTAMP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY),
+            keys=(_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY),
             samples=_TPS_SAMPLES,
             min_step=min_step,
         )
@@ -299,9 +301,26 @@ class WandbSource:
         return _HistoryBaseline(
             reference_tps=reference_tps,
             tokens_baseline=tokens * step / (step + 1),
-            first_step=step,
-            first_timestamp=first[_TIMESTAMP_KEY],
         )
+
+    def _rate_anchor(self, *, project: str, run: str, step: float, min_step: int | None) -> tuple[float, float] | None:
+        """The earliest sampled (step, stamp) within `_RATE_WINDOW_STEPS` of `step`.
+
+        The window never reaches below `min_step`, so a fork's rate never spans
+        inherited parent history. None when the window holds no logged step.
+        """
+        window_start = max(int(step) - _RATE_WINDOW_STEPS, min_step or 0)
+        history = self._sampled_run_history(
+            project=project,
+            run=run,
+            keys=(_STEP_KEY, _TIMESTAMP_KEY),
+            samples=_RATE_WINDOW_SAMPLES,
+            min_step=window_start,
+        )
+        if history is None or not history.points:
+            return None
+        first = min(history.points, key=lambda point: point[_STEP_KEY])
+        return first[_STEP_KEY], first[_TIMESTAMP_KEY]
 
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active time, wall-clock time, and progress efficiency for `run`.
@@ -323,14 +342,16 @@ class WandbSource:
         nothing yet reports nulls rather than zeros.
 
         `projected_finish_ms` is the epoch millisecond at which the run reaches its
-        stop step at its own step rate: the steps between the first sampled point and
-        the summary's `_step`, over the wall clock between that point and the last
-        heartbeat, carried forward over `_step / run_progress - _step` steps to go.
-        Measuring from the first sample means a run resumed from a checkpoint is not
-        credited with the steps it inherited, and every restart, checkpoint, and eval
-        since then slows the rate. The window is the run's whole life under this id.
-        Null until the run has advanced past its first sample, and for a run that
-        does not log `run_progress`.
+        stop step at its recent step rate: the steps between the earliest sampled point
+        of the last `_RATE_WINDOW_STEPS` steps and the summary's `_step`, over the wall
+        clock between that point and the last heartbeat, carried forward over
+        `_step / run_progress - _step` steps to go. Checkpoints, evals, and restarts
+        inside the window slow the rate; an outage the run has trained past no longer
+        does. The window never reaches into a fork's inherited history. While a
+        resumed run replays steps it had already logged, W&B holds `_step` at the old
+        high point, so the date slips until the replay passes it. Null until the run
+        has advanced past the window's first sample, and for a run that does not log
+        `run_progress`.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -351,9 +372,8 @@ class WandbSource:
             tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
             tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
             branch_point = run_data.get("branchPoint")
-            baseline = self._history_baseline(
-                project=candidate, run=run, min_step=int(branch_point["step"]) + 1 if branch_point else None
-            )
+            own_min_step = int(branch_point["step"]) + 1 if branch_point else None
+            baseline = self._history_baseline(project=candidate, run=run, min_step=own_min_step)
             reference_tps = baseline.reference_tps if baseline else None
             tokens_since_start = tokens_seen - baseline.tokens_baseline if tokens_seen is not None and baseline else None
             efficiency = (
@@ -362,14 +382,20 @@ class WandbSource:
                 else None
             )
             step, progress = summary.get(_STEP_KEY), summary.get(_PROGRESS_KEY)
+            anchor = (
+                self._rate_anchor(project=candidate, run=run, step=step, min_step=own_min_step)
+                if baseline and isinstance(step, int | float) and isinstance(progress, int | float)
+                else None
+            )
             projected_finish_ms = (
                 _projected_finish_ms(
                     step=step,
                     progress=progress,
-                    baseline=baseline,
+                    anchor_step=anchor[0],
+                    anchor_timestamp=anchor[1],
                     heartbeat_seconds=heartbeat_seconds,
                 )
-                if baseline and isinstance(step, int | float) and isinstance(progress, int | float)
+                if anchor
                 else None
             )
             return [

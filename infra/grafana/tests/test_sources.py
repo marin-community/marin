@@ -614,44 +614,41 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert (row["reference_tps"], row["progress_efficiency"], row["projected_finish_ms"]) == (None, None, None)
 
 
-def test_wandb_run_activity_projects_the_finish_from_this_runs_own_steps():
-    # A completion date extrapolates this run's own step rate, measured from its first
-    # sampled step to the summary's last over the wall clock between them, to the stop step
-    # that `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000 that
-    # has done 4,320 steps in the 24 hours since its first sample: 20 s a step, and 304,680
-    # steps to go on a 390,000-step schedule is another 70.5 days. Crediting it with the
-    # 85,320 steps of the global counter over the same day would put the finish 3.6 days
-    # out. The half hour between creation and the first sample is startup, and does not
-    # count against the rate.
-    asked: list[str] = []
-    first_sample = datetime(2026, 9, 9, 22, 30, tzinfo=UTC)
+def test_wandb_run_activity_projects_the_finish_from_the_recent_step_rate():
+    # A completion date extrapolates the step rate over the last 1,000 steps, from the
+    # earliest sample in that window to the summary's last step over the wall clock between
+    # them, to the stop step that `_step / run_progress` recovers. This run is a fresh id
+    # resumed at step 81,000. A six-hour outage early on means its whole-life rate is 25 s a
+    # step (4,320 steps in 30 hours); its last 1,000 steps took 20 s each. With 304,680
+    # steps to go on a 390,000-step schedule, the recent rate puts the finish 70.5 days out.
+    # The whole-life rate would add another 17.6 days for an outage the run has trained past.
     heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
     run = {
         "state": "running",
-        "createdAt": "2026-09-09T22:00:00Z",
-        "heartbeatAt": "2026-09-10T22:30:00Z",
+        "createdAt": "2026-09-09T16:00:00Z",
+        "heartbeatAt": heartbeat.isoformat(),
         "summaryMetrics": json.dumps(
             {"_runtime": 86_000, "_step": 85_320, "run_progress": 85_320 / 390_000, "throughput/total_tokens": 1.0}
         ),
     }
-    tps_points = [
+    points = [
         {
-            "_step": 81_000,
-            "_timestamp": first_sample.timestamp(),
+            "_step": step,
+            "_timestamp": (heartbeat - timedelta(seconds=before)).timestamp(),
             "throughput/total_tokens": 1.0,
             "throughput/tokens_per_second": 1.0,
         }
+        for step, before in [(81_000, 30 * 3_600), (84_320, 1_000 * 20)]
     ]
 
-    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    (row,) = _wandb(_activity_handler("marin_moe", run, [], points)).run_activity("hero-run")
 
     projected = datetime.fromtimestamp(row["projected_finish_ms"] / 1000, UTC)
     assert projected == heartbeat + timedelta(seconds=304_680 * 20)
     assert projected == datetime(2026, 11, 20, 11, 10, tzinfo=UTC)
 
-    # Before the run advances past its first sample there is no rate, and so no date.
-    run["summaryMetrics"] = json.dumps({"_step": 81_000, "run_progress": 81_000 / 390_000})
-    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    # With no logged step inside the window there is no rate, and so no date.
+    (row,) = _wandb(_activity_handler("marin_moe", run, [], points[:1])).run_activity("hero-run")
     assert row["projected_finish_ms"] is None
 
 
