@@ -935,5 +935,224 @@
       "checks_sha256": "e39ec1c86f62f3609bdddca5e36a16217776d4da7d9213ffa41fb6e42f17fd4c",
       "limitations": "Two connected RNA-seq recipes on GSE60450; complete QC and fitted-gene tables, plus full GO enrichment tables where requested. All six oracle cases and malformed/missing/changed-artifact controls pass. Fitted-model construction and oracle share the pinned DESeq2 engine; enrichment uses SciPy versus R. No Harbor image validation or teacher calls in this run. Benchmark lineage screening and scientific review remain pending."
     }
+  ],
+  "numerical_portability": [
+    {
+      "job_id": "/exedev/bio-full-corpus-20260924-030027",
+      "source_revision": "160cfabc62d3229aa25ceb3a8797b3c3e69d77de",
+      "scope": "Full canonical corpus build followed by a same-host OpenBLAS kernel comparison on the canonical GO workflow. This does not establish Harbor portability or final training readiness.",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-full-corpus-20260924-030027/0/43ef08c9fe2f824d/outputs.tar.zst",
+        "size_bytes": 28681273,
+        "sha256": "dee7acb182947bf9133d8ec63b4034ba0db7401da48d41b76581b8f95839546f",
+        "ttl_days": 7
+      },
+      "build": {
+        "status": "passed",
+        "source_revision": "160cfabc62d3229aa25ceb3a8797b3c3e69d77de",
+        "model_calls": 0,
+        "task_count": 139,
+        "data_origins": {
+          "simulated": 115,
+          "real": 24
+        },
+        "manifest_sha256": "becec6609f00153d34ecba6d28ac9a41ccb585680cfb6792a90479a726326aad",
+        "finished_at": "2026-09-24T03:04:34.955951+00:00"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-full-corpus-fabbu8te/python/bin/python",
+          "-m",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--tool-ref",
+          "160cfabc62d3229aa25ceb3a8797b3c3e69d77de",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 94.73948972999642,
+        "peak_child_rss_kib": 1201240
+      },
+      "diagnostic_task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+      "kernel_comparisons": [
+        {
+          "profile": {
+            "requested_core": "auto",
+            "core": "Zen",
+            "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Zen MAX_THREADS=128",
+            "cpu_model": "AMD EPYC 7B12"
+          },
+          "reward": 1.0,
+          "status": "scored",
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 17361,
+              "missing": [],
+              "failures": []
+            },
+            "enrichment.tsv": {
+              "passed": true,
+              "rows": 6021,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "oracle_execution": {
+            "argv": [
+              "/app/bio-full-corpus-fabbu8te/python/bin/python",
+              "-I",
+              "/iris/outputs/corpus/oracles/real-rnaseq-go-enrichment-v1-20260923-00000/solution/oracle.pyz",
+              "real-rnaseq-go-enrichment",
+              "--inputs",
+              "/iris/outputs/corpus/harbor/train/real-rnaseq-go-enrichment-v1-20260923-00000/setup_files/inputs",
+              "--answer",
+              "/iris/outputs/blas-diagnostics/auto/answer.json"
+            ],
+            "exit_code": 0,
+            "seconds": 32.40853462800442,
+            "peak_child_rss_kib": 1201584
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa",
+            "de_results.tsv": "e1506764a06f0341c2890de890242f81e4065ba8c037bec9d261b372ef475499",
+            "enrichment.tsv": "45684a063baca2b2103315431582ed83baf27df062088186a5e80427327482c6"
+          }
+        },
+        {
+          "profile": {
+            "requested_core": "HASWELL",
+            "core": "Haswell",
+            "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=128",
+            "cpu_model": "AMD EPYC 7B12"
+          },
+          "reward": 1.0,
+          "status": "scored",
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 17361,
+              "missing": [],
+              "failures": []
+            },
+            "enrichment.tsv": {
+              "passed": true,
+              "rows": 6021,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "oracle_execution": {
+            "argv": [
+              "/app/bio-full-corpus-fabbu8te/python/bin/python",
+              "-I",
+              "/iris/outputs/corpus/oracles/real-rnaseq-go-enrichment-v1-20260923-00000/solution/oracle.pyz",
+              "real-rnaseq-go-enrichment",
+              "--inputs",
+              "/iris/outputs/corpus/harbor/train/real-rnaseq-go-enrichment-v1-20260923-00000/setup_files/inputs",
+              "--answer",
+              "/iris/outputs/blas-diagnostics/HASWELL/answer.json"
+            ],
+            "exit_code": 0,
+            "seconds": 31.456375413996284,
+            "peak_child_rss_kib": 1201584
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa",
+            "de_results.tsv": "e1506764a06f0341c2890de890242f81e4065ba8c037bec9d261b372ef475499",
+            "enrichment.tsv": "45684a063baca2b2103315431582ed83baf27df062088186a5e80427327482c6"
+          }
+        },
+        {
+          "profile": {
+            "requested_core": "SANDYBRIDGE",
+            "core": "Sandybridge",
+            "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Sandybridge MAX_THREADS=128",
+            "cpu_model": "AMD EPYC 7B12"
+          },
+          "reward": 0.0,
+          "status": "scored",
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": false,
+              "rows": 17361,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "225288",
+                  "field": "neg_log10_p"
+                },
+                {
+                  "id": "225288",
+                  "field": "neg_log10_padj"
+                },
+                {
+                  "id": "76453",
+                  "field": "neg_log10_p"
+                },
+                {
+                  "id": "76453",
+                  "field": "neg_log10_padj"
+                }
+              ]
+            },
+            "enrichment.tsv": {
+              "passed": true,
+              "rows": 6021,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "oracle_execution": {
+            "argv": [
+              "/app/bio-full-corpus-fabbu8te/python/bin/python",
+              "-I",
+              "/iris/outputs/corpus/oracles/real-rnaseq-go-enrichment-v1-20260923-00000/solution/oracle.pyz",
+              "real-rnaseq-go-enrichment",
+              "--inputs",
+              "/iris/outputs/corpus/harbor/train/real-rnaseq-go-enrichment-v1-20260923-00000/setup_files/inputs",
+              "--answer",
+              "/iris/outputs/blas-diagnostics/SANDYBRIDGE/answer.json"
+            ],
+            "exit_code": 0,
+            "seconds": 31.50608846900286,
+            "peak_child_rss_kib": 1201584
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa",
+            "de_results.tsv": "02f7856b4ad49a3719a1ce812702deb4870e036bf49db2fa626f9c43006b7fa7",
+            "enrichment.tsv": "45684a063baca2b2103315431582ed83baf27df062088186a5e80427327482c6"
+          }
+        }
+      ],
+      "decision": "Pin HASWELL in the R image and validate it on Harbor; retain all probability tolerances unchanged. Autodetected CPU kernels can change fitted statistics beyond the declared tolerance."
+    }
   ]
 }

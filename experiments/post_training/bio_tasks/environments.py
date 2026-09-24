@@ -18,14 +18,17 @@ class EnvironmentProfile:
     repository_index: int
     evidence: str
     memory_mb: int
+    blas_core: str | None = None
 
 
 PROFILES = {
     "real-fastq-pair-filter": EnvironmentProfile(35, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-fastq-quality-yield": EnvironmentProfile(15, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-protein-alignment": EnvironmentProfile(43, "native_validation_runs/035bb3a42edc.json", 2048),
-    "real-rnaseq-differential-expression": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096),
-    "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096),
+    "real-rnaseq-differential-expression": EnvironmentProfile(
+        5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"
+    ),
+    "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"),
 }
 
 
@@ -52,6 +55,8 @@ def environment_files(recipe: str, base_image: str) -> TaskFiles:
         "ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 "
         "POLARS_MAX_THREADS=1 RAYON_NUM_THREADS=1\n"
     )
+    if profile.blas_core is not None:
+        dockerfile += f"ENV OPENBLAS_CORETYPE={profile.blas_core}\n"
     return TaskFiles(
         {
             "environment/Dockerfile": dockerfile.encode(),

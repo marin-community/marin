@@ -92,7 +92,10 @@ from org.Mm.eg.db and GO.db 3.22.0. Six native oracle cases pass on reserved TRC
 CPUs, checking 16,659–17,361 fitted genes and 5,898–6,021 GO terms per case. They
 are registered as authoring candidates. The Harbor DE case passed; the GO case
 matched its summary and enrichment table but failed two probability fields for one
-fitted gene. Numerical portability is under investigation; tolerances are unchanged.
+fitted gene. On the same TRC host, default Zen and explicit Haswell OpenBLAS
+kernels pass; Sandy Bridge fails two genes. The R image now selects
+`OPENBLAS_CORETYPE=HASWELL` before R starts. This setting still needs Harbor
+validation; all numerical tolerances remain unchanged.
 No benchmark inputs or model calls were used to prepare these references.
 
 `sources/prepare_deseq.R` prepares all contrasts, fitted size factors and frozen
@@ -115,7 +118,8 @@ python -m experiments.post_training.bio_tasks.sources.validate_rnaseq \
 It checks complete QC, fitted-gene and enrichment tables as well as summaries and
 negative controls. R validation requires remote compute on the shared authoring VM.
 
-Build all recipes on a CPU host with the pinned R environment on `PATH`. The
+Build all recipes on a CPU host with the pinned R environment on `PATH` and
+`OPENBLAS_CORETYPE=HASWELL` set before starting the build. The
 measured native R peak exceeds 1 GiB; do not run the full build on a shared VM
 with a 500 MiB workload limit. From the repository root:
 
