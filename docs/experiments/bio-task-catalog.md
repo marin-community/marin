@@ -25,7 +25,7 @@ source inspection limits and context adaptations remain useful provenance.
 Previously validated benchmark mappings do not automatically become competency
 coverage; each bounded outcome needs a reviewed task/verifier assignment.
 
-The implementation has **145 recipes across 13 domains**, with one task per
+The registry has **146 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -102,7 +102,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
 | 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
-| 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed |
+| 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction`, `real-rnaseq-shrinkage-enrichment-audit` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed; 1 fresh shrinkage/enrichment task oracle passed; Harbor pending |
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | 3 reference checks passed (`dna-unique-mapping`) |
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
@@ -230,7 +230,7 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-The 145 recipes include thirty using real observations and 115 simulated component
+The 146 registered recipes include 31 using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -546,7 +546,7 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-Thirty recipes supply unchanged biological observations or declared observed subsets:
+The 31 real-data candidates use unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -560,6 +560,13 @@ Thirty recipes supply unchanged biological observations or declared observed sub
   Haswell BLAS kernel, and changed-intermediate controls fail. The earlier GO
   probability-field mismatch remains recorded; scientific and benchmark-lineage
   review remain open.
+  The new `real-rnaseq-shrinkage-enrichment-audit` compares apeglm effect shrinkage
+  and two clusterProfiler GO-enrichment specifications on six luminal libraries.
+  Its [native reference and independent arithmetic checks](../../experiments/post_training/bio_tasks/sources/shrinkage-enrichment-reference.json)
+  and fresh task oracle passed in 208 seconds, including 30 rejected controls. The
+  pinned environment profile supplies 8 GiB of memory; Harbor checks remain pending.
+  It adds no validated benchmark or competency credit and uses the existing study
+  lineage.
 - **PDB 1UBQ, 1CRN and 4HHB:** complete deposited mmCIF inputs for per-chain geometry
   and residue contact degree. Construction references parse the paired PDB deposits;
   independent solvers parse mmCIF. Model, alternate-conformer and author-ID rules

@@ -1,5 +1,5 @@
 {
-  "status": "native-reference-and-independent-arithmetic-passed; fresh-task-oracle-pending",
+  "status": "native-reference-independent-arithmetic-and-fresh-task-oracle-passed; Harbor-pending",
   "source_revision": "ea66e88c73465d8d35703429669cace87e10c62b",
   "archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
   "task_recipe": "real-rnaseq-shrinkage-enrichment-audit",
@@ -53,5 +53,19 @@
       "No new validated benchmark mapping."
     ]
   },
-  "model_calls": 0
+  "model_calls": 0,
+  "archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14/outputs.tar.zst",
+  "archive_storage": {
+    "bytes": 20512436,
+    "md5": "8RyWicNrdDNOAZM3YxgsHw==",
+    "generation": "1790293786206656"
+  },
+  "fresh_oracle": {
+    "checks_file": "../native_validation_runs/42fbd427ac27.json",
+    "checks_sha256": "42fbd427ac2793c850cf8f452953044cb4c045ae6ada3c470604055074872ad8",
+    "positive_checks": 2,
+    "negative_checks": 30,
+    "seconds": 208.04520280699944,
+    "model_calls": 0
+  }
 }

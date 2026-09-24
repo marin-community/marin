@@ -5,8 +5,9 @@ operations inspired by the inspected source repositories plus additional computa
 Repository mappings describe the source of an operation; actual CLI/API execution is tracked separately
 in the [catalog](bio-task-catalog.md#repository-execution-coverage). See [build instructions](bio-tasks.md).
 
-All instances have checked references, input-reading solvers, and scientific negative
-controls. DESeq2 workflows share the fitted statistical engine with their references;
+Registered recipes provide references and input-reading solvers; execution and
+negative-control evidence are recorded per task in the catalog. Registration alone
+does not establish that every candidate has passed validation. DESeq2 workflows share the fitted statistical engine with their references;
 enrichment probabilities use independent SciPy and R implementations. Host checks do not establish container execution or scientific approval. The supplied format
 profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, or OME-TIFF coverage.
 
@@ -68,6 +69,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-rnaseq-differential-expression` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing | DESeq2 |
 | `real-rnaseq-go-enrichment` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing, tested-gene-universe, enrichment | DESeq2 |
 | `real-rnaseq-population-interaction` | TSV count matrix, TSV sample metadata, design matrix, contrast vectors | factorial count models, interaction contrasts, multiple testing, response interpretation | DESeq2 |
+| `real-rnaseq-shrinkage-enrichment-audit` | TSV count matrix, TSV sample metadata, JSON query | count filtering, effect shrinkage, multiple testing, annotation universes, GO enrichment | DESeq2 |
 | `real-singlecell-read-qc` | Matrix Market, gzip, TSV cell metadata, TSV feature metadata, JSON query | single-cell read-count QC, ERCC spike-ins, ordered cell and gene filtering, sparse matrix export | Scanpy |
 | `donor-counts` | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | csv-header | sample-joins, cohort-selection, denominators | Scanpy |

@@ -1,6 +1,6 @@
 # Biology Harbor task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 145
+The generators in `experiments/post_training/bio_tasks/` register 146
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -114,13 +114,13 @@ records input-file hashes so a rebuild can detect stale presentation data.
 ## Existing authoring inventory
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 145 recipes span 13 domains:
+format profile, and repository mapping. The 146 registered recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 24 |
 | genomic intervals | 10 |
-| expression | 19 |
+| expression | 20 |
 | sequencing reads | 18 |
 | variants | 9 |
 | phylogeny | 12 |
@@ -132,12 +132,22 @@ format profile, and repository mapping. The 145 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 145 authoring examples, comprising
-30 real-data candidates and 115 simulated controls. Add another task from a recipe
+The builder defaults to one task per recipe. The registered inventory comprises
+31 real-data candidates and 115 simulated controls; these counts include candidates
+awaiting execution. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
+
+The new `real-rnaseq-shrinkage-enrichment-audit` candidate uses GSE60450 luminal
+libraries to compare shrunken effect thresholds and two GO-enrichment specifications.
+Its [native reference and independent arithmetic checks](../../experiments/post_training/bio_tasks/sources/shrinkage-enrichment-reference.json)
+and fresh input-reading task oracle passed, including 30 rejected controls. The
+pinned environment profile supplies 8 GiB of memory. Harbor execution and scientific
+review remain pending. Registration adds one
+candidate and no validated benchmark or competency assignment. It reuses the
+existing GSE60450 study lineage.
 
 The population-interaction addition fits all twelve GSE60450 libraries and checks
 every result for 18,418 genes. The native reference and fresh oracle passed two
@@ -201,7 +211,7 @@ still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
 image-build contexts with the exact resolved package artifacts and checksums.
-The three connected DESeq2 recipes have locked R image contexts; the COX1, full-study
+The four connected DESeq2 recipes have locked R image contexts; the COX1, full-study
 single-cell, HMMER and MMseqs2 workflows also have pinned native environments.
 Remaining recipes use Python-only environments. Package checks alone do not
 establish successful execution in these Harbor images. Repository source revisions and

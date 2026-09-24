@@ -31,6 +31,9 @@ PROFILES = {
     "real-rnaseq-population-interaction": EnvironmentProfile(
         5, "native_validation_runs/5436d9bd3811.json", 4096, "HASWELL"
     ),
+    "real-rnaseq-shrinkage-enrichment-audit": EnvironmentProfile(
+        5, "native_validation_runs/42fbd427ac27.json", 8192, "HASWELL"
+    ),
     "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"),
     "real-cox1-tree-comparison": EnvironmentProfile(28, "native_validation_runs/e2f647365a6f.json", 2048),
     "real-singlecell-read-qc": EnvironmentProfile(23, "native_validation_runs/40ed93019b52.json", 4096),

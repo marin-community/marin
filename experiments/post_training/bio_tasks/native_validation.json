@@ -1168,6 +1168,46 @@
         "distinct_biological_inputs": 1
       },
       "limitations": "One systematically sampled observed PhiX run. Complete native contigs are retained, including unaligned contigs; the deposited genome is a comparator, not assembly truth. Reference and oracle share pinned assembly/alignment engines with independent CIGAR versus long-cs nucleotide measurements. Packaged-task and Harbor checks and broad benchmark-lineage review remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "7c5756cbed40f34d807551fcc94d81daa9ddd154",
+      "source_state": "Exact committed recipe and private oracle; enumerated source file hashes retained in the archive.",
+      "environment_kind": "Checksum-locked DESeq2/apeglm/clusterProfiler and annotation databases on reserved TRC CPU",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-enrichment-task-20260924-234036",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "014d523fefaf1bb7348ea1ccf0f2f261d7cf4e9692fb1bb94b262c0ce7266a0a",
+      "output_archive_sha256": "95762e0129439e8c93a3b781da5e47d47d756e645519f7cbab392c646cb83443",
+      "output_archive_bytes": 1667322,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/95762e0129439e8c93a3b781da5e47d47d756e645519f7cbab392c646cb83443/outputs.tar.zst",
+      "checks_file": "native_validation_runs/42fbd427ac27.json",
+      "checks_sha256": "42fbd427ac2793c850cf8f452953044cb4c045ae6ada3c470604055074872ad8",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1,
+        "positive_checks": 2,
+        "negative_checks": 30
+      },
+      "limitations": "One observed luminal developmental-stage contrast; shrinkage and two jointly changed significance/background ORA specifications. Complete artifact checks passed. Native execution alone does not establish Harbor execution or reviewed competency coverage. Reference and oracle share the pinned statistical packages; independent arithmetic checks cover selected statistics and ORA, not the optimizer.",
+      "archive_storage_status": "uploaded; provider size and MD5 verified",
+      "archive_storage_md5": "XlYN/NJQBXc7xunoBtvJNw==",
+      "archive_storage_generation": "1790293957541839"
     }
   ],
   "numerical_portability": [
