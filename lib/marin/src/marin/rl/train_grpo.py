@@ -195,7 +195,7 @@ def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> d
     }
 
 
-def _write_continuation_contract(trainer: Trainer, contract: dict) -> None:
+def _validate_or_write_continuation_contract(trainer: Trainer, contract: dict) -> None:
     contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
     if contract_path.exists():
         with contract_path.open("r") as source:
@@ -275,7 +275,7 @@ def main(config: OfflineGrpoConfig):
     with Trainer(
         config.trainer, config.optimizer.build(config.trainer.num_train_steps), loss, add_default_hooks=False
     ) as trainer:
-        _write_continuation_contract(trainer, _continuation_contract(config, microbatch_size))
+        _validate_or_write_continuation_contract(trainer, _continuation_contract(config, microbatch_size))
         state = _initial_state(trainer, config, context, tokenizer)
         state = _train_captures(trainer, state, config, tokenizer)
         if int(state.step) == config.trainer.num_train_steps:
