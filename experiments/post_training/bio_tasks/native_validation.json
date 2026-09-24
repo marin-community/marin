@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "scope": "Three validation instances per checked recipe, including components and connected real-data RNA-seq. Native reference execution is distinct from Harbor validation and benchmark workflow coverage.",
+  "scope": "Native package reference checks on declared case counts, including components and connected real-data workflows. Native execution is distinct from Harbor validation and benchmark workflow coverage.",
   "runs": [
     {
       "checked_at": "2026-09-23",
@@ -934,6 +934,51 @@
       "checks_file": "native_validation_runs/e39ec1c86f62.json",
       "checks_sha256": "e39ec1c86f62f3609bdddca5e36a16217776d4da7d9213ffa41fb6e42f17fd4c",
       "limitations": "Two connected RNA-seq recipes on GSE60450; complete QC and fitted-gene tables, plus full GO enrichment tables where requested. All six oracle cases and malformed/missing/changed-artifact controls pass. Fitted-model construction and oracle share the pinned DESeq2 engine; enrichment uses SciPy versus R. No Harbor image validation or teacher calls in this run. Benchmark lineage screening and scientific review remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+      "environment_kind": "CPU-only task on existing reserved TRC v4 host; checksum-locked IQ-TREE, FastTree and standard RAxML; independent Biopython measurements",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-phylogeny-completion-20260924-045554",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "d437c7f5a545aef5e9830366feff6ac5d99c011e1fc910e9bca6e663a1d131fa",
+      "output_archive_sha256": "23085c4a70af0b2f1087f5808c5ea0cec71511fffdc8770b1a0ac20aa2c55960",
+      "output_archive_bytes": 377827,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-phylogeny-completion-20260924-045554/0/50a23020376830f3/outputs.tar.zst",
+      "checks_file": "native_validation_runs/e2f647365a6f.json",
+      "checks_sha256": "e2f647365a6f96b33f5970a0152e02eef4fe4bce433a744879ec3e7fb0af378f",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 3,
+        "passed_repositories": 3,
+        "execution_failed_repositories": 0,
+        "planned_cases": 3,
+        "completed_cases": 3,
+        "passing_cases": 3,
+        "distinct_biological_inputs": 1
+      },
+      "oracle_seconds": 1028.827498728002,
+      "reference_reuse": {
+        "job_id": "/exedev/bio-phylogeny-unique-20260924-042915",
+        "archive_sha256": "9934e072a7d25b03ad831c349d53bf40264be6d533d3a877f13e738bcdf22b14",
+        "source_revision": "dc72d7832c09ce1ebcd946c36991dd2e6a392711",
+        "completed_commands": [
+          "MAFFT",
+          "IQ-TREE",
+          "FastTree"
+        ]
+      },
+      "limitations": "Three packages share one observed alignment, not three biological datasets. Every tree, branch length, pairwise distance and RF comparison passes; all ten missing/changed-artifact controls fail. Different inference optimizations do not establish species-tree truth or permit raw-likelihood comparison. Harbor portability, scientific review and exact benchmark-lineage independence remain pending."
     }
   ],
   "numerical_portability": [

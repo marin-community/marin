@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **139 recipes across 13 domains**, with one task per
+The implementation has **140 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -44,18 +44,22 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The current authoring recipes use independent Python solvers. Native CLI/API
-execution is recorded separately below. **34 of 50 packages now pass all three
-reference cases**. The first CoreWeave run passed 22 packages; correction batches
+execution is recorded separately below. **37 of 50 packages have passing native checks**: 34 on three reference cases each,
+and IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment. The first CoreWeave run passed 22 packages; correction batches
 on an existing reserved TRC host in `us-central2` passed 12 more, with outputs
 retrieved from regional GCS. MAFFT and MUSCLE each passed three real-protein alignments. MAFFT required the
 same version from conda-forge after a Bioconda channel-priority conflict; the failed
-installation remains in the evidence. Sixteen repositories still need scripts. Picard and fastp passed on
+installation remains in the evidence. Thirteen repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
 indexes checksum-pinned files under `native_validation_runs/`, retaining resolved
 package artifacts, input/output hashes, commands, grades and failures. Earlier host
-checks remain as separate runs. These checks
+checks remain as separate runs. The COX1 oracle reran all three packages in 1,028.8 seconds, checking three complete
+trees, 3,916 distance rows, three RF comparisons and ten rejected artifact controls.
+That case represents 94 source accessions through 89 distinct proteins and a fixed
+558-column MAFFT alignment. Different search optimizations and a single-gene sample
+do not establish species-tree truth or justify ranking raw likelihoods. These checks
 do not establish tool availability in generated Harbor tasks or complete workflows.
 Snakemake executes included lanes grouped by sample; MultiQC parses supplied
 FastQC reports before comparison with raw FASTQ counts. FastQC passed all three
@@ -79,7 +83,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
 | 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
-| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment` | 3 reference checks passed (`real-protein-alignment`) |
+| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment`, `real-cox1-tree-comparison` | 3 reference checks passed (`real-protein-alignment`) |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
@@ -88,7 +92,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions`, `real-genome-promoters` | 3 reference checks passed (`fasta-indexed-regions`) |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
-| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest` | 3 reference checks passed (`gtf-splicing`) |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest`, `real-cox1-tree-comparison` | 3 reference checks passed (`gtf-splicing`) |
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | 3 reference checks passed (`protein-local-search`) |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | 3 reference checks passed (`vcf-sample-qc`) |
@@ -97,9 +101,9 @@ Downloads, stars, and citations remain available in the unchanged
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter`, `real-rnaseq-library-qc`, `real-rnaseq-cpm-filter` | 3 reference checks passed (`bulk-cpm-filter`) |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | 3 reference checks passed (`adjusted-linear-effect`) |
 | 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs` | Pending |
-| 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions` | Pending |
-| 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support` | Pending |
-| 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support` | Pending |
+| 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
+| 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
+| 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support`, `real-cox1-tree-comparison` | 1 observed COX1 reference check passed |
 | 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming`, `real-fastq-fixed-trim` | 3 reference checks passed (`fastq-adapter-trimming`) |
 | 32 | [Salmon](https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs) | `transcript-tpm` | Pending |
 | 33 | [kallisto](https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile) | `transcript-tpm`, `sample-sheet-lanes` | Pending |
@@ -195,7 +199,7 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 139 recipes include twenty-four using real observations and 115 simulated component
+The 140 recipes include twenty-five using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -335,7 +339,7 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-Twenty-four recipes supply unchanged biological observations or declared observed subsets:
+Twenty-five recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -345,9 +349,10 @@ Twenty-four recipes supply unchanged biological observations or declared observe
   These component contrasts do not claim fitted differential-expression significance.
   Two connected workflows additionally fit all retained genes with DESeq2 and carry
   directional selections into a frozen GO-BP universe. Their six native cases pass
-  complete QC, gene and term-table checks. In Harbor, DE passed while GO failed
-  two probability fields for one fitted gene despite matching its final result.
-  Numerical portability, scientific review and benchmark-lineage review remain open.
+  complete QC, gene and term-table checks. Both pass in Harbor with the pinned
+  Haswell BLAS kernel, and changed-intermediate controls fail. The earlier GO
+  probability-field mismatch remains recorded; scientific and benchmark-lineage
+  review remain open.
 - **PDB 1UBQ, 1CRN and 4HHB:** complete deposited mmCIF inputs for per-chain geometry
   and residue contact degree. Construction references parse the paired PDB deposits;
   independent solvers parse mmCIF. Model, alternate-conformer and author-ID rules
@@ -369,6 +374,13 @@ Twenty-four recipes supply unchanged biological observations or declared observe
   Biopython pairwise scores bound the objective; a separate center-star solution
   checks feasibility. Different qualifying alignments pass. This does not establish
   orthology or a species phylogeny. UniProt data are [CC-BY-4.0](https://www.uniprot.org/help/license).
+
+- **UniProt COX1:** 94 reviewed metazoan accessions represented by 89 distinct,
+  unchanged proteins in a fixed 558-column MAFFT alignment. The connected workflow
+  infers three gene trees and compares their complete branches, distances and
+  unrooted bipartitions. A separate Biopython calculation checks the input-reading
+  oracle's measurements. The native oracle passed in 17.1 minutes; Harbor portability
+  and benchmark-lineage screening remain pending.
 
 - **Mayo PBC study:** 418 baseline records and 1,945 follow-up observations. Three
   recipes cover randomized-cohort selection, composite-endpoint Kaplan-Meier

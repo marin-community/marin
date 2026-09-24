@@ -26,6 +26,7 @@ class WorkflowScope(StrEnum):
 class OracleRuntime(StrEnum):
     PYTHON = "python"
     R = "r"
+    NATIVE = "native"
 
 
 @dataclass(frozen=True)

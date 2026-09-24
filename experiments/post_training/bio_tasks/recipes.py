@@ -21,6 +21,7 @@ from experiments.post_training.bio_tasks.generators.reads import RECIPES as READ
 from experiments.post_training.bio_tasks.generators.real_clinical import RECIPES as REAL_CLINICAL_RECIPES
 from experiments.post_training.bio_tasks.generators.real_expression import RECIPES as REAL_EXPRESSION_RECIPES
 from experiments.post_training.bio_tasks.generators.real_genomes import RECIPES as REAL_GENOMES_RECIPES
+from experiments.post_training.bio_tasks.generators.real_phylogeny import RECIPES as REAL_PHYLOGENY_RECIPES
 from experiments.post_training.bio_tasks.generators.real_proteins import RECIPES as REAL_PROTEINS_RECIPES
 from experiments.post_training.bio_tasks.generators.real_reads import RECIPES as REAL_READS_RECIPES
 from experiments.post_training.bio_tasks.generators.real_rnaseq import RECIPES as REAL_RNASEQ_RECIPES
@@ -901,6 +902,7 @@ RECIPES = (
     *REAL_GENOMES_RECIPES,
     *REAL_READS_RECIPES,
     *REAL_PROTEINS_RECIPES,
+    *REAL_PHYLOGENY_RECIPES,
     *REAL_STRUCTURE_RECIPES,
     *INTERVAL_RECIPES,
     *READ_RECIPES,
@@ -927,7 +929,7 @@ DOMAIN_RECIPES = {
     "variants": VARIANTS_RECIPES,
     "expression": EXPRESSION_RECIPES + REAL_EXPRESSION_RECIPES + REAL_RNASEQ_RECIPES,
     "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES,
-    "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES,
+    "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES + REAL_PHYLOGENY_RECIPES,
     "assembly-and-ecology": ASSEMBLY_RECIPES,
     "structures-and-proteomics": STRUCTURE_RECIPES + REAL_STRUCTURE_RECIPES,
     "networks": NETWORKS_RECIPES,

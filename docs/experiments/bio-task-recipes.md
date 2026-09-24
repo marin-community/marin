@@ -121,6 +121,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | Recipe | Supplied formats | Skills | Repository operations |
 |---|---|---|---|
 | `real-protein-alignment` | FASTA, TSV, JSON | protein multiple-sequence alignment, affine-gap scoring, paralog awareness | MAFFT, MUSCLE |
+| `real-cox1-tree-comparison` | aligned FASTA, TSV accession metadata, Newick, JSON query | gene-tree inference, duplicate sequence identities, unrooted weighted splits, method comparison | MAFFT, Biopython, IQ-TREE, FastTree, RAxML |
 | `alignment-sites` | fasta-alignment, csv-header | site-states, missing-bases, parsimony-informative-sites | Additional domain coverage |
 | `tree-branches` | csv-header | root-conventions, branch-lengths, treeness | Additional domain coverage |
 | `newick-distances` | newick | newick, patristic-distance, shared-ancestry | FastTree |
@@ -216,4 +217,3 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 |---|---|---|---|
 | `sample-sheet-lanes` | csv-header | sample-key-joins, technical-lanes, include-policy | DESeq2, Snakemake, Nextflow, kallisto, nf-core/tools |
 | `enrichment-identifier-mapping` | csv-header, gmt, gene-lists | ambiguous-mapping, aliases, universe-order | Additional domain coverage |
-

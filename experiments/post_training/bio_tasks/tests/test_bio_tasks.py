@@ -113,7 +113,14 @@ def test_copied_fastq_fails_even_with_identical_summary_counts(tmp_path):
 @pytest.mark.parametrize(
     "recipe",
     [
-        pytest.param(recipe, marks=pytest.mark.data_integration) if recipe.oracle_runtime == OracleRuntime.R else recipe
+        (
+            pytest.param(
+                recipe,
+                marks=[pytest.mark.data_integration, pytest.mark.timeout(recipe.oracle_timeout + 30)],
+            )
+            if recipe.oracle_runtime != OracleRuntime.PYTHON
+            else recipe
+        )
         for recipe in RECIPES
     ],
     ids=lambda recipe: recipe.id,

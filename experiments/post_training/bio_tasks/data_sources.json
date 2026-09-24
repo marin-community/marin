@@ -804,7 +804,43 @@
           "content_bytes": 100833,
           "vendored_bytes": 12416,
           "transformation": "Retain every query result with 450..650 canonical amino acids, without trimming, editing or generating residues. Record excluded accessions. Keep accession/version/taxonomy metadata; discard unrelated database annotations. gzip mtime 0. The curated taxon sample is not representative of Metazoa; a single mitochondrial gene tree does not establish the species tree."
+        },
+        "cox1-tree-reference.json.gz": {
+          "content_sha256": "b102979b1a121a559a1b722c9846ea97764b2125c206c0969d318cd7389e21af",
+          "vendored_sha256": "bb9b32912545dfb9d0cd8c77376166c61270bc073e1a6bfbc75adcefce0146fd",
+          "content_bytes": 516132,
+          "vendored_bytes": 112586,
+          "native_evidence": "native_validation_runs/e2f647365a6f.json",
+          "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+          "transformation": "89 unchanged unique protein sequences represent 94 original accessions. Fixed MAFFT 7.525 alignment, complete accession mapping and native three-method reference measurements; no new biological observations generated."
+        },
+        "cox1-alignment.fa.gz": {
+          "content_sha256": "f17b96e80f9c471ee58d5daf5dd1f7ea1f2020b25feb9c6f768588783b997e13",
+          "vendored_sha256": "41b79bf184e24fcc79446e61ee921f56fd244c19b59d81a3a9879741bf97215f",
+          "content_bytes": 51264,
+          "vendored_bytes": 6818,
+          "native_evidence": "native_validation_runs/e2f647365a6f.json",
+          "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+          "transformation": "89 unchanged unique protein sequences represent 94 original accessions. Fixed MAFFT 7.525 alignment, complete accession mapping and native three-method reference measurements; no new biological observations generated."
+        },
+        "cox1-accessions.tsv.gz": {
+          "content_sha256": "b18127b796086a2ac2e64877b0e90473d8b25800ef8eacd3827513d4f786fb59",
+          "vendored_sha256": "d4a7c9cb12c62b140a0bf4c8aa48aa1a2e8b28493a472696e2a74b52162ada8a",
+          "content_bytes": 3811,
+          "vendored_bytes": 1921,
+          "native_evidence": "native_validation_runs/e2f647365a6f.json",
+          "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+          "transformation": "89 unchanged unique protein sequences represent 94 original accessions. Fixed MAFFT 7.525 alignment, complete accession mapping and native three-method reference measurements; no new biological observations generated."
         }
+      },
+      "native_validation": {
+        "evidence": "native_validation_runs/e2f647365a6f.json",
+        "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+        "job_id": "/exedev/bio-phylogeny-completion-20260924-045554",
+        "oracle_seconds": 1028.827498728002,
+        "alignment_columns": 558,
+        "unique_proteins": 89,
+        "accessions": 94
       }
     }
   },

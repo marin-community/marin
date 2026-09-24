@@ -187,7 +187,8 @@
       "recipes": [
         "alignment-sum-of-pairs",
         "alignment-column-filter",
-        "real-protein-alignment"
+        "real-protein-alignment",
+        "real-cox1-tree-comparison"
       ],
       "source_url": "https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script",
       "tool_execution": {
@@ -365,7 +366,8 @@
         "real-genome-gc3",
         "real-genome-codon-counts",
         "real-genome-promoters",
-        "real-genome-restriction-digest"
+        "real-genome-restriction-digest",
+        "real-cox1-tree-comparison"
       ],
       "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
       "tool_execution": {
@@ -532,15 +534,20 @@
       "index": 28,
       "name": "IQ-TREE",
       "recipes": [
-        "alignment-partitions"
+        "alignment-partitions",
+        "real-cox1-tree-comparison"
       ],
       "source_url": "https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e2f647365a6f.json",
+        "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-cox1-tree-comparison"
       },
       "scope": "Validate codon-position or gene partitions and prepare correctly labeled alignment/model inputs.",
-      "limitations": "Enumerate expected site membership, coverage, and overlap from generated annotations. Short tasks can stop at this contract. Full tree inference needs likelihood/topology criteria; the generating tree is not guaranteed to be the fitted maximum-likelihood tree."
+      "limitations": "One observed COX1 alignment; package reference and oracle share the inference engine. Independent complete-tree and distance measurements pass. No species-tree truth, branch-support inference, raw-likelihood ranking or Harbor portability established."
     },
     {
       "index": 29,
@@ -548,29 +555,39 @@
       "recipes": [
         "newick-distances",
         "newick-monophyly",
-        "newick-split-support"
+        "newick-split-support",
+        "real-cox1-tree-comparison"
       ],
       "source_url": "https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e2f647365a6f.json",
+        "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-cox1-tree-comparison"
       },
       "scope": "Compare tree bipartitions and summarize branch lengths while respecting rooting and taxon identity.",
-      "limitations": "Canonicalize leaf-set splits and sum lengths independently on generated Newick trees. The script documents duplicate/root-edge problems for rooted trees; do not copy it as the oracle or compare raw Newick strings."
+      "limitations": "One observed COX1 alignment; package reference and oracle share the inference engine. Independent complete-tree and distance measurements pass. No species-tree truth, branch-support inference, raw-likelihood ranking or Harbor portability established."
     },
     {
       "index": 30,
       "name": "RAxML",
       "recipes": [
-        "newick-split-support"
+        "newick-split-support",
+        "real-cox1-tree-comparison"
       ],
       "source_url": "https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e2f647365a6f.json",
+        "source_revision": "e6c86f4e7e760f4630fb32687af9589d82a8f57b",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-cox1-tree-comparison"
       },
       "scope": "Summarize branch support or lengths across a supplied set of replicate trees.",
-      "limitations": "Match canonical bipartitions across fresh trees and compute support denominators and branch summaries directly. The script supplies a workflow boundary, not an independent answer. This source is standard RAxML 8, distinct from RAxML-NG."
+      "limitations": "One observed COX1 alignment; package reference and oracle share the inference engine. Independent complete-tree and distance measurements pass. No species-tree truth, branch-support inference, raw-likelihood ranking or Harbor portability established."
     },
     {
       "index": 31,

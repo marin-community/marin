@@ -889,7 +889,8 @@
           }
         }
       },
-      "authoring_assessment": {
+      "authoring_assessment": "Sequential hypothesis tests require explicit nulls, evidence relevance, stopping rules and denominators. Gene-level task identities remain uninventoried; permuted-data controls are not observed training data.",
+      "protocol_assessment": {
         "workflow_family": "sequential-hypothesis-falsification",
         "required_stages": [
           "define measurable implications and valid nulls",

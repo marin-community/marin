@@ -29,6 +29,7 @@ PROFILES = {
         5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"
     ),
     "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"),
+    "real-cox1-tree-comparison": EnvironmentProfile(28, "native_validation_runs/e2f647365a6f.json", 2048),
 }
 
 
