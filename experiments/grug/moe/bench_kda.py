@@ -193,11 +193,16 @@ def main():
             return (pallas_kda(q_, k_, v_, g_, b_, chunk_size=chunk_size, mm_dtype=jnp.bfloat16, use_qk_l2norm=True),)
 
         assoc = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16)
-        for mode in ("fwd", "fwd_bwd"):
-            # reference: my associative-scan kernel (bf16) at its best chunk
-            _try("assoc C=128", assoc, (qh, kh, vh, gh, bh), 128, _H100_BF16_PEAK, mode, seq_len=lengths[0])
-            for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128").split(",")):
-                _try(f"pallas C={c}", pk, (qt, kt, vt, gt, bt), c, _H100_BF16_PEAK, mode, seq_len=lengths[0])
+        # One config per process: compiling several Pallas variants in one process
+        # accumulates Triton compile memory and OOMs. Select via env.
+        modes = os.environ.get("KDA_MODES", "fwd,fwd_bwd").split(",")
+        which = os.environ.get("KDA_WHICH", "both")  # "pallas" | "assoc" | "both"
+        for mode in modes:
+            if which in ("assoc", "both"):
+                _try("assoc C=128", assoc, (qh, kh, vh, gh, bh), 128, _H100_BF16_PEAK, mode, seq_len=lengths[0])
+            if which in ("pallas", "both"):
+                for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128").split(",")):
+                    _try(f"pallas C={c}", pk, (qt, kt, vt, gt, bt), c, _H100_BF16_PEAK, mode, seq_len=lengths[0])
         marker = "###KDA_RESULTS###"
         print("\n" + marker, flush=True)
         for ln in RESULTS:
