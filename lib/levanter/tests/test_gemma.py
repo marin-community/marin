@@ -34,7 +34,7 @@ from levanter.models.gemma import (
     GemmaRMSNorm,
 )
 from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
-from levanter.models.llama import LlamaMlp
+from levanter.models.llama import LlamaConfig, LlamaMlp
 from levanter.utils.jax_utils import parameter_count
 
 # N.B. Gemma uses LLamaAttention directly so we skip tests for attention and rotary embeddings.
@@ -83,6 +83,18 @@ def test_gemma_param_counts_dont_change_with_seqlen():
     model = GemmaLMHeadModel.init(hax.Axis("v", 512), _get_gemma_config(seq_len=32), key=random.PRNGKey(0))
     model2 = GemmaLMHeadModel.init(hax.Axis("v", 512), _get_gemma_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
+
+
+def test_gemma_flops_match_llama_with_same_dims():
+    # Gemma decoder layers are Attention + LlamaMlp, the same matmul structure Llama uses, so
+    # identical dimensions must yield identical analytic FLOPs. This catches the gated MLP being
+    # counted as two projections instead of three.
+    dims = dict(max_seq_len=128, hidden_dim=64, intermediate_dim=256, num_layers=2, num_heads=4, num_kv_heads=2)
+    gemma_config = GemmaConfig(head_dim=16, **dims)
+    llama_config = LlamaConfig(**dims)
+    vocab_size = 512
+
+    assert gemma_config.flops_per_token(vocab_size, 128) == llama_config.flops_per_token(vocab_size, 128)
 
 
 @skip_if_no_torch

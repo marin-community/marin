@@ -17,15 +17,19 @@ from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
+    EvalTaskRef,
     HardwareRef,
+    InferenceMetrics,
     ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
+    ServingParams,
     TaskCoverage,
     read_record,
     record_path,
@@ -33,6 +37,7 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,8 @@ _REPORT_TAIL_LINES = 15
 @dataclass(frozen=True)
 class EvaluationOutcome:
     metrics: dict[str, dict[str, float]]
+    canonical_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    tasks: tuple[EvalTaskRef, ...] | None = None
     jobs: dict[str, str] = field(default_factory=dict)
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
     """Per-task item coverage for mechanisms that report an attempted-item count; empty otherwise."""
@@ -146,7 +153,30 @@ def _record(
     jobs: dict[str, str],
     log_tails: dict[str, tuple[str, ...]],
     coverage: dict[str, TaskCoverage] | None = None,
+    canonical_metrics: dict[str, dict[str, float]] | None = None,
+    tasks: tuple[EvalTaskRef, ...] | None = None,
+    serving: ServingParams | None = None,
+    inference_metrics: InferenceMetrics | None = None,
 ) -> str:
+    evaluation = identity.eval_ref
+    if tasks is not None:
+        evaluation = evaluation.model_copy(update={"tasks": tasks})
+    if serving is None:
+        serve = batch.model.serve
+        serving = ServingParams(
+            tensor_parallel_size=serve.tensor_parallel_size,
+            data_parallel_size=serve.data_parallel_size,
+            pipeline_parallel_size=serve.pipeline_parallel_size,
+            task_count=serve.pipeline_parallel_size,
+            max_model_len=serve.max_model_len,
+        )
+    evalchemy = identity.eval_ref.evalchemy
+    serving = serving.model_copy(
+        update={
+            "max_gen_tokens": evalchemy.max_gen_toks if evalchemy is not None else None,
+            "extra": dict(evalchemy.extra_gen_kwargs) if evalchemy is not None else {},
+        }
+    )
     record = EvalRunRecord(
         run_id=identity.run_id,
         group_id=batch.group_id,
@@ -160,16 +190,20 @@ def _record(
             backend=batch.model.serve.backend.value,
             config=ModelConfigRef.model_validate(asdict(batch.model)),
         ),
-        eval=identity.eval_ref,
+        eval=evaluation,
         hardware=HardwareRef(
+            task_count=serving.task_count,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
             region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or "unconstrained"),
         ),
         status=status,
+        serving=serving,
+        inference_metrics=inference_metrics,
         error=error,
         results_path=identity.output_dir,
         metrics=metrics,
+        canonical_metrics=canonical_metrics or {},
         coverage=coverage or {},
         provenance=Provenance(
             git_sha=batch.provenance.git_sha,
@@ -258,16 +292,34 @@ def _run_one_evaluation(
     tails: dict[str, tuple[str, ...]] = {}
     metrics: dict[str, dict[str, float]] = {}
     coverage: dict[str, TaskCoverage] = {}
+    canonical_metrics: dict[str, dict[str, float]] = {}
+    tasks: tuple[EvalTaskRef, ...] | None = None
     status = RunStatus.SUCCEEDED
     error: str | None = None
     inference_failure: Exception | None = None
+    inference_metrics: InferenceMetrics | None = None
+    metric_window: InferenceMetricWindow | None = None
     try:
         session.check_alive()
+        if session.metrics_url is not None:
+            try:
+                metric_window = InferenceMetricWindow.start(
+                    session,
+                    speculative=batch.model.serve.speculative is not None,
+                )
+            except Exception:
+                logger.warning(
+                    "could not start inference metric capture for evaluation %s",
+                    evaluation.identity.eval_ref.name,
+                    exc_info=True,
+                )
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         coverage = outcome.coverage
+        canonical_metrics = outcome.canonical_metrics
+        tasks = outcome.tasks
         jobs |= outcome.jobs
     except Exception as exc:
         if isinstance(exc, EvaluationError):
@@ -287,7 +339,50 @@ def _run_one_evaluation(
             tails |= _session_tail(session)
             inference_failure = serve_exc
 
-    path = _record(batch, evaluation.identity, status, error, metrics, jobs, tails, coverage)
+    if metric_window is not None:
+        try:
+            inference_metrics = metric_window.finish()
+        except Exception:
+            logger.warning(
+                "could not preserve inference metrics for evaluation %s",
+                evaluation.identity.eval_ref.name,
+                exc_info=True,
+            )
+
+    effective = session.effective_serving
+    serving = ServingParams(**asdict(effective), effective=True) if effective is not None else None
+    path = _record(
+        batch,
+        evaluation.identity,
+        status,
+        error,
+        metrics,
+        jobs,
+        tails,
+        coverage,
+        canonical_metrics,
+        tasks,
+        serving=serving,
+        inference_metrics=inference_metrics,
+    )
+    record_rollout_run(
+        rollout_run_record(
+            run_id=evaluation.identity.run_id,
+            run_kind=RolloutRunKind.EVALUATION,
+            producer=evaluation.identity.eval_ref.mechanism,
+            status=status.value,
+            rollout_uri=evaluation.identity.output_dir,
+            storage_format="finestore",
+            artifact_uri=path,
+            model=batch.model.name,
+            job_id=orchestrator_job_id,
+            attributes={
+                "eval_name": evaluation.identity.eval_ref.name,
+                "eval_runtime": evaluation.identity.eval_runtime,
+                "group_id": batch.group_id,
+            },
+        )
+    )
     failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
     return _EvaluationExecution(
         record_path=path,

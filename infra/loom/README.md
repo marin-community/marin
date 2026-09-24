@@ -68,6 +68,13 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
 
+The host applies the deployment manifest with a request from inside the Loom
+container to its loopback listener. Loom accepts that local request only for
+`deployment.reconcile`, even when shared-deployment mode disables general
+loopback trust. Caddy marks every forwarded request with `X-Loom-Forwarded`,
+and session containers reach Loom through Docker networking rather than that
+loopback listener. The request uses no deployment token or secret version.
+
 ## Update secrets
 
 Do not put secret values in Pulumi configuration or state. Upload a reviewed

@@ -23,7 +23,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
+from marin.datakit.download.terminus import terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -53,15 +53,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             counters.pipeline.update_counter("nemotron_terminal/chat/missing_tool_definitions_filtered", 1)
             return []
         converted = opencode_protocol_messages(conversations, tools)
+        if converted is None:
+            return []
+        messages, metadata = converted
     else:
-        first = conversations[0]
-        content = first.get("content")
-        if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
-            conversations = [{**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]}, *conversations[1:]]
-        converted = terminus_protocol_messages(conversations)
-    if converted is None:
-        return []
-    messages, metadata = converted
+        messages = terminus_protocol_messages(conversations)
+        if messages is None:
+            return []
+        metadata = {}
     return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="nemotron_terminal/chat", **metadata)
 
 
@@ -123,7 +122,7 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.11.review-fixes"},
+        hash_attrs={"version": "2026.09.17.native-terminus"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed

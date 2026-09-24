@@ -4,19 +4,25 @@
 """Typed readers for evaluation output artifacts and aggregate reports.
 
 Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`EvalchemyResult` reads lm-eval's ``<task_dir>/<model>/results_<ts>.json`` trees and keys the
-metrics by task-config directory. :func:`compile_eval_report` merges several typed results.
+:class:`FineStoreEvalchemyResult` reads current Evalchemy results artifacts;
+:class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
+merges several typed results.
 """
 
 import functools
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.lm_eval_samples import is_scratch_artifact
+from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
+from marin.evaluation.lm_eval_samples import (
+    is_scratch_artifact,
+    read_native_evalchemy_artifacts,
+)
 from marin.execution.artifact import Artifact, result_type_name
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,13 @@ def _result_task_dir(result_file: StoragePath) -> str:
     return task_dir
 
 
+def _metrics_for_task_dir(results: dict, task_dir: str) -> dict[str, dict[str, float]]:
+    return {
+        task_dir if len(results) == 1 else f"{task_dir}/{task}": _numeric(task_metrics)
+        for task, task_metrics in results.items()
+    }
+
+
 class EvalResult(Artifact):
     """Path-backed per-task metrics and cross-task averages for one evaluation."""
 
@@ -49,10 +62,11 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """Per-task metrics from an Evalchemy result tree.
+    """Per-task metrics from a pre-native Evalchemy result tree.
 
     Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
-    shot variants distinct. Evalchemy does not record cross-task averages.
+    shot variants distinct. Evalchemy does not record cross-task averages. Historical reports persist
+    the ``EvalchemyResult`` type name, so this reader remains part of their durable decoding contract.
     """
 
     @functools.cached_property
@@ -60,7 +74,7 @@ class EvalchemyResult(EvalResult):
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
         root = StoragePath(self.path)
-        found = sorted((root / "**/results_*.json").glob(), key=str)
+        found = sorted((root / f"**/{EVALCHEMY_RESULTS_PREFIX}*{EVALCHEMY_RESULTS_SUFFIX}").glob(), key=str)
         if root.scheme == "file":
             # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
             found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
@@ -75,10 +89,30 @@ class EvalchemyResult(EvalResult):
         for result_file in result_files:
             task_dir = _result_task_dir(result_file)
             results = json.loads(result_file.read_text()).get("results", {})
-            for task, task_metrics in results.items():
-                # One entry -> the dir is the whole identity; several (a group task) -> namespace them.
-                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
-                metrics[key] = _numeric(task_metrics)
+            metrics.update(_metrics_for_task_dir(results, task_dir))
+        return metrics
+
+    def task_metrics(self) -> dict[str, dict[str, float]]:
+        return dict(self._task_metrics)
+
+    def averages(self) -> dict[str, float]:
+        return {}
+
+
+class FineStoreEvalchemyResult(EvalResult):
+    """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
+
+    @functools.cached_property
+    def _task_metrics(self) -> dict[str, dict[str, float]]:
+        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
+        if not result_payloads:
+            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
+
+        metrics: dict[str, dict[str, float]] = {}
+        for name, payload in sorted(result_payloads.items()):
+            task_dir = PurePosixPath(name).parent.parent.name
+            results = json.loads(payload).get("results", {})
+            metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
@@ -104,7 +138,9 @@ class EvalReport(Artifact):
     contributions from different results distinct."""
 
 
-_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
+_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {
+    result_type_name(cls): cls for cls in (EvalchemyResult, FineStoreEvalchemyResult)
+}
 
 
 @dataclass(frozen=True)

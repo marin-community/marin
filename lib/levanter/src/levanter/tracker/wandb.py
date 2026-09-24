@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -33,15 +34,44 @@ WandbRun: typing.TypeAlias = wandb.sdk.wandb_run.Run
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+MAX_WANDB_ARTIFACT_BYTES = 20 * 1_000_000
 _WANDB_INIT_ERROR_KEY = "error"
 _WANDB_INIT_METADATA_KEY = "metadata"
 _WANDB_INIT_PROCESS_INDEX_KEY = "process_index"
+_WANDB_FORK_FROM_PATTERN = re.compile(r"(?P<run_id>[^?]+)\?_step=(?P<step>\d+)")
 
 
 class _WandbInitStatus(TypedDict):
     process_index: int
     error: str | None
     metadata: dict[str, Any] | None
+
+
+def _artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
+    """Return the number of regular-file bytes that W&B would upload for a path."""
+    path = os.fspath(artifact_path)
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    if not os.path.isdir(path):
+        raise FileNotFoundError(path)
+
+    total = 0
+    for directory, _, filenames in os.walk(path):
+        for filename in filenames:
+            file_path = os.path.join(directory, filename)
+            if not os.path.islink(file_path):
+                total += os.path.getsize(file_path)
+    return total
+
+
+def _validate_wandb_artifact_size(artifact_path: str | os.PathLike[str], *, artifact_name: str | None = None) -> None:
+    size = _artifact_size_bytes(artifact_path)
+    if size > MAX_WANDB_ARTIFACT_BYTES:
+        display_name = artifact_name or os.path.basename(os.fspath(artifact_path)) or "artifact"
+        raise ValueError(
+            f"Refusing W&B artifact {display_name!r} at {artifact_path}: {size:,} bytes exceeds the "
+            f"{MAX_WANDB_ARTIFACT_BYTES:,}-byte limit."
+        )
 
 
 def _teardown_wandb_service_bounded(timeout: float) -> None:
@@ -164,9 +194,16 @@ class WandbTracker(Tracker):
             return
         self.run.summary.update(self._prepare_summary(metrics))
 
+    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
+        """Reject an artifact that would exceed Marin's W&B storage limit."""
+        del type
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
+        _validate_wandb_artifact_size(artifact_path, artifact_name=artifact_name)
+
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
             return
+        self.validate_artifact(artifact_path, name=name, type=type)
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -326,10 +363,6 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
     return out
 
 
-def is_wandb_available():
-    return wandb.run is not None
-
-
 @TrackerConfig.register_subclass("wandb")
 @dataclass
 class WandbConfig(TrackerConfig):
@@ -352,12 +385,17 @@ class WandbConfig(TrackerConfig):
     document for more details.
     """
 
+    fork_from: Optional[str] = None
+    """Fork a new run from ``<source-run-id>?_step=<step>``.
+
+    W&B does not allow ``fork_from`` and ``resume`` in the same initialization.
+    A fork starts a new child run; recover a stopped child with a subsequent
+    configuration that omits ``fork_from`` and resumes the child run ID.
+    """
+
     save_code: Union[bool, str] = True
     """If string, will save code from that directory. If True, will attempt to sniff out the main directory (since we
     typically don't run from the root of the repo)."""
-
-    save_xla_dumps: bool = False
-    """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
@@ -392,6 +430,8 @@ class WandbConfig(TrackerConfig):
         if id is None:
             id = run_id
 
+        fork_from = self._validated_fork_from(id)
+
         hparams_to_save = {}
 
         # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
@@ -410,19 +450,23 @@ class WandbConfig(TrackerConfig):
         process_count = jax.process_count()
         initialization_error = None
         try:
-            r = wandb.init(
+            init_kwargs = dict(
                 entity=self.entity,
                 project=self.project,
                 name=self.name,
                 tags=self.tags,
                 id=id,
                 group=self.group,
-                resume=self.resume,
                 mode=mode,
                 config=hparams_to_save,
                 settings=git_settings,
                 allow_val_change=True,
             )
+            if fork_from is None:
+                init_kwargs["resume"] = self.resume
+            else:
+                init_kwargs["fork_from"] = fork_from
+            r = wandb.init(**init_kwargs)
             if r is None:
                 raise RuntimeError("W&B initialization returned no run")
         except Exception as e:
@@ -522,6 +566,20 @@ class WandbConfig(TrackerConfig):
             finish_timeout=self.background_finish_timeout,
         )
 
+    def _validated_fork_from(self, child_run_id: Optional[str]) -> Optional[str]:
+        if self.fork_from is None:
+            return None
+
+        match = _WANDB_FORK_FROM_PATTERN.fullmatch(self.fork_from)
+        if match is None:
+            raise ValueError("fork_from must have the form '<source-run-id>?_step=<nonnegative-step>'.")
+
+        source_run_id = match["run_id"]
+        if child_run_id == source_run_id:
+            raise ValueError("fork_from must name a different run from the new child run ID.")
+
+        return self.fork_from
+
     def _git_settings(self):
         other_settings = dict()
         if isinstance(self.save_code, str):
@@ -531,6 +589,15 @@ class WandbConfig(TrackerConfig):
         else:
             code_dir = None
         if code_dir is not None:
+            try:
+                _validate_wandb_artifact_size(code_dir, artifact_name="source code")
+            except ValueError as exc:
+                logger.error(
+                    "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
+                    "source directory.",
+                    exc,
+                )
+                return other_settings
             logger.info(f"Setting wandb code_dir to {code_dir}")
             other_settings["code_dir"] = code_dir
             other_settings["git_root"] = code_dir
