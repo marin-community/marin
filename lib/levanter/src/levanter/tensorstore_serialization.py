@@ -36,7 +36,7 @@ from jax._src.sharding import IndivisibleError
 from jax.sharding import Mesh, NamedSharding, PartitionSpec, Sharding, SingleDeviceSharding
 from jaxtyping import PyTree
 
-from rigging.filesystem.cross_region import record_transfer
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -60,6 +60,13 @@ _DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 _JEMALLOC_LIBRARY_NAME = "jemalloc"
+
+
+class DtypeSource(StrEnum):
+    """Choose whether restored arrays use checkpoint or exemplar dtypes."""
+
+    CHECKPOINT = "checkpoint"
+    EXEMPLAR = "exemplar"
 
 
 def _malloc_trim() -> None:
@@ -954,10 +961,11 @@ async def _leaf_read_plan(
     *,
     context: ts.Context,
     config: TensorStoreReadConfig,
+    dtype: np.dtype[Any] | None,
 ) -> _LeafReadPlan:
     store = await ts.open(tensorstore_spec, open=True, context=context)
     shape = tuple(store.shape)
-    dtype = np.dtype(jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype))
+    dtype = np.dtype(jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype if dtype is None else dtype))
     shard_shape = tuple(sharding.shard_shape(shape))
     shard_bytes = math.prod(shard_shape) * np.dtype(dtype).itemsize
     max_read_bytes = shard_bytes
@@ -972,7 +980,9 @@ async def _leaf_read_plan(
         restricted_domain = store.domain.intersect(requested_domain)
         max_read_bytes = max(max_read_bytes, ts_impl.estimate_read_memory_footprint(store, restricted_domain))
     if store.dtype.numpy_dtype != dtype:
-        max_read_bytes += shard_bytes
+        source_shard_bytes = math.prod(shard_shape) * np.dtype(store.dtype.numpy_dtype).itemsize
+        # The source buffer, cast result, and target buffer can coexist during a cast.
+        max_read_bytes += source_shard_bytes + shard_bytes
 
     staging_sharding = None
     if config.replica_mode == ReplicaRestoreMode.ONE_REPLICA:
@@ -1097,15 +1107,18 @@ def _deserialize_leaves(
     shardings: list[Sharding],
     tensorstore_specs: list[dict],
     config: TensorStoreReadConfig,
+    dtypes: list[np.dtype[Any]] | None = None,
 ) -> list:
     """Restore leaves into their requested shardings and memory kinds."""
     context = _tensorstore_read_context(config)
+    target_dtypes: Sequence[np.dtype[Any] | None] = [None] * len(shardings) if dtypes is None else dtypes
+    assert len(paths) == len(shardings) == len(tensorstore_specs) == len(target_dtypes)
 
     async def read_all():
         plans = await asyncio.gather(
             *(
-                _leaf_read_plan(path, sharding, spec, context=context, config=config)
-                for path, sharding, spec in zip(paths, shardings, tensorstore_specs)
+                _leaf_read_plan(path, sharding, spec, context=context, config=config, dtype=dtype)
+                for path, sharding, spec, dtype in zip(paths, shardings, tensorstore_specs, target_dtypes)
             )
         )
         leaves = []
@@ -1150,6 +1163,7 @@ def _restore_ocdbt(
     paths: list[str],
     real_indices: list[int],
     shardings_leaves: list,
+    dtypes_leaves: list[np.dtype[Any]] | None,
     leaf_key_paths,
     read_config: TensorStoreReadConfig,
     allow_missing: bool,
@@ -1200,7 +1214,8 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config)
+    dtypes_to_load = None if dtypes_leaves is None else [dtypes_leaves[i] for i in indices_to_load]
+    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config, dtypes_to_load)
     return deser_leaves, indices_to_load
 
 
@@ -1209,6 +1224,7 @@ def _restore_old_ts(
     paths: list[str],
     real_indices: list[int],
     shardings_leaves: list,
+    dtypes_leaves: list[np.dtype[Any]] | None,
     leaf_key_paths,
     read_config: TensorStoreReadConfig,
     allow_missing: bool,
@@ -1247,7 +1263,8 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     tspecs_to_load = [array_ser.get_tensorstore_spec(path) for path in paths_to_load]
-    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config)
+    dtypes_to_load = None if dtypes_leaves is None else [dtypes_leaves[i] for i in indices_to_load]
+    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config, dtypes_to_load)
     return deser_leaves, indices_to_load
 
 
@@ -1259,12 +1276,17 @@ def tree_deserialize_leaves_tensorstore(
     *,
     allow_missing: bool = False,
     read_config: Optional[TensorStoreReadConfig] = None,
+    dtype_source: DtypeSource = DtypeSource.CHECKPOINT,
 ):
     """Deserialize a checkpoint into the shape of ``pytree``.
 
     ``pytree`` may hold ShapeDtypeStructs from ``eval_shape``; ``axis_mapping`` and ``mesh``
     supply the shardings. ``allow_missing`` keeps absent leaves as they are.
+    ``dtype_source`` can cast arrays directly to each exemplar dtype.
     """
+    if dtype_source is DtypeSource.EXEMPLAR and is_cross_region_url(str(checkpoint_dir)):
+        raise ValueError("exemplar-dtype restore cannot account for source bytes across regions")
+
     read_config = read_config or TensorStoreReadConfig()
 
     # Pre-charge the cross-region budget from the exemplar pytree, an upper bound under
@@ -1286,8 +1308,19 @@ def tree_deserialize_leaves_tensorstore(
     paths = jtu.tree_leaves(paths, is_leaf=lambda x: x is None)
 
     shardings_leaves, shardings_structure = jtu.tree_flatten(shardings, is_leaf=_is_named_or_none)
+    dtypes_leaves = None
+    if dtype_source is DtypeSource.EXEMPLAR:
+        exemplar_leaves = jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)
+
+        def exemplar_dtype(leaf: Any) -> np.dtype[Any]:
+            if is_named_array(leaf):
+                leaf = leaf.array
+            return np.dtype(leaf.dtype) if hasattr(leaf, "dtype") else np.asarray(leaf).dtype
+
+        dtypes_leaves = [exemplar_dtype(leaf) for leaf in exemplar_leaves]
 
     assert len(shardings_leaves) == len(paths)
+    assert dtypes_leaves is None or len(shardings_leaves) == len(dtypes_leaves)
     # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
     real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
 
@@ -1322,11 +1355,25 @@ def tree_deserialize_leaves_tensorstore(
             logger.info("Adjusting paths for OCDBT checkpoint with subpath: %s", subpath)
             paths = [os.path.join(subpath, p) for p in paths]
         deser_leaves, indices_to_load = _restore_ocdbt(
-            checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, read_config, allow_missing
+            checkpoint_root,
+            paths,
+            real_indices,
+            shardings_leaves,
+            dtypes_leaves,
+            leaf_key_paths,
+            read_config,
+            allow_missing,
         )
     else:
         deser_leaves, indices_to_load = _restore_old_ts(
-            checkpoint_dir, paths, real_indices, shardings_leaves, leaf_key_paths, read_config, allow_missing
+            checkpoint_dir,
+            paths,
+            real_indices,
+            shardings_leaves,
+            dtypes_leaves,
+            leaf_key_paths,
+            read_config,
+            allow_missing,
         )
 
     # now we need to recreate the original structure
