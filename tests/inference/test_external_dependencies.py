@@ -66,12 +66,6 @@ def _staged_candidate_manifest() -> dict:
         "tag": "marin-vllm-gpu-staged-candidate-aaaaaaaaaaaa",
     }
     manifest["validation"] = {"status": "pending", "targets": []}
-    manifest["workflow"] = {
-        "commit": "a" * 40,
-        "ref": "refs/heads/main-next",
-        "run_id": "123",
-        "run_url": "https://github.com/marin-community/vllm/actions/runs/123",
-    }
     return manifest
 
 
@@ -115,7 +109,7 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
 
 def test_render_gpu_release_toml_explicitly_pins_a_staged_candidate(tmp_path):
     update_external = _update_external()
-    rendered = update_external.render_gpu_release_toml(_staged_candidate_manifest(), allow_staged_candidate=True)
+    rendered = update_external.render_gpu_release_toml(_staged_candidate_manifest(), staged_candidate=True)
 
     path = tmp_path / "gpu.toml"
     path.write_text(rendered)
@@ -143,13 +137,17 @@ def test_render_gpu_release_toml_refuses_an_unpromoted_manifest(mutation):
         update_external.render_gpu_release_toml(manifest)
 
 
-def test_staged_candidate_pin_rejects_untrusted_workflow_provenance():
+def test_stage_gpu_candidate_rejects_a_promoted_release(tmp_path, monkeypatch):
     update_external = _update_external()
-    manifest = _staged_candidate_manifest()
-    manifest["workflow"]["ref"] = "refs/heads/feature"
+    pin = tmp_path / "gpu.toml"
+    pin.write_text('release_tag = "keep-me"\n')
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
 
-    with pytest.raises(ValueError, match="workflow provenance"):
-        update_external.render_gpu_release_toml(manifest, allow_staged_candidate=True)
+    with pytest.raises(ValueError, match="expected a staged 'candidate' manifest"):
+        update_external.stage_gpu_candidate(manifest_path)
+    assert pin.read_text() == 'release_tag = "keep-me"\n'
 
 
 def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
