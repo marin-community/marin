@@ -320,7 +320,10 @@ passed two positive and 33 negative controls. Its two mouse populations and
 developmental stages do not cover the four-human-cell-type drug-response endpoint,
 dose/time/vehicle selection, HDF5 handling or biological interpretation.
 The committed task package also passed both positive and all 33 negative checks
-in 55.3 seconds. Container execution and complete lineage screening remain pending.
+in 55.3 seconds. Harbor also passed a fresh oracle and three artifact-corruption
+controls with identical correct summaries; each control failed only its changed
+contrast, effect or gene call. Complete lineage screening and scientific review
+remain pending.
 
 Biomni-Eval1 has ten source categories and 20 assessed workflow patterns. Its
 compound task name and task-specific ID identify an evaluation item; the global

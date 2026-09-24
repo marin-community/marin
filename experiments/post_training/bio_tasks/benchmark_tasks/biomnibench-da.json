@@ -1169,7 +1169,8 @@
         "GSE60450"
       ],
       "validation_evidence": [
-        "native_validation_runs/5436d9bd3811.json"
+        "native_validation_runs/5436d9bd3811.json",
+        "container_validation.json: /exedev/bio-harbor-interaction-20260924-104158"
       ],
       "runtime_seconds": 53.20698583399644,
       "workflow_family": "factorial-differential-expression",

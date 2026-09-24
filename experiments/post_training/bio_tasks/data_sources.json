@@ -277,7 +277,6 @@
         "native_evidence": "native_validation_runs/5436d9bd3811.json",
         "oracle_independence": "Reference uses the DESeq wrapper and differences between observed design rows. Fresh oracle executes explicit fitting stages and coefficient-name contrasts with the same pinned DESeq2 engine. QC and gene decisions are independently derived in Python.",
         "remaining_checks": [
-          "Harbor oracle and corruption controls",
           "complete benchmark-lineage screening",
           "scientific review before training selection"
         ]
@@ -297,6 +296,17 @@
         "positive_checks": 2,
         "negative_checks": 33,
         "seconds": 55.32449324299523
+      },
+      "interaction_container_validation": {
+        "job_id": "/exedev/bio-harbor-interaction-20260924-104158",
+        "source_revision": "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+        "evidence_file": "container_validation.json",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/a9fb6512e5a133f25740034a690938f51a04435e1a2c200a4891f1e009b03884/outputs.tar.zst",
+        "archive_sha256": "a9fb6512e5a133f25740034a690938f51a04435e1a2c200a4891f1e009b03884",
+        "positive_cases": 1,
+        "negative_cases": 3,
+        "status": "passed",
+        "cleanup_remaining": 0
       }
     },
     "PDB:1UBQ": {

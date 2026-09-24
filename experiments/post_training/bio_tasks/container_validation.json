@@ -2751,6 +2751,1044 @@
         }
       ],
       "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
+    },
+    {
+      "job_id": "/exedev/bio-harbor-interaction-20260924-104158",
+      "source_revision": "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 3,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "45fd299d7c4b92dd8b29066c203147be49bcbb34d96ec8f094823096b1eff635",
+      "canonical_corpus_manifest_sha256": "aa4c311173c447def9be389368e6d44f3b15ccc1e1341a83d0ee630fd379cdec",
+      "canonical_corpus_archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc/outputs.tar.zst",
+        "size_bytes": 13778418,
+        "sha256": "7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc"
+      },
+      "archive": {
+        "state": "preserved",
+        "uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/a9fb6512e5a133f25740034a690938f51a04435e1a2c200a4891f1e009b03884/outputs.tar.zst",
+        "size_bytes": 12898751,
+        "sha256": "a9fb6512e5a133f25740034a690938f51a04435e1a2c200a4891f1e009b03884",
+        "provider_md5": "qFTuyGFfUJbH0kXCfk6Ntw==",
+        "generation": "1790247353397467",
+        "temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-interaction-20260924-104158/0/60401b8199bce7e8/outputs.tar.zst"
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-interaction-20260924-104158",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T10:53:54.516261+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-24T10:45:10.445373+00:00",
+        "trials": [
+          "real-rnaseq-population-interacti__JdGNASx",
+          "real-rnaseq-population-interacti__LKwcdFF",
+          "real-rnaseq-population-interacti__ehXaqSt",
+          "real-rnaseq-population-interacti__fEUd47j"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-24T10:45:11.310617+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-24T10:45:11.353079+00:00"
+      },
+      "summary_identity_check": "Every negative answer.json has the same SHA-256 as the passing positive, and all six summary checks pass in every case. Only the named corrupted artifact fails.",
+      "cases": [
+        {
+          "task_id": "real-rnaseq-population-interaction-v1-20260923-00000",
+          "recipe": "real-rnaseq-population-interaction",
+          "repository_indices": [
+            5
+          ],
+          "task_sha256": "aa3fbaae8d1f8806ace7118cbfaa5d8de91d1b93f3a89b055dbc4c36d31c4b6b",
+          "contract_sha256": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+          "expected_reward": 1,
+          "control": "positive",
+          "source_ledger_validation": {
+            "missing_artifact:sample_qc.tsv": 0.0,
+            "missing_table_row:sample_qc.tsv": 0.0,
+            "duplicate_table_row:sample_qc.tsv": 0.0,
+            "changed_table_value:sample_qc.tsv": 0.0,
+            "missing_artifact:design.tsv": 0.0,
+            "missing_table_row:design.tsv": 0.0,
+            "duplicate_table_row:design.tsv": 0.0,
+            "changed_table_value:design.tsv": 0.0,
+            "missing_artifact:contrast_weights.tsv": 0.0,
+            "missing_table_row:contrast_weights.tsv": 0.0,
+            "duplicate_table_row:contrast_weights.tsv": 0.0,
+            "changed_table_value:contrast_weights.tsv": 0.0,
+            "missing_artifact:basal_results.tsv": 0.0,
+            "missing_table_row:basal_results.tsv": 0.0,
+            "duplicate_table_row:basal_results.tsv": 0.0,
+            "changed_table_value:basal_results.tsv": 0.0,
+            "missing_artifact:luminal_results.tsv": 0.0,
+            "missing_table_row:luminal_results.tsv": 0.0,
+            "duplicate_table_row:luminal_results.tsv": 0.0,
+            "changed_table_value:luminal_results.tsv": 0.0,
+            "missing_artifact:interaction_results.tsv": 0.0,
+            "missing_table_row:interaction_results.tsv": 0.0,
+            "duplicate_table_row:interaction_results.tsv": 0.0,
+            "changed_table_value:interaction_results.tsv": 0.0,
+            "missing_artifact:gene_calls.tsv": 0.0,
+            "missing_table_row:gene_calls.tsv": 0.0,
+            "duplicate_table_row:gene_calls.tsv": 0.0,
+            "changed_table_value:gene_calls.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "one_population_only_is_not_interaction": 0.0,
+            "malformed": 0.0
+          },
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "comparison",
+                  "field": "genes_modeled",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "genes_testable",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "interaction_genes",
+                  "passed": true,
+                  "expected": 2679,
+                  "actual": 2679
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only",
+                  "passed": true,
+                  "expected": 3319,
+                  "actual": 3319
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only_without_interaction",
+                  "passed": true,
+                  "expected": 1458,
+                  "actual": 1458
+                },
+                {
+                  "id": "comparison",
+                  "field": "both_same_direction",
+                  "passed": true,
+                  "expected": 601,
+                  "actual": 601
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "design.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "contrast_weights.tsv": {
+                  "passed": true,
+                  "rows": 3,
+                  "missing": [],
+                  "failures": []
+                },
+                "basal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "luminal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "interaction_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_calls.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "design.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "contrast_weights.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "basal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "luminal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "interaction_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "gene_calls.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "45b911e45d2ca71fb71c5f29b763e7d183c2f91fb3fadaf6689cd6d19a4f0bc6",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "0e8999f3e4c8a4ab87657dda7665326bfe75fecc5f652bbbd942d5eb52c96195",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "14e7bb379dd0078871789d3b8dad2e45cceba1180e3345c6a9beac94e72b74be",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/oracle.pyz": "dee8d7782c4492bd3880a619038be901aa0a70cfbf3f2a7c0aaae1487e2125cf",
+            "solution/solve.sh": "a944fdd8e352f8c688a2ec1c2ee1b5b782167cb413216c7b017430f580637a4f",
+            "task.toml": "dc82336bb5b7b794ac1793a14d2d3ec17c09ada50ad78507db9038353ae909dd",
+            "tests/Dockerfile": "df2c6e251f613bf9a1d49eb05f614687ffe60332532c685f16c20ca7fe80eb12",
+            "tests/reference.json": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "interaction_results.tsv": "9d79af9215d83aba65a0ab18a57e7abf9df90e1d85364e0632983bd2d4a64d9a",
+            "gene_calls.tsv": "e7d6f49b62c81fa2e1a6a1e1deb840025b842f274f1da262954a5ab98f6271f4",
+            "sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "contrast_weights.tsv": "c8abbdfaf570a8e5062380ab8ecfdfd1bbf410c5f8ebbae1328ca6665eb100c4",
+            "design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "manifest.json": "568fb2e6f8a85021cfc16e811c6d5c951ff97a850908146495ceb53be2f4621e"
+          },
+          "seconds": {
+            "environment_setup": 1.962374,
+            "agent_setup": 7.4e-05,
+            "agent_execution": 11.233655,
+            "verifier": 5.024419
+          },
+          "started_at": "2026-09-24T10:44:46.851013Z",
+          "finished_at": "2026-09-24T10:45:06.782846Z"
+        },
+        {
+          "task_id": "real-rnaseq-population-interaction-v1-20260923-00000-wrong-interaction-contrast",
+          "recipe": "real-rnaseq-population-interaction",
+          "repository_indices": [
+            5
+          ],
+          "task_sha256": "aa3fbaae8d1f8806ace7118cbfaa5d8de91d1b93f3a89b055dbc4c36d31c4b6b",
+          "contract_sha256": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+          "expected_reward": 0,
+          "control": "wrong-interaction-contrast-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:sample_qc.tsv": 0.0,
+            "missing_table_row:sample_qc.tsv": 0.0,
+            "duplicate_table_row:sample_qc.tsv": 0.0,
+            "changed_table_value:sample_qc.tsv": 0.0,
+            "missing_artifact:design.tsv": 0.0,
+            "missing_table_row:design.tsv": 0.0,
+            "duplicate_table_row:design.tsv": 0.0,
+            "changed_table_value:design.tsv": 0.0,
+            "missing_artifact:contrast_weights.tsv": 0.0,
+            "missing_table_row:contrast_weights.tsv": 0.0,
+            "duplicate_table_row:contrast_weights.tsv": 0.0,
+            "changed_table_value:contrast_weights.tsv": 0.0,
+            "missing_artifact:basal_results.tsv": 0.0,
+            "missing_table_row:basal_results.tsv": 0.0,
+            "duplicate_table_row:basal_results.tsv": 0.0,
+            "changed_table_value:basal_results.tsv": 0.0,
+            "missing_artifact:luminal_results.tsv": 0.0,
+            "missing_table_row:luminal_results.tsv": 0.0,
+            "duplicate_table_row:luminal_results.tsv": 0.0,
+            "changed_table_value:luminal_results.tsv": 0.0,
+            "missing_artifact:interaction_results.tsv": 0.0,
+            "missing_table_row:interaction_results.tsv": 0.0,
+            "duplicate_table_row:interaction_results.tsv": 0.0,
+            "changed_table_value:interaction_results.tsv": 0.0,
+            "missing_artifact:gene_calls.tsv": 0.0,
+            "missing_table_row:gene_calls.tsv": 0.0,
+            "duplicate_table_row:gene_calls.tsv": 0.0,
+            "changed_table_value:gene_calls.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "one_population_only_is_not_interaction": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-rnaseq-population-interaction-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "comparison",
+                  "field": "genes_modeled",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "genes_testable",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "interaction_genes",
+                  "passed": true,
+                  "expected": 2679,
+                  "actual": 2679
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only",
+                  "passed": true,
+                  "expected": 3319,
+                  "actual": 3319
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only_without_interaction",
+                  "passed": true,
+                  "expected": 1458,
+                  "actual": 1458
+                },
+                {
+                  "id": "comparison",
+                  "field": "both_same_direction",
+                  "passed": true,
+                  "expected": 601,
+                  "actual": 601
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "design.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "contrast_weights.tsv": {
+                  "passed": false,
+                  "rows": 3,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "interaction",
+                      "field": "luminal_pregnant"
+                    }
+                  ]
+                },
+                "basal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "luminal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "interaction_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_calls.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "design.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "contrast_weights.tsv": {
+              "passed": false,
+              "rows": 3,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "interaction",
+                  "field": "luminal_pregnant"
+                }
+              ]
+            },
+            "basal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "luminal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "interaction_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "gene_calls.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "45b911e45d2ca71fb71c5f29b763e7d183c2f91fb3fadaf6689cd6d19a4f0bc6",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "0e8999f3e4c8a4ab87657dda7665326bfe75fecc5f652bbbd942d5eb52c96195",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "14e7bb379dd0078871789d3b8dad2e45cceba1180e3345c6a9beac94e72b74be",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "solution/control/basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "solution/control/contrast_weights.tsv": "d650e1797744a390152a421cc64c33d596f527a66c3e56a77cf10b57d7f1c9c2",
+            "solution/control/design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "solution/control/gene_calls.tsv": "e7d6f49b62c81fa2e1a6a1e1deb840025b842f274f1da262954a5ab98f6271f4",
+            "solution/control/interaction_results.tsv": "9d79af9215d83aba65a0ab18a57e7abf9df90e1d85364e0632983bd2d4a64d9a",
+            "solution/control/luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "solution/control/sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "solution/oracle.pyz": "dee8d7782c4492bd3880a619038be901aa0a70cfbf3f2a7c0aaae1487e2125cf",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "dc82336bb5b7b794ac1793a14d2d3ec17c09ada50ad78507db9038353ae909dd",
+            "tests/Dockerfile": "df2c6e251f613bf9a1d49eb05f614687ffe60332532c685f16c20ca7fe80eb12",
+            "tests/reference.json": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "interaction_results.tsv": "9d79af9215d83aba65a0ab18a57e7abf9df90e1d85364e0632983bd2d4a64d9a",
+            "gene_calls.tsv": "e7d6f49b62c81fa2e1a6a1e1deb840025b842f274f1da262954a5ab98f6271f4",
+            "sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "contrast_weights.tsv": "d650e1797744a390152a421cc64c33d596f527a66c3e56a77cf10b57d7f1c9c2",
+            "design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "manifest.json": "568fb2e6f8a85021cfc16e811c6d5c951ff97a850908146495ceb53be2f4621e"
+          },
+          "seconds": {
+            "environment_setup": 2.219361,
+            "agent_setup": 7.3e-05,
+            "agent_execution": 0.417969,
+            "verifier": 4.961502
+          },
+          "started_at": "2026-09-24T10:44:37.507389Z",
+          "finished_at": "2026-09-24T10:44:46.844000Z"
+        },
+        {
+          "task_id": "real-rnaseq-population-interaction-v1-20260923-00000-wrong-interaction-effect",
+          "recipe": "real-rnaseq-population-interaction",
+          "repository_indices": [
+            5
+          ],
+          "task_sha256": "aa3fbaae8d1f8806ace7118cbfaa5d8de91d1b93f3a89b055dbc4c36d31c4b6b",
+          "contract_sha256": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+          "expected_reward": 0,
+          "control": "wrong-interaction-effect-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:sample_qc.tsv": 0.0,
+            "missing_table_row:sample_qc.tsv": 0.0,
+            "duplicate_table_row:sample_qc.tsv": 0.0,
+            "changed_table_value:sample_qc.tsv": 0.0,
+            "missing_artifact:design.tsv": 0.0,
+            "missing_table_row:design.tsv": 0.0,
+            "duplicate_table_row:design.tsv": 0.0,
+            "changed_table_value:design.tsv": 0.0,
+            "missing_artifact:contrast_weights.tsv": 0.0,
+            "missing_table_row:contrast_weights.tsv": 0.0,
+            "duplicate_table_row:contrast_weights.tsv": 0.0,
+            "changed_table_value:contrast_weights.tsv": 0.0,
+            "missing_artifact:basal_results.tsv": 0.0,
+            "missing_table_row:basal_results.tsv": 0.0,
+            "duplicate_table_row:basal_results.tsv": 0.0,
+            "changed_table_value:basal_results.tsv": 0.0,
+            "missing_artifact:luminal_results.tsv": 0.0,
+            "missing_table_row:luminal_results.tsv": 0.0,
+            "duplicate_table_row:luminal_results.tsv": 0.0,
+            "changed_table_value:luminal_results.tsv": 0.0,
+            "missing_artifact:interaction_results.tsv": 0.0,
+            "missing_table_row:interaction_results.tsv": 0.0,
+            "duplicate_table_row:interaction_results.tsv": 0.0,
+            "changed_table_value:interaction_results.tsv": 0.0,
+            "missing_artifact:gene_calls.tsv": 0.0,
+            "missing_table_row:gene_calls.tsv": 0.0,
+            "duplicate_table_row:gene_calls.tsv": 0.0,
+            "changed_table_value:gene_calls.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "one_population_only_is_not_interaction": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-rnaseq-population-interaction-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "comparison",
+                  "field": "genes_modeled",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "genes_testable",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "interaction_genes",
+                  "passed": true,
+                  "expected": 2679,
+                  "actual": 2679
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only",
+                  "passed": true,
+                  "expected": 3319,
+                  "actual": 3319
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only_without_interaction",
+                  "passed": true,
+                  "expected": 1458,
+                  "actual": 1458
+                },
+                {
+                  "id": "comparison",
+                  "field": "both_same_direction",
+                  "passed": true,
+                  "expected": 601,
+                  "actual": 601
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "design.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "contrast_weights.tsv": {
+                  "passed": true,
+                  "rows": 3,
+                  "missing": [],
+                  "failures": []
+                },
+                "basal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "luminal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "interaction_results.tsv": {
+                  "passed": false,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "497097",
+                      "field": "log2_fold_change"
+                    }
+                  ]
+                },
+                "gene_calls.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "design.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "contrast_weights.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "basal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "luminal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "interaction_results.tsv": {
+              "passed": false,
+              "rows": 18418,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "497097",
+                  "field": "log2_fold_change"
+                }
+              ]
+            },
+            "gene_calls.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "45b911e45d2ca71fb71c5f29b763e7d183c2f91fb3fadaf6689cd6d19a4f0bc6",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "0e8999f3e4c8a4ab87657dda7665326bfe75fecc5f652bbbd942d5eb52c96195",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "14e7bb379dd0078871789d3b8dad2e45cceba1180e3345c6a9beac94e72b74be",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "solution/control/basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "solution/control/contrast_weights.tsv": "c8abbdfaf570a8e5062380ab8ecfdfd1bbf410c5f8ebbae1328ca6665eb100c4",
+            "solution/control/design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "solution/control/gene_calls.tsv": "e7d6f49b62c81fa2e1a6a1e1deb840025b842f274f1da262954a5ab98f6271f4",
+            "solution/control/interaction_results.tsv": "86811b584aff7f9e8571c55fafaa326068a7b3e6367b38a8cf041bc4f42e9c6f",
+            "solution/control/luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "solution/control/sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "solution/oracle.pyz": "dee8d7782c4492bd3880a619038be901aa0a70cfbf3f2a7c0aaae1487e2125cf",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "dc82336bb5b7b794ac1793a14d2d3ec17c09ada50ad78507db9038353ae909dd",
+            "tests/Dockerfile": "df2c6e251f613bf9a1d49eb05f614687ffe60332532c685f16c20ca7fe80eb12",
+            "tests/reference.json": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "interaction_results.tsv": "86811b584aff7f9e8571c55fafaa326068a7b3e6367b38a8cf041bc4f42e9c6f",
+            "gene_calls.tsv": "e7d6f49b62c81fa2e1a6a1e1deb840025b842f274f1da262954a5ab98f6271f4",
+            "sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "contrast_weights.tsv": "c8abbdfaf570a8e5062380ab8ecfdfd1bbf410c5f8ebbae1328ca6665eb100c4",
+            "design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "manifest.json": "568fb2e6f8a85021cfc16e811c6d5c951ff97a850908146495ceb53be2f4621e"
+          },
+          "seconds": {
+            "environment_setup": 4.010501,
+            "agent_setup": 8.2e-05,
+            "agent_execution": 0.595156,
+            "verifier": 5.060723
+          },
+          "started_at": "2026-09-24T10:44:26.107053Z",
+          "finished_at": "2026-09-24T10:44:37.500213Z"
+        },
+        {
+          "task_id": "real-rnaseq-population-interaction-v1-20260923-00000-wrong-gene-call",
+          "recipe": "real-rnaseq-population-interaction",
+          "repository_indices": [
+            5
+          ],
+          "task_sha256": "aa3fbaae8d1f8806ace7118cbfaa5d8de91d1b93f3a89b055dbc4c36d31c4b6b",
+          "contract_sha256": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+          "expected_reward": 0,
+          "control": "wrong-gene-call-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:sample_qc.tsv": 0.0,
+            "missing_table_row:sample_qc.tsv": 0.0,
+            "duplicate_table_row:sample_qc.tsv": 0.0,
+            "changed_table_value:sample_qc.tsv": 0.0,
+            "missing_artifact:design.tsv": 0.0,
+            "missing_table_row:design.tsv": 0.0,
+            "duplicate_table_row:design.tsv": 0.0,
+            "changed_table_value:design.tsv": 0.0,
+            "missing_artifact:contrast_weights.tsv": 0.0,
+            "missing_table_row:contrast_weights.tsv": 0.0,
+            "duplicate_table_row:contrast_weights.tsv": 0.0,
+            "changed_table_value:contrast_weights.tsv": 0.0,
+            "missing_artifact:basal_results.tsv": 0.0,
+            "missing_table_row:basal_results.tsv": 0.0,
+            "duplicate_table_row:basal_results.tsv": 0.0,
+            "changed_table_value:basal_results.tsv": 0.0,
+            "missing_artifact:luminal_results.tsv": 0.0,
+            "missing_table_row:luminal_results.tsv": 0.0,
+            "duplicate_table_row:luminal_results.tsv": 0.0,
+            "changed_table_value:luminal_results.tsv": 0.0,
+            "missing_artifact:interaction_results.tsv": 0.0,
+            "missing_table_row:interaction_results.tsv": 0.0,
+            "duplicate_table_row:interaction_results.tsv": 0.0,
+            "changed_table_value:interaction_results.tsv": 0.0,
+            "missing_artifact:gene_calls.tsv": 0.0,
+            "missing_table_row:gene_calls.tsv": 0.0,
+            "duplicate_table_row:gene_calls.tsv": 0.0,
+            "changed_table_value:gene_calls.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "one_population_only_is_not_interaction": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-rnaseq-population-interaction-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "summary_check_status": "all passed",
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "comparison",
+                  "field": "genes_modeled",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "genes_testable",
+                  "passed": true,
+                  "expected": 18418,
+                  "actual": 18418
+                },
+                {
+                  "id": "comparison",
+                  "field": "interaction_genes",
+                  "passed": true,
+                  "expected": 2679,
+                  "actual": 2679
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only",
+                  "passed": true,
+                  "expected": 3319,
+                  "actual": 3319
+                },
+                {
+                  "id": "comparison",
+                  "field": "one_population_only_without_interaction",
+                  "passed": true,
+                  "expected": 1458,
+                  "actual": 1458
+                },
+                {
+                  "id": "comparison",
+                  "field": "both_same_direction",
+                  "passed": true,
+                  "expected": 601,
+                  "actual": 601
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "design.tsv": {
+                  "passed": true,
+                  "rows": 12,
+                  "missing": [],
+                  "failures": []
+                },
+                "contrast_weights.tsv": {
+                  "passed": true,
+                  "rows": 3,
+                  "missing": [],
+                  "failures": []
+                },
+                "basal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "luminal_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "interaction_results.tsv": {
+                  "passed": true,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_calls.tsv": {
+                  "passed": false,
+                  "rows": 18418,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "497097",
+                      "field": "one_population_only_without_interaction"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "design.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "contrast_weights.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "basal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "luminal_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "interaction_results.tsv": {
+              "passed": true,
+              "rows": 18418,
+              "missing": [],
+              "failures": []
+            },
+            "gene_calls.tsv": {
+              "passed": false,
+              "rows": 18418,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "497097",
+                  "field": "one_population_only_without_interaction"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "45b911e45d2ca71fb71c5f29b763e7d183c2f91fb3fadaf6689cd6d19a4f0bc6",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "0e8999f3e4c8a4ab87657dda7665326bfe75fecc5f652bbbd942d5eb52c96195",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "14e7bb379dd0078871789d3b8dad2e45cceba1180e3345c6a9beac94e72b74be",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "solution/control/basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "solution/control/contrast_weights.tsv": "c8abbdfaf570a8e5062380ab8ecfdfd1bbf410c5f8ebbae1328ca6665eb100c4",
+            "solution/control/design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "solution/control/gene_calls.tsv": "8cff6e001234f5fd3bfbd0d5fc75f70e0988f3516deda9a2b27f715d0f4443bb",
+            "solution/control/interaction_results.tsv": "9d79af9215d83aba65a0ab18a57e7abf9df90e1d85364e0632983bd2d4a64d9a",
+            "solution/control/luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "solution/control/sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "solution/oracle.pyz": "dee8d7782c4492bd3880a619038be901aa0a70cfbf3f2a7c0aaae1487e2125cf",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "dc82336bb5b7b794ac1793a14d2d3ec17c09ada50ad78507db9038353ae909dd",
+            "tests/Dockerfile": "df2c6e251f613bf9a1d49eb05f614687ffe60332532c685f16c20ca7fe80eb12",
+            "tests/reference.json": "d79be78a051ec6b1b69f6fe8a444fb08f3ce363bb53017e3d567338632a837c6",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "8321f637032674587fd628de7ca2a71b3335410f76d96b48f39c4a0936e20f9e"
+          },
+          "artifact_sha256": {
+            "answer.json": "14114047c897737e808aa8f54c65a913122ff2191c2daaa945f6f4344fd8fd62",
+            "interaction_results.tsv": "9d79af9215d83aba65a0ab18a57e7abf9df90e1d85364e0632983bd2d4a64d9a",
+            "gene_calls.tsv": "8cff6e001234f5fd3bfbd0d5fc75f70e0988f3516deda9a2b27f715d0f4443bb",
+            "sample_qc.tsv": "1ead57a2819457aae3a9a79a799ddabe31efac8dbefdcb93e73833a58474d826",
+            "luminal_results.tsv": "c9e16d0b73ce5f925c1c1cf5eb27899f085e6de96fd81ac4b79d3abd0316e94c",
+            "contrast_weights.tsv": "c8abbdfaf570a8e5062380ab8ecfdfd1bbf410c5f8ebbae1328ca6665eb100c4",
+            "design.tsv": "3387575e2b3c77a0c4ffec65b565d2b7ab12ec2bd61282631d2076effe4372b7",
+            "basal_results.tsv": "e197ccedcd09dc6477fb1e6ea98e91ebd1e81fd6eb553dd602a0166e7416e147",
+            "manifest.json": "568fb2e6f8a85021cfc16e811c6d5c951ff97a850908146495ceb53be2f4621e"
+          },
+          "seconds": {
+            "environment_setup": 37.705839,
+            "agent_setup": 9.7e-05,
+            "agent_execution": 0.53337,
+            "verifier": 31.008156
+          },
+          "started_at": "2026-09-24T10:43:14.336678Z",
+          "finished_at": "2026-09-24T10:44:26.099911Z"
+        }
+      ],
+      "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
     }
   ]
 }
