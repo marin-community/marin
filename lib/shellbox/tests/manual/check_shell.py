@@ -7,8 +7,8 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachineFactory
-from harbor_qemu.machine import MachineSpec, QemuBundle, ShellStatus
+from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
+from shellbox.machine import MachineSpec, QemuBundle, ShellStatus
 
 
 async def main(bundle: Path) -> None:

@@ -7,11 +7,11 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from harbor_qemu.backends.docker.machine import DockerMachineFactory
-from harbor_qemu.backends.qemu.image import QemuAssets
-from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachineFactory
-from harbor_qemu.image import RegistryImage
-from harbor_qemu.machine import Command, MachineFactory, MachineSpec
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.qemu.image import QemuAssets
+from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineFactory, MachineSpec
 
 
 async def check(factory: MachineFactory, spec: MachineSpec) -> bytes:

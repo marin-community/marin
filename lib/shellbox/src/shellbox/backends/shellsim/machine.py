@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 
 import shellsim
 
-from harbor_qemu.machine import (
+from shellbox.machine import (
     Command,
     ExitReason,
     MachineSpec,

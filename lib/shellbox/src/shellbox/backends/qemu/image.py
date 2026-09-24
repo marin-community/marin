@@ -10,8 +10,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from harbor_qemu.backends.qemu.bundle import guest_code_id, stage_bundle
-from harbor_qemu.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage
+from shellbox.backends.qemu.bundle import guest_code_id, stage_bundle
+from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage
 
 
 @dataclass(frozen=True)

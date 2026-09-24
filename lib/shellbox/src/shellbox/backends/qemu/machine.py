@@ -17,9 +17,9 @@ from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
-from harbor_qemu.backends.qemu.image import QemuAssets, stage_qemu_image
-from harbor_qemu.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
-from harbor_qemu.machine import (
+from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
+from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
+from shellbox.machine import (
     Command,
     ExitReason,
     MachineSpec,
@@ -159,7 +159,7 @@ class QemuMachine:
         self.image_workdir = self.metadata.get("cwd", "/workspace")
 
     async def start(self) -> None:
-        self._runtime_dir = tempfile.TemporaryDirectory(prefix="harbor-qemu-")
+        self._runtime_dir = tempfile.TemporaryDirectory(prefix="marin-shellbox-")
         try:
             await self._start_qemu()
         except BaseException:

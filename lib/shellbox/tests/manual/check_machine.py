@@ -8,9 +8,9 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from harbor_qemu.backends.docker.machine import DockerMachineFactory
-from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachineFactory
-from harbor_qemu.machine import Command, DockerImage, ExitReason, MachineFactory, MachineSpec, QemuBundle
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
+from shellbox.machine import Command, DockerImage, ExitReason, MachineFactory, MachineSpec, QemuBundle
 
 
 async def check(factory: MachineFactory, spec: MachineSpec) -> None:

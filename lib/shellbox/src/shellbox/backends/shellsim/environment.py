@@ -9,7 +9,7 @@ from pathlib import Path
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
-from harbor_qemu.backends.shellsim.machine import (
+from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
     DEFAULT_DISK_LIMIT,
     DEFAULT_MEMORY_MB,
@@ -17,7 +17,7 @@ from harbor_qemu.backends.shellsim.machine import (
     ShellSimMachine,
     ShellSimMachineFactory,
 )
-from harbor_qemu.machine import (
+from shellbox.machine import (
     HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,

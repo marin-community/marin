@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 
 
 def _guest_file(name: str):
-    return importlib.resources.files("harbor_qemu.backends.qemu").joinpath(f"guest/{name}")
+    return importlib.resources.files("shellbox.backends.qemu").joinpath(f"guest/{name}")
 
 
 def guest_code_id() -> str:

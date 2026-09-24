@@ -10,7 +10,7 @@ from harbor.agents.base import BaseAgent, TurnCapExhaustedError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from harbor_qemu.machine import BashSessionProvider, ShellUpdate
+from shellbox.machine import BashSessionProvider, ShellUpdate
 
 BASH_TOOL = {
     "type": "function",
@@ -111,7 +111,7 @@ class BashAgent(BaseAgent):
 
     @staticmethod
     def name() -> str:
-        return "harbor-qemu-bash"
+        return "marin-shellbox-bash"
 
     def version(self) -> str:
         return "0.1.0"

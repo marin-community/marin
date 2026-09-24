@@ -8,8 +8,8 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-from harbor_qemu.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
-from harbor_qemu.machine import (
+from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
+from shellbox.machine import (
     Command,
     DockerImage,
     ExitReason,

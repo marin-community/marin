@@ -12,10 +12,10 @@ from pathlib import Path
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
-from harbor_qemu.backends.qemu.image import QemuAssets
-from harbor_qemu.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
-from harbor_qemu.image import DockerfileSource, RegistryImage
-from harbor_qemu.machine import (
+from shellbox.backends.qemu.image import QemuAssets
+from shellbox.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import (
     HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
@@ -23,7 +23,7 @@ from harbor_qemu.machine import (
     QemuBundle,
     ShellSession,
 )
-from harbor_qemu.machine import NetworkPolicy as MachineNetworkPolicy
+from shellbox.machine import NetworkPolicy as MachineNetworkPolicy
 
 
 class NetworkPolicy(StrEnum):

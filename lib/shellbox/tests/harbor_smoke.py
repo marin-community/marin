@@ -76,7 +76,7 @@ async def main(
                 },
                 "agents": [
                     {
-                        "import_path": "harbor_qemu.agent:BashAgent",
+                        "import_path": "shellbox.agent:BashAgent",
                         "model_name": "openai/fake",
                         "kwargs": {"base_url": f"http://127.0.0.1:{server.server_port}/v1"},
                     }
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("bundle_or_source", help="guest bundle path, 'task-image', or 'shellsim'")
     parser.add_argument("jobs_dir", type=Path)
-    parser.add_argument("--task-path", type=Path, default=Path(__file__).parent / "task")
+    parser.add_argument("--task-path", type=Path, default=Path(__file__).parent / "manual/task")
     parser.add_argument("--command-file", type=Path)
     parser.add_argument("--commands-json", type=Path)
     parser.add_argument("--network-policy", choices=("require-offline-task", "deny"), default="require-offline-task")
@@ -116,10 +116,10 @@ if __name__ == "__main__":
     else:
         commands = ModelHandler.bash_commands
     if args.bundle_or_source == "shellsim":
-        environment_import_path = "harbor_qemu.backends.shellsim.environment:ShellSimEnvironment"
+        environment_import_path = "shellbox.backends.shellsim.environment:ShellSimEnvironment"
         environment_kwargs = {"network_policy": args.network_policy}
     elif args.bundle_or_source == "task-image":
-        environment_import_path = "harbor_qemu.backends.qemu.environment:QemuEnvironment"
+        environment_import_path = "shellbox.backends.qemu.environment:QemuEnvironment"
         if args.image_cache is None or args.skopeo is None or args.qemu_assets_json is None:
             parser.error("task-image requires --image-cache, --skopeo, and --qemu-assets-json")
         environment_kwargs = {
@@ -130,7 +130,7 @@ if __name__ == "__main__":
             "acceleration": args.acceleration,
         }
     else:
-        environment_import_path = "harbor_qemu.backends.qemu.environment:QemuEnvironment"
+        environment_import_path = "shellbox.backends.qemu.environment:QemuEnvironment"
         environment_kwargs = {
             "guest_bundle": args.bundle_or_source,
             "network_policy": args.network_policy,

@@ -1,29 +1,29 @@
-# Marin Harbor sandbox package (0.1)
+# Marin Shellbox (0.1)
 
-`marin-harbor-qemu` provides three Harbor import paths:
+`marin-shellbox` provides three Harbor import paths:
 
-- `harbor_qemu.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
-- `harbor_qemu.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
-- `harbor_qemu.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
+- `shellbox.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
+- `shellbox.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
+- `shellbox.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 
 Install the backend dependencies you need:
 
 ```sh
-uv pip install 'marin-harbor-qemu[shellsim]'
-uv pip install 'marin-harbor-qemu[qemu]'
+uv pip install 'marin-shellbox[shellsim]'
+uv pip install 'marin-shellbox[qemu]'
 ```
 
 The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra installs the tested ShellSim release. The `qemu` extra installs [quicksand-qemu](https://pypi.org/project/quicksand-qemu/), which bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
 
-The package also provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines and their Harbor adapters live under `harbor_qemu.backends.qemu`, `harbor_qemu.backends.shellsim`, and `harbor_qemu.backends.docker`. The Docker backend has no Harbor adapter yet.
+Shared contracts and OCI image preparation live at the package root. Backend machines and their Harbor adapters live under `shellbox.backends.qemu`, `shellbox.backends.shellsim`, and `shellbox.backends.docker`. The Docker backend has no Harbor adapter yet.
 
 ```python
-from harbor_qemu.machine import Command, MachineSpec, QemuBundle
-from harbor_qemu.backends.qemu.machine import QemuMachineFactory
+from shellbox.machine import Command, MachineSpec, QemuBundle
+from shellbox.backends.qemu.machine import QemuMachineFactory
 
 machine = await QemuMachineFactory().create(MachineSpec(source=QemuBundle(bundle_path)))
 try:
@@ -38,10 +38,10 @@ To prepare a registry image, use a standard image reference without `https://`:
 
 ```python
 from pathlib import Path
-from harbor_qemu.backends.qemu.image import QemuAssets
-from harbor_qemu.image import RegistryImage
-from harbor_qemu.machine import MachineSpec
-from harbor_qemu.backends.qemu.machine import QemuMachineFactory
+from shellbox.backends.qemu.image import QemuAssets
+from shellbox.image import RegistryImage
+from shellbox.machine import MachineSpec
+from shellbox.backends.qemu.machine import QemuMachineFactory
 
 spec = MachineSpec(source=RegistryImage("ghcr.io/astral-sh/uv:alpine3.21"))
 machine = await QemuMachineFactory(
@@ -55,28 +55,28 @@ machine = await QemuMachineFactory(
         disk_size_mb=512,
         runtime_id="pinned-runtime-v1",
     ),
-    image_cache=Path("/var/cache/harbor-qemu/oci"),
-    bundle_cache=Path("/var/cache/harbor-qemu/bundles"),
+    image_cache=Path("/var/cache/marin-shellbox/oci"),
+    bundle_cache=Path("/var/cache/marin-shellbox/bundles"),
     skopeo=Path("/usr/bin/skopeo"),
 ).create(spec)
 ```
 
 The factory uses a process-local `ImageCache` to call `prepare_image` once per source. Preparation selects `linux/amd64`, copies it to a local OCI layout, records its selected manifest digest, and caches the layout by that digest. It accepts Docker Hub references such as `docker.io/library/ubuntu:24.04` and GHCR references. A registry reference is resolved once per Python process; a later process resolves it again. Use `@sha256:...` to fix the source version across processes. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass `policy` to require a signature policy. Credentials are used only during preparation.
 
-`DockerfileSource(context=..., dockerfile=...)` is the other source type. It requires a local Docker builder, builds for `linux/amd64`, and copies the result into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. A base image referenced by a mutable tag can change without a context edit, so pin `FROM` by digest for repeatable builds. `DockerMachineFactory` loads a prepared layout under a digest-derived local tag when needed. `QemuMachineFactory` needs `QemuAssets` and a `bundle_cache` to stage the same prepared layout into a guest bundle on first use. `examples/check_prepared_image.py` shows both backends running one public GHCR image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
+`DockerfileSource(context=..., dockerfile=...)` is the other source type. It requires a local Docker builder, builds for `linux/amd64`, and copies the result into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. A base image referenced by a mutable tag can change without a context edit, so pin `FROM` by digest for repeatable builds. `DockerMachineFactory` loads a prepared layout under a digest-derived local tag when needed. `QemuMachineFactory` needs `QemuAssets` and a `bundle_cache` to stage the same prepared layout into a guest bundle on first use. `tests/manual/check_prepared_image.py` checks both backends against one public GHCR image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
-`run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest and streams it to the host in bounded chunks; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `examples/check_machine.py` exercises one-shot command results, persistent files, and file transfer. `examples/check_shell.py` exercises shell state, input, interruption, jobs, bounded output, and reset.
+`run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest and streams it to the host in bounded chunks; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `tests/manual/check_machine.py` checks one-shot command results, persistent files, and file transfer. `tests/manual/check_shell.py` checks shell state, input, interruption, jobs, bounded output, and reset.
 
 The wheel contains Python integration, guest init code, and the source for a small PTY helper. Staging compiles that helper with `cc -static` and `-lutil`; the runtime host does not need a compiler when it uses a prebuilt bundle. The runtime host needs QEMU, its libraries, firmware, a Linux kernel, and a **static** BusyBox staged into a bundle. A minimal guest can be staged with:
 
 ```sh
-harbor-qemu-stage \
+shellbox-stage \
   --qemu /path/to/qemu-system-x86_64 \
   --kernel /path/to/vmlinuz \
   --busybox /path/to/static-busybox \
   --firmware /path/to/qemu-firmware \
   --libraries /path/to/qemu-libraries \
-  --output /opt/harbor-qemu/guest
+  --output /opt/marin-shellbox/guest
 ```
 
 The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libraries` directory must contain every shared library required by the QEMU executable on the runtime host. The bundle can be prepared on a build machine and copied to the runtime host.
@@ -90,9 +90,9 @@ ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The 
 
 ```yaml
 environment:
-  import_path: harbor_qemu.backends.shellsim.environment:ShellSimEnvironment
+  import_path: shellbox.backends.shellsim.environment:ShellSimEnvironment
 agents:
-  - import_path: harbor_qemu.agent:BashAgent
+  - import_path: shellbox.agent:BashAgent
     model_name: openai/local-model
     kwargs:
       base_url: http://127.0.0.1:8000/v1
@@ -108,7 +108,7 @@ Run the local Harbor smoke without QEMU:
 
 ```sh
 uv run --no-project --python config/external/harbor/.venv/bin/python \
-  lib/harbor-qemu/examples/smoke.py shellsim /tmp/shellsim-smoke-jobs
+  lib/shellbox/tests/harbor_smoke.py shellsim /tmp/shellsim-smoke-jobs
 ```
 
 ## OCI image ingestion
@@ -117,7 +117,7 @@ On a build machine, copy a prebuilt image into an OCI layout, then stage it. For
 
 ```sh
 skopeo copy docker://docker.io/library/ubuntu:24.04 oci:/tmp/ubuntu-oci:ubuntu
-harbor-qemu-stage \
+shellbox-stage \
   --qemu /path/to/qemu-system-x86_64 \
   --kernel /path/to/vmlinuz \
   --busybox /path/to/static-busybox \
@@ -127,7 +127,7 @@ harbor-qemu-stage \
   --oci-tag ubuntu \
   --umoci /path/to/umoci \
   --disk-size-mb 512 \
-  --output /opt/harbor-qemu/ubuntu
+  --output /opt/marin-shellbox/ubuntu
 ```
 
 Staging uses `umoci unpack --rootless` to apply OCI layers and whiteouts, then builds an ext4 guest disk. It restores file UID/GID values from the OCI layers, which rootless unpacking cannot retain on the host. Each Harbor trial gets its own writable disk copy. The bundle records the unpacked manifest digest, image environment, and working directory. The guest uses GNU Bash when the image supplies `/bin/bash`; otherwise it uses `/bin/sh`. OCI images must be Linux amd64, provide `/bin/sh`, and specify root as their default user. Entrypoint and CMD are not run because Harbor drives commands directly.
@@ -140,11 +140,11 @@ Use the import paths in a Harbor job config:
 
 ```yaml
 environment:
-  import_path: harbor_qemu.backends.qemu.environment:QemuEnvironment
+  import_path: shellbox.backends.qemu.environment:QemuEnvironment
   kwargs:
-    guest_bundle: /opt/harbor-qemu/bash-image
+    guest_bundle: /opt/marin-shellbox/bash-image
 agents:
-  - import_path: harbor_qemu.agent:BashAgent
+  - import_path: shellbox.agent:BashAgent
     model_name: openai/local-model
     kwargs:
       base_url: http://127.0.0.1:8000/v1
@@ -154,9 +154,9 @@ To use the image named by a task's `docker_image` or build its `environment/Dock
 
 ```yaml
 environment:
-  import_path: harbor_qemu.backends.qemu.environment:QemuEnvironment
+  import_path: shellbox.backends.qemu.environment:QemuEnvironment
   kwargs:
-    image_cache: /var/cache/harbor-qemu
+    image_cache: /var/cache/marin-shellbox
     skopeo: /usr/bin/skopeo
     qemu_assets:
       qemu: /opt/qemu/qemu-system-x86_64
@@ -168,7 +168,7 @@ environment:
       disk_size_mb: 512
       runtime_id: pinned-runtime-v1
 agents:
-  - import_path: harbor_qemu.agent:BashAgent
+  - import_path: shellbox.agent:BashAgent
     model_name: openai/local-model
     kwargs:
       base_url: http://127.0.0.1:8000/v1
@@ -187,16 +187,16 @@ The local smoke test uses a deterministic OpenAI-compatible server and a Harbor 
 
 ```sh
 uv run --no-project --python config/external/harbor/.venv/bin/python \
-  lib/harbor-qemu/examples/smoke.py /opt/harbor-qemu/bash-image /tmp/qemu-smoke-jobs
+  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
 ```
 
 For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
 
 ```sh
 uv run --no-project --python config/external/harbor/.venv/bin/python \
-  lib/harbor-qemu/examples/smoke.py task-image /tmp/qemu-image-smoke-jobs \
+  lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
   --task-path /path/to/task \
-  --image-cache /var/cache/harbor-qemu \
+  --image-cache /var/cache/marin-shellbox \
   --skopeo /usr/bin/skopeo \
   --qemu-assets-json /path/to/qemu-assets.json
 ```
@@ -205,27 +205,27 @@ The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, 
 
 ```sh
 uv run --no-project --python config/external/harbor/.venv/bin/python \
-  lib/harbor-qemu/examples/smoke.py /opt/harbor-qemu/nl2bash /tmp/nl2bash-jobs \
+  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
   --task-path /path/to/extracted/nl2bash \
-  --command-file lib/harbor-qemu/examples/tasktrove_nl2bash_command.sh \
+  --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
   --network-policy deny
 ```
 
 This example uses a deterministic fake model to issue one Bash tool call. It exercises Harbor's external agent, task setup upload, QEMU command execution, and the real TaskTrove verifier; it does not evaluate model quality.
 
-`examples/smoke.py --commands-json /path/to/commands.json` sends successive Bash calls from a JSON list. For example, the first call can run `cd /tmp; export ANSWER='hello from qemu'`, and the second can use `$ANSWER` and `$PWD`. `examples/check_shell.py /opt/harbor-qemu/bash-image` checks interactive behavior without Harbor.
+`tests/harbor_smoke.py --commands-json /path/to/commands.json` sends successive Bash calls from a JSON list. For example, the first call can run `cd /tmp; export ANSWER='hello from qemu'`, and the second can use `$ANSWER` and `$PWD`. `tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive behavior without Harbor.
 
-`examples/sample_tasktrove.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
+`benchmarks/tasktrove/sample.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
 
 ```sh
-uv run --no-project python lib/harbor-qemu/examples/sample_tasktrove.py /tmp/harbor-qemu-benchmark
+uv run --no-project python lib/shellbox/benchmarks/tasktrove/sample.py /tmp/marin-shellbox-benchmark
 ```
 
-Build one Docker image per `dockerfile_id` in `sample.json`, copy each image to an OCI layout, and stage it with its `environment/Dockerfile`. Name the images `tasktrove-clean-qemu:<dockerfile_id>` and the bundles `/tmp/harbor-qemu-benchmark/bundles/<dockerfile_id>`. Then run:
+Build one Docker image per `dockerfile_id` in `sample.json`, copy each image to an OCI layout, and stage it with its `environment/Dockerfile`. Name the images `tasktrove-clean-qemu:<dockerfile_id>` and the bundles `/tmp/marin-shellbox-benchmark/bundles/<dockerfile_id>`. Then run:
 
 ```sh
 uv run --no-project --python config/external/harbor/.venv/bin/python \
-  lib/harbor-qemu/examples/compare_tasktrove.py /tmp/harbor-qemu-benchmark --concurrency 2
+  lib/shellbox/benchmarks/tasktrove/compare.py /tmp/marin-shellbox-benchmark --concurrency 2
 ```
 
 The comparison runs the same empty and available oracle checks in offline Docker containers and fresh QEMU guests. It records one JSON result per check and fails on a verdict mismatch.
