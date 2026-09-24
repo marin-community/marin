@@ -8,5 +8,5 @@ dependencies = ["evalchemy"]
 package = false
 
 [tool.uv.sources]
-# Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
-evalchemy = { git = "https://github.com/marin-community/evalchemy.git", branch = "main" }
+# Pin the judge-free OlympiadBench task while marin-community/evalchemy#178 is under review.
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "a8cc29a5587903e0b9780892db5c809a45299b33" }

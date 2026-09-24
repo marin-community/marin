@@ -50,6 +50,7 @@ def test_parse_batch_keeps_distinct_complete_conversations():
         accepted_examples=1,
         seed=17,
         max_completion_tokens=4096,
+        task_specification="Use fictional shop questions.",
         relay_job="unused",
     )
 

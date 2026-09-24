@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train a native Grug checkpoint on conversations generated from one capability."""
+"""Train a native Grug checkpoint on conversations from selected capabilities."""
 
 import dataclasses
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
@@ -19,6 +22,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugMoeSFTConfig, run_grug_moe_sft_trial
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 from experiments.post_training.curriculum_sft.generation import generate_curriculum_sft
@@ -32,7 +36,12 @@ SEPTEMBER_GRUG_CHECKPOINT = ArtifactStep.adopt(
     ),
     kind=LevanterCheckpoint,
 )
-SEPTEMBER_GRUG_TOKENIZER = "gs://marin-us-central2/grug_sft/tokenizer/2026.09.18"
+SEPTEMBER_GRUG_TOKENIZER = ArtifactStep.adopt(
+    name="tokenizers/grug-sft-20260918",
+    version="2026.09.18",
+    source="gs://marin-us-central2/grug_sft/tokenizer/2026.09.18",
+    kind=Artifact,
+)
 
 
 @dataclass(frozen=True)
@@ -47,37 +56,60 @@ def render_generated_chat(config: RenderConfig) -> Artifact:
     return Artifact(path=config.output_path)
 
 
-def packed_grug_data(*, rendered_path: str, cache_path: str, tokenizer: str, context_length: int) -> LmDataConfig:
+def packed_grug_data(
+    *, rendered_paths: Mapping[str, str], cache_path: str, tokenizer: str, context_length: int
+) -> LmDataConfig:
     """Pack rendered conversations without attention across conversation boundaries."""
+    if not rendered_paths:
+        raise ValueError("at least one rendered curriculum source is required")
     return LmDataConfig(
         tokenizer=tokenizer,
         cache_dir=None,
         components={
-            "curriculum": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[prefix_join(rendered_path, "*.parquet")]),
-                cache_dir=cache_path,
+            capability_id: DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[prefix_join(path, "*.parquet")]),
+                cache_dir=prefix_join(cache_path, capability_id),
                 format=TextLmDatasetFormat(),
                 pack=context_length,
                 split="train",
             )
+            for capability_id, path in rendered_paths.items()
         },
-        train_weights={"curriculum": 1.0},
+        train_weights={capability_id: 1 / len(rendered_paths) for capability_id in rendered_paths},
         auto_build_caches=True,
         shuffle=True,
         block_cross_document_attention=True,
     )
 
 
+def september_grug_model(context_length: int) -> GrugModelConfig:
+    """Return the September SFT architecture at a chosen training sequence length."""
+    return dataclasses.replace(
+        MoeMuonHHeuristic(min_lr_ratio=0.05).build_model_config(2560, seq_len=context_length),
+        disable_pko=True,
+        disable_long_rope=True,
+        sliding_window=2048,
+        use_array_stacked_blocks=True,
+        head_dim=128,
+        qk_mult=1.75,
+        max_seq_len=context_length,
+        attention_implementation="gpu_fa4_cute",
+        ce_implementation="batched_xla",
+    )
+
+
 def curriculum_grug_sft(
-    capability_id: str,
+    curriculum_ids: Sequence[str],
     *,
     version: str,
     requested_examples: int,
     accepted_examples: int,
     seed: int,
     max_completion_tokens: int,
+    task_specification: str,
     checkpoint: ArtifactStep[LevanterCheckpoint],
-    tokenizer: str,
+    checkpoint_subpath: str,
+    tokenizer: ArtifactStep,
     optimizer: OptimizerConfig,
     resources: ResourceConfig,
     context_length: int,
@@ -85,50 +117,48 @@ def curriculum_grug_sft(
     steps: int,
     expert_parallel: int,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """Generate, render, and pack curriculum conversations for native Grug SFT.
+    """Generate, render, and mix curriculum conversations for native Grug SFT.
 
     The checkpoint and tokenizer must belong to the same Grug architecture. A
     native checkpoint is required; an HF export cannot initialize this trainer.
     """
-    generated = generate_curriculum_sft(
-        capability_id,
-        version=version,
-        requested_examples=requested_examples,
-        accepted_examples=accepted_examples,
-        seed=seed,
-        max_completion_tokens=max_completion_tokens,
-    )
-    rendered = ArtifactStep(
-        name=user_owned_name(f"documents/curriculum-sft/{capability_id}/rendered-chat"),
-        version=version,
-        artifact_type=Artifact,
-        run=render_generated_chat,
-        build_config=lambda ctx: RenderConfig(ctx.artifact_path(generated), ctx.output_path),
-        deps=(generated,),
+    ids = tuple(sorted(curriculum_ids))
+    if not ids or len(set(ids)) != len(ids):
+        raise ValueError("curriculum_ids must be nonempty and distinct")
+    curriculum_key = hashlib.sha256(json.dumps(ids).encode()).hexdigest()[:12]
+    rendered = tuple(
+        _render_step(
+            generate_curriculum_sft(
+                capability_id,
+                version=version,
+                requested_examples=requested_examples,
+                accepted_examples=accepted_examples,
+                seed=seed,
+                max_completion_tokens=max_completion_tokens,
+                task_specification=task_specification,
+            ),
+            capability_id=capability_id,
+            version=version,
+        )
+        for capability_id in ids
     )
 
-    model = dataclasses.replace(
-        MoeMuonHHeuristic(min_lr_ratio=0.05).build_model_config(2560, seq_len=context_length),
-        disable_pko=True,
-        disable_long_rope=True,
-        sliding_window=2048,
-        use_array_stacked_blocks=True,
-        qk_mult=1.75,
-        max_seq_len=context_length,
-    )
+    model = september_grug_model(context_length)
 
     def build_train_config(ctx: StepContext) -> GrugMoeSFTConfig:
         output_path = ctx.output_path
         return GrugMoeSFTConfig(
             model=model,
             data=packed_grug_data(
-                rendered_path=ctx.artifact_path(rendered),
+                rendered_paths={
+                    capability_id: ctx.artifact_path(step) for capability_id, step in zip(ids, rendered, strict=True)
+                },
                 cache_path=prefix_join(output_path, "token-cache"),
-                tokenizer=tokenizer,
+                tokenizer=ctx.artifact_path(tokenizer),
                 context_length=context_length,
             ),
             output_path=output_path,
-            run_id=f"curriculum-sft-{capability_id}-{version}",
+            run_id=f"curriculum-sft-{curriculum_key}-{version}",
             resources=resources,
             steps=steps,
             batch_size=batch_size,
@@ -136,17 +166,35 @@ def curriculum_grug_sft(
             mp="params=float32,compute=bfloat16,output=bfloat16",
             tracker=WandbConfig(project="marin_moe_sft"),
             optimizer=optimizer,
-            init_from_path=ctx.artifact_path(checkpoint),
+            init_from_path=(
+                prefix_join(ctx.artifact_path(checkpoint), checkpoint_subpath)
+                if checkpoint_subpath
+                else ctx.artifact_path(checkpoint)
+            ),
             expert_parallel=expert_parallel,
             per_device_parallelism=1,
             grug_trainer=GrugTrainerConfig(replica_axis_size=1, z_loss_weight=1e-4),
         )
 
     return ArtifactStep(
-        name=user_owned_name(f"checkpoints/curriculum-sft/{capability_id}/grug"),
+        name=user_owned_name(f"checkpoints/curriculum-sft/{curriculum_key}/grug"),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_sft_trial,
         build_config=build_train_config,
-        deps=(rendered, checkpoint),
+        deps=(*rendered, checkpoint, tokenizer),
+    )
+
+
+def _render_step(generated: ArtifactStep[Artifact], *, capability_id: str, version: str) -> ArtifactStep[Artifact]:
+    def build_config(ctx: StepContext) -> RenderConfig:
+        return RenderConfig(ctx.artifact_path(generated), ctx.output_path)
+
+    return ArtifactStep(
+        name=user_owned_name(f"documents/curriculum-sft/{capability_id}/rendered-chat"),
+        version=version,
+        artifact_type=Artifact,
+        run=render_generated_chat,
+        build_config=build_config,
+        deps=(generated,),
     )

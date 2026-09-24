@@ -22,24 +22,32 @@ generation = generate_curriculum_sft(
     accepted_examples=64,
     seed=17,
     max_completion_tokens=4096,
+    task_specification="Use self-contained fictional tasks with checkable answers.",
 )
 ```
 
-The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. This
-generation recipe has not yet been run; the earlier finance pilot used oracle-derived arithmetic
-conversations.
+The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. The earlier
+finance pilot used oracle-derived arithmetic conversations; this GLM recipe produces unverified
+answers.
 
-`curriculum_grug_sft(...)` in `grug_pipeline.py` connects this artifact to native Grug SFT. It
-renders the Datakit chat Parquet with the Marin template, tokenizes the rendered Parquet through
-Levanter's text cache, and packs complete conversations into training sequences with attention
-blocked across conversation boundaries. Pass an adopted native Grug checkpoint, its matching
-tokenizer, optimizer, resources, and an explicit training budget. The module includes the
-September 20 checkpoint handle and tokenizer path. The native `step-158000` checkpoint metadata
-and an export directory were found under the corrected `-cpfix` GCS run prefix.
+`curriculum_grug_sft(curriculum_ids=[...], ...)` in `grug_pipeline.py` creates one generation and
+render step per capability, then mixes their Parquet sources at equal weight. Levanter packs the
+rendered conversations with attention blocked across conversation boundaries. Pass a native Grug
+checkpoint, its matching tokenizer, optimizer, resources, and an explicit training budget.
 
-The current Grug adapter supports weights-only initialization from a native checkpoint, not an HF
-export. It does not include Will's special-token learning-rate or frozen-router-bias changes, and
-it has not been trained or evaluated with this generated data. Keep the first run in `us-central2`,
-where the native checkpoint resides; copying it to another region is a separate large transfer.
-The synthetic answers remain unverified, so compare a baseline and a matched control before
-attributing any evaluation change to curriculum guidance.
+`math_trial.py` declares a bounded first loop: deterministic OlympiadBench and Math500 on the
+pinned September 20 HF model, three algebra capabilities, four Grug updates, an HF export, and
+the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
+equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
+OlympiadBench runs. The HF importer materializes native weights on RNO2A, so the trial does not
+transfer the large `us-central2` checkpoint across regions. Run `--stage generate` on Marin's Iris
+controller, where the GLM relay is registered. Run `train`, `export`, and `after` on RNO2A, using
+the same version and lifecycle-managed east-region `MARIN_PREFIX` for artifact cache reuse. The
+small generated Parquet may cross regions; the model checkpoint does not. `--stage full` binds
+both evaluations and training in one graph when its coordinator can reach all services.
+
+This trial has not established an improvement. Its GLM answers are structurally checked but not
+oracle-verified, and it has no matched task-only control. A before/after change would measure the
+whole synthetic-SFT recipe, not the curriculum's independent contribution. The native Grug adapter
+also does not reproduce Will's special-token learning-rate or frozen-router-bias changes; it is a
+weights-only continuation from the published September 20 model.

@@ -70,6 +70,7 @@ class GenerateCurriculumSFTConfig:
     accepted_examples: int
     seed: int
     max_completion_tokens: int
+    task_specification: str
     relay_job: str
 
 
@@ -91,7 +92,7 @@ def capability_packet(catalog: CurriculumCatalog, capability_id: str) -> dict[st
     raise ValueError(f"unknown curriculum capability: {capability_id}")
 
 
-def generation_prompt(packet: dict[str, Any]) -> str:
+def generation_prompt(packet: dict[str, Any], task_specification: str) -> str:
     """Request a task and answer without evaluation examples or fabricated tool use."""
     return (
         "Create one distinct, self-contained task that exercises the curriculum capability below. "
@@ -102,7 +103,8 @@ def generation_prompt(packet: dict[str, Any]) -> str:
         "Do not invent tool calls, tool observations, external sources, or citations. "
         "Use the capability boundaries and vary the task across sampling facets. "
         "Do not copy curriculum probes or benchmark examples.\n"
-        f"Capability: {json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
+        f"Capability: {json.dumps(packet, ensure_ascii=False, sort_keys=True)}\n"
+        f"Task specification: {task_specification}"
     )
 
 
@@ -111,7 +113,7 @@ def batch_request(config: GenerateCurriculumSFTConfig, packet: dict[str, Any], i
         "model": GLM_MODEL,
         "messages": [
             {"role": "system", "content": "Generate one fictional task and its complete conversation."},
-            {"role": "user", "content": generation_prompt(packet)},
+            {"role": "user", "content": generation_prompt(packet, config.task_specification)},
         ],
         "chat_template_kwargs": {"reasoning_effort": "low"},
         "temperature": 0.8,
@@ -260,6 +262,7 @@ def generate_curriculum_sft(
     accepted_examples: int,
     seed: int,
     max_completion_tokens: int,
+    task_specification: str,
 ) -> ArtifactStep[Artifact]:
     """Build one GLM task-plus-conversation step for a pinned curriculum capability."""
 
@@ -272,6 +275,7 @@ def generate_curriculum_sft(
             accepted_examples=accepted_examples,
             seed=seed,
             max_completion_tokens=max_completion_tokens,
+            task_specification=task_specification,
             relay_job=DEFAULT_GLM_RELAY_JOB,
         )
 
