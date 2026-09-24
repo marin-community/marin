@@ -90,12 +90,13 @@ Connected DESeq2 differential-expression and GO-enrichment candidates are define
 the public annotation snapshot preserves propagated biological-process membership
 from org.Mm.eg.db and GO.db 3.22.0. Six native oracle cases pass on reserved TRC
 CPUs, checking 16,659–17,361 fitted genes and 5,898–6,021 GO terms per case. They
-are registered as authoring candidates. The Harbor DE case passed; the GO case
-matched its summary and enrichment table but failed two probability fields for one
-fitted gene. On the same TRC host, default Zen and explicit Haswell OpenBLAS
-kernels pass; Sandy Bridge fails two genes. The R image now selects
-`OPENBLAS_CORETYPE=HASWELL` before R starts. This setting still needs Harbor
-validation; all numerical tolerances remain unchanged.
+are registered as authoring candidates. Both canonical Harbor cases now pass,
+and both changed-intermediate controls fail while retaining correct summaries.
+The R image selects `OPENBLAS_CORETYPE=HASWELL` before R starts; all four Harbor
+runs reported that kernel. This fixes an earlier probability-field mismatch:
+on the same TRC host, Zen and Haswell passed while Sandy Bridge failed two genes.
+All numerical tolerances remain unchanged. These checks establish execution and
+artifact grading; source independence and scientific review remain separate gates.
 No benchmark inputs or model calls were used to prepare these references.
 
 `sources/prepare_deseq.R` prepares all contrasts, fitted size factors and frozen

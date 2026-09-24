@@ -907,7 +907,315 @@
             "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa"
           }
         }
-      ]
+      ],
+      "resolved_by_job": "/exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+    },
+    {
+      "job_id": "/exedev/bio-harbor-rnaseq-haswell-20260924-032150",
+      "source_revision": "9ddc3889e191f9f4ff8b8e15ee4ce7939cb35477",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 2,
+      "negative_cases": 2,
+      "discriminating_negative_cases": 2,
+      "bundle_sha256": "c59ee058e5b0031a3651630281d99094e111f29ee308de49cc401aa3b0e23dd1",
+      "archive": {
+        "state": "uploaded",
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-rnaseq-haswell-20260924-032150/0/8f3cf589cf290c45/outputs.tar.zst",
+        "size_bytes": 3294259,
+        "sha256": "03a8617d1f9ffe2729f72dbad26160addb510ed8164457cf92054c57b38809a4",
+        "ttl_days": 7
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-rnaseq-haswell-20260924-032150",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T03:32:42.280054+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "matched_trials": 4,
+        "removed": 0,
+        "remaining": 0
+      },
+      "cases": [
+        {
+          "task_id": "real-rnaseq-differential-expression-v1-20260923-00000",
+          "recipe": "real-rnaseq-differential-expression",
+          "repository_index": 5,
+          "task_sha256": "df6a27ea06f68ccc9a74cb3966e232acf1a59958ba2d341fb95335594b5a1afa",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "observed_blas_core": "Haswell",
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 16659,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "e19e1335dfc93e218c4cf96f246d6223f7437e962bb1766afc8a2aef691b5e5b",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "68d2a5319ed2bee67df21f6e435a1863b0417401283d72fe67892198fb9dc035",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "54311c24947c6141d332d7fd43b136497ef1724d62590f852cab8542de8b0d5c",
+            "setup_files/inputs/samples.tsv": "48d6f2e28587f492273367a61742a600fe818494abc98afbd95ae0cb1425419c",
+            "solution/oracle.pyz": "d001af4dbc7be10fb64ccef09eb44c086a6a8ad7567b1cc683a61de103f614c8",
+            "solution/solve.sh": "76a113fc693152d54bd4ca733fb6d2bb3dbc132884c98edc79196ced10d2afdb",
+            "task.toml": "676bfe38c429414180c65fd7c4ebc17eaf6285b19da1f5606233ffe280d35950",
+            "tests/Dockerfile": "7ef3bc2de046d25d510ae8848a601101b137e4164205be5f4c0afb36bc78cb0d",
+            "tests/contract.py": "0cd2978df5911fc919680ee79ab1d54ac1651a4e341e8406e7c28a09bf39a742",
+            "tests/reference.json": "15af251897a018c8e4a1c54a25aa78e571d8570198ea3c76e8b0c55f1d0b6722",
+            "tests/test.sh": "d127dec910dca5ea9163d75ec515da21db700bd659df92240e2c41a91e62fd4f"
+          },
+          "artifact_sha256": {
+            "answer.json": "da4f37edd2164fbf7a9c8cc41baf4f97268b0bc96706a34430ff6ab60b94c89a",
+            "de_results.tsv": "c88f793e5537daee1817cabf1c80f0bd4e435d283c3f31d838656546b36d4f36",
+            "manifest.json": "78a113dde58f85ddebdd4459b129195d945d473b4e5b16439132e2708b077733",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b"
+          },
+          "seconds": {
+            "environment_setup": 1.529083,
+            "agent_setup": 7.7e-05,
+            "agent_execution": 9.260355,
+            "verifier": 4.579911
+          },
+          "started_at": "2026-09-24T03:26:09.400353Z",
+          "finished_at": "2026-09-24T03:26:27.642933Z"
+        },
+        {
+          "task_id": "real-rnaseq-differential-expression-v1-20260923-00000-negative-intermediate",
+          "recipe": "real-rnaseq-differential-expression",
+          "repository_index": 5,
+          "task_sha256": "df6a27ea06f68ccc9a74cb3966e232acf1a59958ba2d341fb95335594b5a1afa",
+          "expected_reward": 0,
+          "control": "changed-intermediate-with-correct-summary",
+          "canonical_task_id": "real-rnaseq-differential-expression-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "observed_blas_core": "Haswell",
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": false,
+              "rows": 16659,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "19888",
+                  "field": "base_mean"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "e19e1335dfc93e218c4cf96f246d6223f7437e962bb1766afc8a2aef691b5e5b",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "68d2a5319ed2bee67df21f6e435a1863b0417401283d72fe67892198fb9dc035",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "54311c24947c6141d332d7fd43b136497ef1724d62590f852cab8542de8b0d5c",
+            "setup_files/inputs/samples.tsv": "48d6f2e28587f492273367a61742a600fe818494abc98afbd95ae0cb1425419c",
+            "solution/oracle.pyz": "d001af4dbc7be10fb64ccef09eb44c086a6a8ad7567b1cc683a61de103f614c8",
+            "solution/solve.sh": "1300dc8ddeb62a029cbcfa533f663a1c08a9e0ec50ba86d513703d0bc64cb60a",
+            "task.toml": "676bfe38c429414180c65fd7c4ebc17eaf6285b19da1f5606233ffe280d35950",
+            "tests/Dockerfile": "7ef3bc2de046d25d510ae8848a601101b137e4164205be5f4c0afb36bc78cb0d",
+            "tests/contract.py": "0cd2978df5911fc919680ee79ab1d54ac1651a4e341e8406e7c28a09bf39a742",
+            "tests/reference.json": "15af251897a018c8e4a1c54a25aa78e571d8570198ea3c76e8b0c55f1d0b6722",
+            "tests/test.sh": "d127dec910dca5ea9163d75ec515da21db700bd659df92240e2c41a91e62fd4f"
+          },
+          "artifact_sha256": {
+            "answer.json": "da4f37edd2164fbf7a9c8cc41baf4f97268b0bc96706a34430ff6ab60b94c89a",
+            "de_results.tsv": "1e9f65db58de92761a959da27a3ad05040153fea9e89e1c7bc9010a3c84882e2",
+            "manifest.json": "78a113dde58f85ddebdd4459b129195d945d473b4e5b16439132e2708b077733",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b"
+          },
+          "seconds": {
+            "environment_setup": 1.477275,
+            "agent_setup": 8e-05,
+            "agent_execution": 9.145336,
+            "verifier": 37.137545
+          },
+          "started_at": "2026-09-24T03:25:18.924586Z",
+          "finished_at": "2026-09-24T03:26:09.393458Z"
+        },
+        {
+          "task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+          "recipe": "real-rnaseq-go-enrichment",
+          "repository_index": 5,
+          "task_sha256": "f0025f8778ecc6885cd4884988db46d9078f7dd330bd611b657aa10620d9cc16",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "observed_blas_core": "Haswell",
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 17361,
+              "missing": [],
+              "failures": []
+            },
+            "enrichment.tsv": {
+              "passed": true,
+              "rows": 6021,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "e19e1335dfc93e218c4cf96f246d6223f7437e962bb1766afc8a2aef691b5e5b",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "51618b5380632f6ba8da4f5bffe9b1697b4b170c506eed500f85374e8333db5f",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/go_membership.tsv": "c20e1ef4a729a734bab07f61f806aa2330d2de0a6261c0dba7ada9d555764748",
+            "setup_files/inputs/go_terms.tsv": "fcd6ca21a01d15f594118065edda30a6a11654efc76b49f21f2ca28c8784ce12",
+            "setup_files/inputs/query.json": "4d90a95b557327015677f19dce4fcb9ceaddd66ee90f3744c03de168de32c0bf",
+            "setup_files/inputs/samples.tsv": "c5a9aefaecc8ab41408533753497c4784fdb2679f26f33cae5fb8ea27f3239c0",
+            "solution/oracle.pyz": "d001af4dbc7be10fb64ccef09eb44c086a6a8ad7567b1cc683a61de103f614c8",
+            "solution/solve.sh": "b2ad666baca62c2b01f49eeeff74c84a77084c569d71761a28be5c0eccd37f80",
+            "task.toml": "cf6ee4cd25912bbf6de9861ffdb26af94362bc5deb3feb1a842744b2aed98df7",
+            "tests/Dockerfile": "7ef3bc2de046d25d510ae8848a601101b137e4164205be5f4c0afb36bc78cb0d",
+            "tests/contract.py": "0cd2978df5911fc919680ee79ab1d54ac1651a4e341e8406e7c28a09bf39a742",
+            "tests/reference.json": "05b81cdd35155248eab646ab572219e47dbe602f3d1ce603b08b087a97e1c4ac",
+            "tests/test.sh": "d127dec910dca5ea9163d75ec515da21db700bd659df92240e2c41a91e62fd4f"
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "de_results.tsv": "e1506764a06f0341c2890de890242f81e4065ba8c037bec9d261b372ef475499",
+            "enrichment.tsv": "45684a063baca2b2103315431582ed83baf27df062088186a5e80427327482c6",
+            "manifest.json": "047ca9e33e594b7eca77cfdbdffc452db552504433a41963aa4b5df2609b9043",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa"
+          },
+          "seconds": {
+            "environment_setup": 1.511856,
+            "agent_setup": 0.000102,
+            "agent_execution": 20.282794,
+            "verifier": 4.713247
+          },
+          "started_at": "2026-09-24T03:24:49.153233Z",
+          "finished_at": "2026-09-24T03:25:18.917812Z"
+        },
+        {
+          "task_id": "real-rnaseq-go-enrichment-v1-20260923-00000-negative-intermediate",
+          "recipe": "real-rnaseq-go-enrichment",
+          "repository_index": 5,
+          "task_sha256": "f0025f8778ecc6885cd4884988db46d9078f7dd330bd611b657aa10620d9cc16",
+          "expected_reward": 0,
+          "control": "changed-intermediate-with-correct-summary",
+          "canonical_task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "observed_blas_core": "Haswell",
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 17361,
+              "missing": [],
+              "failures": []
+            },
+            "enrichment.tsv": {
+              "passed": false,
+              "rows": 6021,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "GO:0000012",
+                  "field": "overlap"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "e19e1335dfc93e218c4cf96f246d6223f7437e962bb1766afc8a2aef691b5e5b",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "ec126a4776e9ebbe9056fedd4c6d5969836e2e498542d9339cef099a1b59fbb2",
+            "instruction.md": "51618b5380632f6ba8da4f5bffe9b1697b4b170c506eed500f85374e8333db5f",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/go_membership.tsv": "c20e1ef4a729a734bab07f61f806aa2330d2de0a6261c0dba7ada9d555764748",
+            "setup_files/inputs/go_terms.tsv": "fcd6ca21a01d15f594118065edda30a6a11654efc76b49f21f2ca28c8784ce12",
+            "setup_files/inputs/query.json": "4d90a95b557327015677f19dce4fcb9ceaddd66ee90f3744c03de168de32c0bf",
+            "setup_files/inputs/samples.tsv": "c5a9aefaecc8ab41408533753497c4784fdb2679f26f33cae5fb8ea27f3239c0",
+            "solution/oracle.pyz": "d001af4dbc7be10fb64ccef09eb44c086a6a8ad7567b1cc683a61de103f614c8",
+            "solution/solve.sh": "1752fe1519562c4dc824e5c62fe08dd5a8c3cdbe148cca4152efc2554458bc03",
+            "task.toml": "cf6ee4cd25912bbf6de9861ffdb26af94362bc5deb3feb1a842744b2aed98df7",
+            "tests/Dockerfile": "7ef3bc2de046d25d510ae8848a601101b137e4164205be5f4c0afb36bc78cb0d",
+            "tests/contract.py": "0cd2978df5911fc919680ee79ab1d54ac1651a4e341e8406e7c28a09bf39a742",
+            "tests/reference.json": "05b81cdd35155248eab646ab572219e47dbe602f3d1ce603b08b087a97e1c4ac",
+            "tests/test.sh": "d127dec910dca5ea9163d75ec515da21db700bd659df92240e2c41a91e62fd4f"
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "de_results.tsv": "e1506764a06f0341c2890de890242f81e4065ba8c037bec9d261b372ef475499",
+            "enrichment.tsv": "e95663b6804ed2e4c5c097e4d0cf2e51d1ffed8d590d62679b4580bde04da35b",
+            "manifest.json": "047ca9e33e594b7eca77cfdbdffc452db552504433a41963aa4b5df2609b9043",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa"
+          },
+          "seconds": {
+            "environment_setup": 45.5645,
+            "agent_setup": 0.00027,
+            "agent_execution": 19.549151,
+            "verifier": 33.331273
+          },
+          "started_at": "2026-09-24T03:23:06.983315Z",
+          "finished_at": "2026-09-24T03:24:49.146023Z"
+        }
+      ],
+      "limitations": "Canonical cases only. Complete tables and both changed-intermediate controls pass with the Haswell kernel and unchanged tolerances. These results do not establish biological source independence, scientific review or complete ID workflow coverage."
     }
   ]
 }
