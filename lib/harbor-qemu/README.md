@@ -6,6 +6,15 @@
 - `harbor_qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
 - `harbor_qemu.shellsim_environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 
+Install the backend dependencies you need:
+
+```sh
+uv pip install 'marin-harbor-qemu[shellsim]'
+uv pip install 'marin-harbor-qemu[qemu]'
+```
+
+The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra installs the tested ShellSim release. The `qemu` extra installs [quicksand-qemu](https://pypi.org/project/quicksand-qemu/), which bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
+
 ## Machine API
 
 The package also provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
@@ -69,9 +78,11 @@ harbor-qemu-stage \
 
 The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libraries` directory must contain every shared library required by the QEMU executable on the runtime host. The bundle can be prepared on a build machine and copied to the runtime host.
 
+With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
+
 ## ShellSim backend
 
-ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The 0.1 package pins the tested ShellSim 0.1.10 release. Select it in a Harbor job:
+ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The `shellsim` extra pins the tested ShellSim 0.1.10 release. Select it in a Harbor job:
 
 ```yaml
 environment:

@@ -8,7 +8,11 @@ version = "0.1.0"
 description = "External Harbor Bash agent with QEMU, Docker, and ShellSim machine backends"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["harbor>=0.8.1,<0.9", "httpx>=0.27", "shellsim==0.1.10"]
+dependencies = ["httpx>=0.27"]
+
+[project.optional-dependencies]
+qemu = ["quicksand-qemu==0.5.12"]
+shellsim = ["shellsim==0.1.10"]
 
 [project.scripts]
 harbor-qemu-stage = "harbor_qemu.bundle:main"

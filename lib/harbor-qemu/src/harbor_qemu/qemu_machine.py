@@ -179,6 +179,9 @@ class QemuMachine:
         lib = self.bundle / "lib"
         if lib.is_dir():
             runtime_env["LD_LIBRARY_PATH"] = str(lib)
+            modules = lib / "qemu"
+            if modules.is_dir():
+                runtime_env["QEMU_MODULE_DIR"] = str(modules)
         disk_args: list[str] = []
         if (self.bundle / "rootfs.ext4").is_file():
             trial_disk = runtime_path / "rootfs.ext4"
