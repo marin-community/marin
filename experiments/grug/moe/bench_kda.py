@@ -109,6 +109,48 @@ def _nullctx():
     yield
 
 
+def _decompose(b, h, length, dk, dv, c):
+    """Attribute the fwd cost of the bf16 kernel across its components (all bf16).
+
+    Times, at the real per-instance batch (G*n_chunks, C, C / C, d): the Neumann
+    triangular inverse alone, one big batched intra-chunk q@k GEMM, and the full
+    kernel -- so we can see whether the sequential scan or the parallel intra-chunk
+    inverse dominates before committing to a Pallas rewrite.
+    """
+    from experiments.grug.moe.kda import _unit_lower_triangular_inverse  # noqa: PLC0415
+
+    g_batch = b * h
+    n = length // c
+    inst = g_batch * n
+    rng = np.random.RandomState(0)
+    # strictly-lower bf16 matrix for the inverse
+    a = jnp.asarray(rng.randn(inst, c, c), jnp.float32)
+    a = jnp.where(jnp.tril(jnp.ones((c, c), bool), -1), a, 0.0)
+
+    def neumann(a_):
+        return _unit_lower_triangular_inverse(a_, c, matmul_dtype=jnp.bfloat16)
+
+    med, _ = _time_fn(jax.jit(neumann), (a,))
+    RESULTS.append(f"  [decomp C={c}] neumann_inverse only : {med*1e3:8.3f}ms (batch={inst}, C={c})")
+    print(RESULTS[-1], flush=True)
+
+    # one big batched intra-chunk q@k^T over all chunks (parallel, no scan)
+    qc = jnp.asarray(rng.randn(g_batch, n, c, dk), jnp.bfloat16)
+    kc = jnp.asarray(rng.randn(g_batch, n, c, dk), jnp.bfloat16)
+
+    def bigmm(q_, k_):
+        return jnp.einsum("...rd,...jd->...rj", q_, k_).astype(jnp.float32)
+
+    med, _ = _time_fn(jax.jit(bigmm), (qc, kc))
+    RESULTS.append(f"  [decomp C={c}] one batched CxC gemm  : {med*1e3:8.3f}ms")
+    print(RESULTS[-1], flush=True)
+
+    args = _make_inputs(b, h, length, dk, dv)
+    med_full, _ = _time_fn(jax.jit(lambda *a_: chunk_kda(*a_, chunk_size=c, matmul_dtype=jnp.bfloat16)[0]), args)
+    RESULTS.append(f"  [decomp C={c}] FULL kernel fwd       : {med_full*1e3:8.3f}ms")
+    print(RESULTS[-1], flush=True)
+
+
 def main():
     RESULTS.append(
         f"jax {jax.__version__} devices={jax.devices()} default_mm_prec={jax.config.jax_default_matmul_precision}"
@@ -120,6 +162,17 @@ def main():
     dk = int(os.environ.get("KDA_DK", "128"))
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
+
+    if os.environ.get("KDA_DECOMPOSE") == "1":
+        for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128").split(",")):
+            _decompose(b, h, lengths[0], dk, dv, c)
+        marker = "###KDA_RESULTS###"
+        print("\n" + marker, flush=True)
+        for ln in RESULTS:
+            print(ln, flush=True)
+        print(marker, flush=True)
+        sys.stdout.flush()
+        sys.exit(3)
 
     kda_bf16 = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16)
     kda_fp32 = functools.partial(chunk_kda, matmul_dtype=jnp.float32)
