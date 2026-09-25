@@ -145,6 +145,8 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
             path,
             schema,
             {
+                "max_retries": 5,
+                "retry_timeout_ms": 60_000,
                 "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
                 "aws_virtual_hosted_style_request": "true",
             },
@@ -750,7 +752,7 @@ def test_merge_sorted_frames_multi_pass_preserves_order(tmp_path):
 def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch):
     frames = [_make_sorted_frame([value]) for value in range(5)]
     spill_bytes: dict[str, bytes] = {}
-    scan_calls: list[tuple[str, dict[str, str]]] = []
+    scan_calls: list[tuple[str, dict[str, str | int]]] = []
     real_scan_parquet = pl.scan_parquet
 
     class SpillBuffer(io.BytesIO):
@@ -766,7 +768,9 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
         assert mode == "wb"
         return SpillBuffer(path)
 
-    def scan_parquet(path: str, *, schema: pl.Schema | None = None, storage_options: dict[str, str]) -> pl.LazyFrame:
+    def scan_parquet(
+        path: str, *, schema: pl.Schema | None = None, storage_options: dict[str, str | int]
+    ) -> pl.LazyFrame:
         scan_calls.append((path, storage_options))
         return real_scan_parquet(io.BytesIO(spill_bytes[path]))
 
@@ -794,6 +798,8 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
     assert all(
         storage_options
         == {
+            "max_retries": 5,
+            "retry_timeout_ms": 60_000,
             "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
             "aws_virtual_hosted_style_request": "true",
         }
