@@ -9,11 +9,19 @@ import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from types import SimpleNamespace
 
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import Outcome, exact_answer, grade_answer
+from taskcompendium.grading import (
+    ExactAnswerPayload,
+    GradeResult,
+    Outcome,
+    VerifierHandler,
+    exact_answer,
+    grade_answer,
+)
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.lowering import (
     HarborTaskBinding,
@@ -223,7 +231,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
 
 
 def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, specification):
-    parameters = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    parameters = {"expected": "12", "ignore_case": True, "collapse_whitespace": True}
     verifier = VerifierSpec(kind="exact_answer", parameters=parameters)
     specification = specification.model_copy(update={"verifier": verifier})
     parameters["expected"] = "13"
@@ -236,6 +244,25 @@ def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, sp
     exported = read_specification(task / "specification.json")
     assert grade_answer(exported, rendering, "12", object()).reward == 1.0
     assert grade_answer(exported, rendering, "13", object()).reward == 0.0
+
+
+def test_registered_grader_receives_verifier_environment(specification, monkeypatch):
+    environment = object()
+
+    def grade_probe(payload: ExactAnswerPayload, attempt) -> GradeResult:
+        assert attempt.environment is environment
+        return GradeResult(Outcome.GRADED, float(payload.expected == "12"))
+
+    handler = VerifierHandler(ExactAnswerPayload, grade_probe)
+    entry = SimpleNamespace(name="environment_probe", load=lambda: lambda: handler)
+    monkeypatch.setattr("taskcompendium.grading.entry_points", lambda *, group: (entry,))
+    specification = specification.model_copy(
+        update={"verifier": VerifierSpec(kind="environment_probe", parameters={"expected": "12"})}
+    )
+
+    result = grade_answer(specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), "12", environment)
+
+    assert result == GradeResult(Outcome.GRADED, 1.0)
 
 
 @pytest.mark.parametrize("schema_version", ["0.1", "0.2", "0.3"])
