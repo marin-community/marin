@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch one isolated serve/eval job per benchmark in a published policy."""
+"""Launch isolated serve/eval jobs for a published policy and its repeats."""
 
 import argparse
 import subprocess
@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 import yaml
 from marin.evaluation.eval_policy import (
+    AIME24_REPEATS,
     DEFAULT_SEED,
     FIXED_MAX_TOKENS,
     NUPA_SEED,
@@ -139,9 +140,9 @@ def launch_policy(
                 config = _harbor_config(version, name, artifact_dir, sotopia_dataset_dir, config)
                 selector = ("--harbor-config", str(config))
             seeds = (
-                range(42, 52)
+                range(DEFAULT_SEED, DEFAULT_SEED + AIME24_REPEATS)
                 if version == SEPTEMBER_16_VERSION and name == "aime24"
-                else (None,) * (10 if version == SEPTEMBER_24_VERSION and name == "aime24" else 1)
+                else (None,) * (AIME24_REPEATS if version == SEPTEMBER_24_VERSION and name == "aime24" else 1)
             )
             for seed in seeds:
                 command = [

@@ -181,8 +181,8 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch.
 
-    These blocks mirror the launcher's ``ModelConfig`` dataclasses. Unknown keys are retained so
-    newer records still read without collapsing distinct configurations to one comparison identity.
+    These blocks mirror the launcher's ``ModelConfig`` dataclasses. Most blocks retain unknown
+    keys, while resource hints use the launcher's strict schema.
     """
 
     model_config = ConfigDict(frozen=True, extra="allow")

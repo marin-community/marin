@@ -23,6 +23,7 @@ EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
 NUPA_SEED = 20222943
 DEFAULT_SEED = 42
+AIME24_REPEATS = 10
 SEPTEMBER_16_IFBENCH_MAX_TOKENS = 1024
 
 
@@ -230,8 +231,10 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
                         problems.append(f"explicit enable_thinking={required} required")
                 if evaluation.name == "aime24" and config.seed is not None:
                     problems.append("AIME24 outer seed must be unset")
-            elif evaluation.name == "aime24" and config.seed not in range(DEFAULT_SEED, DEFAULT_SEED + 10):
-                problems.append("September 16 AIME24 seed must be in 42..51")
+            elif evaluation.name == "aime24" and config.seed not in range(DEFAULT_SEED, DEFAULT_SEED + AIME24_REPEATS):
+                problems.append(
+                    f"September 16 AIME24 seed must be in {DEFAULT_SEED}..{DEFAULT_SEED + AIME24_REPEATS - 1}"
+                )
     elif evaluation.harbor is None:
         problems.append("missing Harbor configuration")
     elif evaluation.harbor.task_limit is not None:
