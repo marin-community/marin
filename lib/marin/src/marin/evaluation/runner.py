@@ -48,6 +48,7 @@ _JUDGE_ROLE = "judge"
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
+_UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 
 
@@ -216,7 +217,7 @@ def _record(
                     platform=batch.judge.accelerator.platform.value,
                     accelerator=batch.judge.accelerator.label,
                     region_or_cluster=(
-                        batch.judge.accelerator.target_cluster or batch.judge.accelerator.region or "unconstrained"
+                        batch.judge.accelerator.target_cluster or batch.judge.accelerator.region or _UNCONSTRAINED
                     ),
                 ),
             )
@@ -228,7 +229,7 @@ def _record(
             task_count=serving.task_count,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
-            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or "unconstrained"),
+            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
         ),
         status=status,
         serving=serving,

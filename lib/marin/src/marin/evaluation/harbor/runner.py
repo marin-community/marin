@@ -513,7 +513,7 @@ class HarborExecutor:
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        """Run Harbor while supervising a managed inference dependency."""
+        """Run Harbor while supervising the candidate and any hosted judge inference sessions."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:

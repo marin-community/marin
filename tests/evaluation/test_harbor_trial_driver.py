@@ -492,10 +492,11 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     script = (
         "import json; "
         "from pathlib import Path; "
+        "from pydantic import SecretStr; "
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
         "payload=config.model_dump(mode='json'); "
-        "payload['verifier']['env']={key: (value.get_secret_value() if hasattr(value, 'get_secret_value') else value) "
+        "payload['verifier']['env']={key: (value.get_secret_value() if isinstance(value, SecretStr) else value) "
         "for key, value in config.verifier.env.items()}; "
         "print(json.dumps(payload))"
     )

@@ -231,6 +231,42 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
     )
 
 
+def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
+    """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr(
+        "marin.evaluation.runner.inference_config_for_model",
+        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+    )
+
+
+def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> EvaluationBatch:
+    """One GPU batch with a co-hosted judge session beside the candidate model."""
+    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a")
+    return EvaluationBatch(
+        group_id="group",
+        user="tester",
+        version=None,
+        description=None,
+        records_prefix=str(tmp_path / "records"),
+        model=ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3)),
+        accelerator=accelerator,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        capability_origin="https://iris.example",
+        api_model="candidate",
+        evaluations=evaluations,
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
+        submission_cluster="marin",
+        judge=HostedJudge(
+            model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
+            accelerator=accelerator,
+            api_model="judge",
+        ),
+    )
+
+
 def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
     opened_models: list[str] = []
     observed_judges: list[RemoteInferenceSession | None] = []
@@ -260,31 +296,10 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
         observed_judges.append(judge)
         return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
 
-    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
-    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
-    monkeypatch.setattr(
-        "marin.evaluation.runner.inference_config_for_model",
-        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
-    )
-    candidate = ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3))
-    judge_model = ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3))
-    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a")
-    batch = EvaluationBatch(
-        group_id="group",
-        user="tester",
-        version=None,
-        description=None,
-        records_prefix=str(tmp_path / "records"),
-        model=candidate,
-        accelerator=accelerator,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="candidate",
-        evaluations=(_evaluation(tmp_path, "one", executor), _evaluation(tmp_path, "two", executor)),
-        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
-        submission_cluster="marin",
-        judge=HostedJudge(model=judge_model, accelerator=accelerator, api_model="judge"),
+    _patch_inference_runtime(monkeypatch, remote)
+    batch = _hosted_judge_batch(
+        tmp_path,
+        (_evaluation(tmp_path, "one", executor), _evaluation(tmp_path, "two", executor)),
     )
 
     run_evaluation_batch(batch)
@@ -317,37 +332,8 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
         _evaluation(tmp_path, "one", _successful_evaluation),
         _evaluation(tmp_path, "two", _successful_evaluation),
     )
-    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a")
-    batch = EvaluationBatch(
-        group_id="group",
-        user="tester",
-        version=None,
-        description=None,
-        records_prefix=str(tmp_path / "records"),
-        model=ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3)),
-        accelerator=accelerator,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="candidate",
-        evaluations=evaluations,
-        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
-        submission_cluster="marin",
-        judge=HostedJudge(
-            model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
-            accelerator=accelerator,
-            api_model="judge",
-        ),
-    )
-
-    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
-    monkeypatch.setattr(
-        "marin.evaluation.runner.remote_inference", lambda config: InferenceContext(config.model.model_id)
-    )
-    monkeypatch.setattr(
-        "marin.evaluation.runner.inference_config_for_model",
-        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
-    )
+    batch = _hosted_judge_batch(tmp_path, evaluations)
+    _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
 
     with pytest.raises(RuntimeError, match="judge inference failed"):
         run_evaluation_batch(batch)
