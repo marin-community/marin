@@ -1,0 +1,121 @@
+name: "Ops - Loom GitHub Tasks"
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  mentioned:
+    if: >-
+      (github.event_name == 'issue_comment' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association) &&
+       contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) &&
+       (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted workflow action
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+      - name: Launch mentioned task
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          idempotency-key: github-mention:${{ github.event.comment.id || github.event.review.id || github.event.issue.id }}
+          title: "GitHub mention in #${{ github.event.issue.number || github.event.pull_request.number }}"
+          goal: >-
+            Respond to the trusted author mention in
+            ${{ github.repository }} #${{ github.event.issue.number || github.event.pull_request.number }}.
+            Read the exact comment or review from event
+            ${{ github.event.comment.id || github.event.review.id || github.event.issue.id }}
+            and the surrounding thread. Carry out the request under AGENTS.md
+            and applicable skills. Publish a typed result.
+          base: main
+          github-issue: ${{ github.event.issue.number || github.event.pull_request.number }}
+
+  triage:
+    if: >-
+      github.event_name == 'issues' && github.event.action == 'opened' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) &&
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude') &&
+      !contains(github.event.issue.body, '@weaverbot') &&
+      !contains(github.event.issue.title, '@weaverbot')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted workflow action
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+      - name: Launch issue triage
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          idempotency-key: issue-triage:${{ github.event.issue.id }}
+          title: "Triage issue #${{ github.event.issue.number }}"
+          goal: >-
+            Triage ${{ github.repository }} issue #${{ github.event.issue.number }}.
+            Read the issue and apply the fix-issue skill if it is actionable.
+            For a simple question, answer on the issue. For a concrete small fix,
+            follow the full commit and PR workflow. For larger work, report a
+            concrete plan on the issue. Publish a typed result.
+          base: main
+          github-issue: ${{ github.event.issue.number }}
+
+  autofix:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association) &&
+      contains(github.event.review.body, 'autofix') &&
+      !contains(github.event.review.body, '@claude') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted workflow action
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+      - name: Launch requested autofix
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          idempotency-key: review-autofix:${{ github.event.review.id }}
+          title: "Autofix PR #${{ github.event.pull_request.number }}"
+          goal: >-
+            Address all actionable comments in review
+            ${{ github.event.review.id }} of ${{ github.repository }} PR
+            #${{ github.event.pull_request.number }}. Follow AGENTS.md and the
+            commit skill, run relevant checks, push fixes to the existing branch,
+            and post one concise 🤖 reply with the result. Publish a typed result.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}

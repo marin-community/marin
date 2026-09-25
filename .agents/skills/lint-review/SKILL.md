@@ -27,10 +27,11 @@ unforgivable error; so is fabricating one.
 ## Steps
 
 1. **Idempotency guard (only with `--comment`).** Check whether this skill has
-   already posted on the PR: look for the marker `<!-- marin-lint-review -->` in
+   already posted on this PR head: look for the marker
+   `<!-- marin-lint-review:<head SHA> -->` in
    both issue comments (`gh pr view <PR> --json comments`) and inline review
    comments (`gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate`). If the
-   marker is present, stop now — the PR already has a lint pass and we do not want
+   marker is present, stop now — this PR head already has a lint pass and we do not want
    duplicate comments. Otherwise continue.
 
 2. **Run the review.** From the repo root:
@@ -77,11 +78,11 @@ unforgivable error; so is fabricating one.
    finding's `path` and `line`, and a body of exactly this shape:
 
    ```
-   `ml-<code>` · confidence <confidence>
+   🤖 `ml-<code>` · confidence <confidence>
 
    <message>
 
-   <!-- marin-lint-review -->
+   <!-- marin-lint-review:<head SHA> -->
    ```
 
    The `<message>` is copied verbatim from the finding. Post one comment per
@@ -98,7 +99,7 @@ unforgivable error; so is fabricating one.
    so none are dropped. Format:
 
    ```
-   Lint review:
+   🤖 Lint review:
 
    These infra/lint findings anchor on lines not in the PR diff, so they could not
    be attached inline.
@@ -106,7 +107,7 @@ unforgivable error; so is fabricating one.
    - <path>:<line>: ml-<code> (<confidence>) <message>
    - ...
 
-   <!-- marin-lint-review -->
+   <!-- marin-lint-review:<head SHA> -->
    ```
 
    List every un-anchorable finding verbatim. If every finding was placed inline,
