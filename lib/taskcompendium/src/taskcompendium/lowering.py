@@ -99,17 +99,14 @@ def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> Non
 
 
 def read_specification(path: Path) -> TaskSpec:
-    """Read the private semantic record from an exported Harbor task."""
     return TaskSpec.model_validate_json(path.read_text())
 
 
 def read_binding(path: Path) -> HarborTaskBinding:
-    """Read the target binding stored in an exported Harbor task."""
     return HarborTaskBinding.model_validate_json(path.read_text())
 
 
 def read_rendering(path: Path) -> Rendering:
-    """Read the selected output convention from an exported Harbor task."""
     return Rendering.model_validate_json(path.read_text())
 
 
