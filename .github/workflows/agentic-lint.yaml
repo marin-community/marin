@@ -10,12 +10,16 @@ jobs:
   agentic-lint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      issues: read
     steps:
-      - name: Require the agentic lint label
+      - name: Require lint review of this head
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           case "$AUTHOR" in
@@ -24,11 +28,19 @@ jobs:
               exit 0
               ;;
           esac
-          if jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
-            echo "The agentic-lint label records completion of the review for this PR head."
+          if ! jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
+            echo "::error::Agentic lint is pending or failed. Check the Loom launch and review result."
+            exit 1
+          fi
+          marker="<!-- marin-agentic-lint:$HEAD_SHA -->"
+          comments=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "loom-oa-dev[bot]") | .body')
+          if grep -Fq "$marker" <<< "$comments"; then
+            echo "Agentic lint completed for $HEAD_SHA."
             exit 0
           fi
-          echo "::error::Agentic lint is pending or failed. Check the Loom launch and review result."
+          echo "::error::No completed Loom lint review for PR head $HEAD_SHA."
           exit 1
 
   launch-review:
@@ -47,7 +59,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
     steps:
       - name: Checkout trusted workflow action
         uses: actions/checkout@v6
@@ -56,13 +67,6 @@ jobs:
           persist-credentials: false
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
-
-      - name: Clear review label before launch
-        if: contains(github.event.pull_request.labels.*.name, 'agentic-lint')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr edit "$PR_NUMBER" --remove-label agentic-lint
 
       - name: Launch agentic lint
         uses: ./.github/actions/launch-loom-run
@@ -74,7 +78,8 @@ jobs:
             Review pull request #${{ github.event.pull_request.number }} at head
             ${{ github.event.pull_request.head.sha }}. Follow the agentic-lint
             profile instructions. Run the lint catalog review, report every
-            finding, and add the agentic-lint label only after the review succeeds.
+            finding, publish a completion marker for this head, and refresh the
+            agentic-lint label only after the review succeeds.
             Append a typed result to the Loom channel.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}

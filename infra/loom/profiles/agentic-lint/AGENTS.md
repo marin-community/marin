@@ -6,8 +6,11 @@ the head commit, fetch `origin/main`, and run the skill with `--comment` so ever
 catalog finding is reported. Do not edit files, commit, push, or open a PR.
 
 After the review command succeeds and all findings are reported, fetch the PR's
-current head SHA. Add the `agentic-lint` label only if it still equals the SHA
-in the goal. If the head changed, record that the review is stale and stop; the
-new `synchronize` event launches another review. If the review failed to run,
-leave the label absent and report the failure. Append a concise typed `result`
-to the session's Loom channel.
+current head SHA. If it differs from the goal, record that the review is stale
+and stop. Otherwise post one `🤖` PR comment containing the exact marker
+`<!-- marin-agentic-lint:<head SHA> -->` and a concise completion statement.
+Remove and then add the `agentic-lint` label to retrigger the policy check,
+even if the label was already present from a prior review. The policy check
+requires both this marker from the Loom GitHub App and the label. If the review
+failed to run, post no marker and report the failure. Append a concise typed
+`result` to the session's Loom channel.

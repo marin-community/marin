@@ -39,11 +39,12 @@ from retriggering another cleanup.
 ## Agentic lint
 
 `agentic-lint.yaml` launches a Loom lint review on each eligible PR head,
-including PRs opened by `marin-ops-agent[bot]`. The launcher removes a prior
-`agentic-lint` label when the head changes. The Loom session runs the read-only
-lint catalog review, reports findings, checks that the PR head still matches,
-then adds the label. The `pull_request` policy job remains red until that label
-is present. Loom's `agentic-lint` profile and the workflow's OIDC federation are
+including PRs opened by `marin-ops-agent[bot]`. The Loom session runs the
+read-only lint catalog review, reports findings, checks that the PR head still
+matches, then posts a completion marker with that SHA and refreshes the
+`agentic-lint` label. The `pull_request` policy job requires both the label and
+the matching marker from the Loom GitHub App, so an old label cannot pass a new
+head. Loom's `agentic-lint` profile and the workflow's OIDC federation are
 declared in `infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is
 published from `infra/pulumi/github`.
 
