@@ -117,6 +117,7 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
@@ -242,6 +243,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
+            "chat_template_kwargs": dict(config.chat_template_kwargs),
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
             "batch_size": config.batch_size,

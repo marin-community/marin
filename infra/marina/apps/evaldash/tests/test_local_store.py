@@ -13,7 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from marin.evaluation.records import list_records, write_record
+from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -42,6 +42,11 @@ def client(registered_api: RegisteredApi) -> Iterator[TestClient]:
 
 def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
+
+
+def test_api_defaults_to_the_current_verified_cohort():
+    assert evaldash_app._selection({}).cohort_version == "eval-policy-2026-09-24-verified"
+    assert evaldash_app._selection({"cohort": "all"}).cohort_version is None
 
 
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
@@ -130,7 +135,7 @@ def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
     not its lower-bound order. The panel sorts on the score and Compare ranks on the interval, and the
     SPA sort itself is not exercised here; the intervals come from the engine, not from the fixture.
     """
-    rows = client.get("/panel").json()["rows"]
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
     cells = {row["model"]: row["cells"]["aime"] for row in rows if "aime" in row["cells"]}
 
     by_score = sorted(cells, key=lambda model: -cells[model]["value"])
@@ -143,7 +148,7 @@ def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
 def test_aime24_fixture_reads_the_evalchemy_repeat_standard_error(client):
     """aime24 records carry ``accuracy_avg`` with ``accuracy_std_err``, the Evalchemy repeated-sample
     spelling. The panel's interval comes from that standard error rather than falling to [0, 1]."""
-    rows = client.get("/panel").json()["rows"]
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
     cell = next(row for row in rows if row["model"] == "snowball")["cells"]["aime24"]
 
     assert cell["metric"] == "accuracy"  # the legacy alias for accuracy_avg
@@ -156,7 +161,7 @@ def test_api_surface_over_fixtures(client):
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
 
-    panel = client.get("/panel").json()
+    panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
@@ -201,8 +206,22 @@ def test_run_detail_headline_is_null_for_a_failed_run(client):
     assert detail["timing"]["finished_at"]
 
 
+def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client):
+    record = store.get_record("snowball-2026.07.20-mmlu")
+    assert record is not None
+    invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": "eval-policy-2026-09-24-verified"})
+    store.refresh([invalid])
+
+    detail = client.get(f"/runs/{invalid.run_id}").json()
+    assert detail["headline"] is None
+    assert detail["policy_violations"]
+
+    group = client.get("/groups").json()[0]
+    assert group["evals"][0]["headline"] is None
+
+
 def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b"}).json()
+    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"}).json()
 
     assert set(comparison["shared"]) >= {"mmlu", "arc-challenge"}
     mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
@@ -214,7 +233,9 @@ def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(cl
 
 
 def test_api_compare_applies_the_selection_it_is_given(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu"}).json()
+    comparison = client.get(
+        "/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu", "cohort": "all"}
+    ).json()
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["shared"] == ["mmlu"]

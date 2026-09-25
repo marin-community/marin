@@ -26,6 +26,7 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -1522,6 +1523,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
+        "source_digest": source_config_digest(evalchemy_config_path),
         "tasks": [
             {
                 "name": "ifeval",
@@ -1548,6 +1550,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
+        "source_digest": source_config_digest(config_path),
         "tasks": [
             {
                 "name": "aime",

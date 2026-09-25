@@ -155,6 +155,8 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         "timeout": 1800,
     }
     args.update(config.get("extra_model_args", {}))
+    if use_chat and config["chat_template_kwargs"]:
+        args["chat_template_kwargs"] = json.dumps(config["chat_template_kwargs"], separators=(",", ":"))
     if max_length is not None:
         args["max_length"] = max_length
     return ",".join(f"{key}={value}" for key, value in args.items())

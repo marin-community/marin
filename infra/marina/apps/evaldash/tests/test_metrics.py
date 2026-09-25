@@ -4,9 +4,15 @@
 """The evaldash panel and comparison views: cross-cohort selection, coverage filtering, qualified
 aggregates, and head-to-head difference intervals."""
 
+from dataclasses import asdict
+
 import pytest
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
+from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
+from marin.evaluation.model_config import GenerationConfig, ModelConfig
+from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -17,6 +23,7 @@ from marin.evaluation.records import (
     HarborRef,
     HardwareRef,
     MetricKind,
+    ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
@@ -699,3 +706,55 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]
+
+
+def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
+    def policy_run(thinking: bool, config_thinking: bool, created_at: str) -> EvalRunRecord:
+        record = _record("same-name", "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+        model_config = ModelConfigRef.model_validate(
+            asdict(
+                ModelConfig(
+                    name="same-name",
+                    location="org/model",
+                    generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
+                )
+            )
+        )
+        return record.model_copy(
+            update={
+                "model": ModelRef(name="same-name", location="org/model", backend="vllm", config=model_config),
+                "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
+                "evaluation": record.evaluation.model_copy(
+                    update={
+                        "source_digest": POLICY_SOURCE_DIGESTS["eval-policy-2026-09-24-verified"]["math500"],
+                        "tasks": (EvalTaskRef(name="MATH500", num_fewshot=0, generation=True),),
+                        "evalchemy": EvalchemyRef(
+                            apply_chat_template=True,
+                            max_gen_toks=None,
+                            max_eval_instances=None,
+                            num_concurrent=16,
+                            batch_size="1",
+                            seed=42,
+                            chat_template_kwargs={"enable_thinking": thinking},
+                        ),
+                    }
+                ),
+            }
+        )
+
+    first = policy_run(True, False, "2026-09-25T01:00:00+00:00")
+    second = policy_run(True, True, "2026-09-25T02:00:00+00:00")
+    invalid = policy_run(False, False, "2026-09-25T03:00:00+00:00")
+    panel = build_panel([first, second, invalid], panel_request(cohort_version="eval-policy-2026-09-24-verified"))
+
+    assert len(panel["rows"]) == 2
+    assert {row["model"] for row in panel["rows"]} == {
+        comparison_model_name(first.model),
+        comparison_model_name(second.model),
+    }
+    assert panel["policy_rejections"][0]["run_id"] == invalid.run_id
+    detail = build_model_detail([first, second, invalid], comparison_model_name(first.model))
+    assert detail is not None
+    rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
+    assert rejected_run["headline"] is None
+    assert "enable_thinking=True" in rejected_run["gap_reason"]
