@@ -4,6 +4,7 @@
 """Export a direct-chat TaskSpec submission as a Harbor task package."""
 
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,7 +12,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.grading import validate_verifier
+from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -99,7 +101,12 @@ def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> Non
 
 
 def read_specification(path: Path) -> TaskSpec:
-    return TaskSpec.model_validate_json(path.read_text())
+    data = json.loads(path.read_text())
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
+    specification = TaskSpec.model_validate(data)
+    validate_verifier(specification.verifier)
+    return specification
 
 
 def read_binding(path: Path) -> HarborTaskBinding:
@@ -118,6 +125,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_binding(specification, binding)
+    validate_verifier(specification.verifier)
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()

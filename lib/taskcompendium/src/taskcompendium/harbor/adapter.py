@@ -91,7 +91,7 @@ class NoToolEnvironment(BaseEnvironment):
 
 
 class ReplayAgent(BaseAgent):
-    """Supply a fixed final response to exercise the real Harbor trial path."""
+    """Submit a caller-provided final response without a model request."""
 
     def __init__(self, *args, response: str, **kwargs):
         super().__init__(*args, **kwargs)
@@ -165,7 +165,7 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_answer(specification, convention, response)
+            result = grade_answer(specification, convention, response, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)

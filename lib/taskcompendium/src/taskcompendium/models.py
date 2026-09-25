@@ -3,11 +3,14 @@
 
 """Private semantics for one deterministic, single-turn answer task."""
 
+import json
+from collections.abc import Mapping
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 
 
 class AnswerType(StrEnum):
@@ -37,20 +40,29 @@ class Source(BaseModel):
         return self
 
 
-class ExactAnswer(BaseModel):
-    """An exact reference answer and its text-normalization rules."""
+class VerifierSpec(BaseModel):
+    """A private verifier kind and immutable JSON parameters."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    expected: str
-    ignore_case: bool = True
-    ignore_whitespace: bool = True
+    kind: str
+    parameters_json: str = Field(alias="parameters", repr=False)
 
-    @model_validator(mode="after")
-    def validate_expected(self) -> "ExactAnswer":
-        if not self.expected.strip():
-            raise ValueError("An exact answer is required")
-        return self
+    @field_validator("parameters_json", mode="before")
+    @classmethod
+    def freeze_parameters(cls, value: Mapping[str, Any]) -> str:
+        if not isinstance(value, Mapping):
+            raise ValueError("Verifier parameters must be a mapping")
+        return json.dumps(value, sort_keys=True, allow_nan=False)
+
+    @model_serializer
+    def serialize(self) -> dict[str, Any]:
+        return {"kind": self.kind, "parameters": self.parameters}
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Return a copy of the private parameter payload."""
+        return json.loads(self.parameters_json)
 
 
 class TaskRequirements(BaseModel):
@@ -74,7 +86,7 @@ class TaskSpec(BaseModel):
 
     id: str
     instructions: str
-    verifier: ExactAnswer
+    verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
     answer_type: AnswerType
