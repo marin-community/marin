@@ -1,0 +1,1152 @@
+{
+  "tasks": [
+    {
+      "task_id": "capsule-9168639",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run the analysis.Rmd file using Rscript and output the results in the 'results' directory.\n\nfig Report Institutions Sampled for US in Table 1.\nfig Report Institutions Sampled for UK in Table 1.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "6af52424e7cd6265de01a207cc4cdbe3c89d85ad0b4c36cd5e7d71feadddf485",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "research cohort sampling",
+      "skills": [
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Counts require an explicit denominator and inclusion ledger; capsule metadata does not expose the complete record schema."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-research-cohort-sampling"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-0325493",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'main.R' using Rscript\n\nFor the within-variance improvements, report the improvement for the FS_TotalGrayVol outcome with the Day variable.\nFor the within-variance improvements, report the improvement for the FS_CortexVol outcome with the Day variable.\nfig Report the name of the model, LASSO or Random Forest, which has the higher out-of-sample R^2 in % for FS-GM.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "7179273692c76285fbf9ae757c824dbec400068657647a3c9a9bb8708c866ff4",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "repeated imaging variance models",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep subject-level splits and repeated-scan dependence; inspect scan preprocessing and covariate definitions before authoring."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-repeated-imaging-variance-models"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-1854976",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run the 'evaluation.py' file.\n\nReport the final sensitivity (Sen1) after the ten different verifications.\nReport the final specificity (Spe1) after the ten different verifications.\nReport the final quality index (QI) after the ten different verifications.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "aa0c6229f9cf23cbbf57b6615f16620829766a2336af13bab97fe1ca80ce2696",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "physiological signal classification",
+      "skills": [
+        "signal-analysis"
+      ],
+      "applications": [
+        "physiology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Prevent patient leakage between windows and folds; sensitivity and specificity require the declared clinical label and thresholds."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-physiological-signal-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-0201225",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'main.py'.\n\nReport the AUC at the 'sample-level'.\nReport the sensitivity at the 'sample-level'.\nReport the specificity at the 'sample-level'.\nReport the accuracy at the 'sample-level'.\nReport the AUC at the 'patient-level'.\nReport the sensitivity at the 'patient-level'.\nReport the specificity at the 'patient-level'.\nReport the accuracy at the 'patient-level'.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "85f059c0ad819fc326dba59b395a59dcd76e07600b6e843548d62043945e71cb",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "sample to patient diagnostic evaluation",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Segment and patient denominators differ; reconstruct the aggregation and threshold policies before claiming workflow equivalence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-sample-to-patient-diagnostic-evaluation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-9070543",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Make the Dose_Response_Script_Output, RNA_Seq_Script_Output, Resistance_and_Sensitivity_Genes_Script_Output, Fig6c_Script_Output folders in the results folder to store the outputs. Then run the .Rmd files in this order: Dose_Response_Script.Rmd, RNA_Seq_Script.Rmd, Figure_6c_Script.Rmd. Store the outputs in ../results in the respective results folders. \n\nfig From the figure 4 continuous dose response, report the name of the sample with the highest normalized cell number at an LGX818 concentration of 0.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "a11441b31c7b5f5537e4af5454a89a0e1eeec55d60a9e2be1052544038d1674f",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "longitudinal drug response",
+      "skills": [
+        "normalization",
+        "dose-response",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve biological replicates, time and normalization controls; descriptive response differences alone do not establish a resistance mechanism."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-longitudinal-drug-response"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-6746514",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'NewData_ML_Kfold.py'. Then, run all python files starting with \"fig_\" in the folder.\n\nfig For dataset 1, report the score (%) for the GRU classifier for ACC.\nfig For dataset 1, report the score (%) for the SGRU classifier for ACC.\nfig Report the count of Class 3.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "3728a17027bca4bf8a30c269898d96649c5191bf31b07db78737c858ecc386df",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "eeg model comparison",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "physiology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Electrode preprocessing, patient leakage and class balance require explicit contracts."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-eeg-model-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-1683542",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Export the following R default packages: datasets,utils,grDevices,graphics,stats,methods. Then run 'main.R'.\n\nfig From Figure 2, report the Observed SMD for Bankole et al. 2016. Ignore the confidence interval.\nfig From Figure 12, report the Observed SMD for Jeppesen et al. 2006. Ignore the confidence interval.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "311b8df47e97a17205f5875fd12423ebd7978eed9737ee79d0fa64cc9a363937",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "exercise meta analysis",
+      "skills": [
+        "intervals",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Avoid double-counting shared controls; specify direction, effect-size convention and the synthesis model."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-exercise-meta-analysis"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-3894632",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'dp_survival.Rmd' using Rscript and Render it as html. Store the output in ../results. Set clean to 'TRUE'. Also, run 'correlation.py'.\n\nReport the p value for Lesions.Contoured.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "3a64d1d22ca88a6abaac83a9e1be724cdecf2f1758e7cb44f761970b54be2faa",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "multi modal clinical survival",
+      "skills": [
+        "association",
+        "survival"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Complete-case selection, time origin, censoring and model covariates must be established from the capsule analysis."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-multi-modal-clinical-survival"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-5496369",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Execute GC-diagnosis-model/run.ipynb. Save the results in html format in ../results. Execute GC-prognosis-model/run.ipynb. Save the results in html format in ../results. For both runs, disable the cell execution timeout and allow errors.\n\nfig For the GC diagnosis model's AUROC curve of test data, report the Lasso AUROC of the test data.\nfig From the GC prognosis model's AUROC curve, report the Lasso AUROC of the test data.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "afa7396363387d98e78d5952e9cc5a265375116474361b9e5958803ff66863ab",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "metabolomic diagnosis and prognosis",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "metabolomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Diagnosis and prognosis need separate eligibility and outcome definitions; all feature selection belongs within training data."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-metabolomic-diagnosis-and-prognosis"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-3497606",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Ignore python warnings. Run 'Super-Iterative.py'.\n\nfig Report which image type has the greatest noise at 100 iterations.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "eb3b5b2ca9aee0ab523e6f9cb0fcba7b2ffc071dd9554ae5d22121c923dc154f",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "iterative tomography reconstruction",
+      "skills": [
+        "image-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "bioimaging",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A numerical noise definition and imaging geometry are needed; visually selecting an image is not a scientific reference."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-iterative-tomography-reconstruction"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-7156696",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Execute all the .ipynb files in the ../code directory. Save the results in html format in ../results. For all the runs, disable the cell execution timeout and allow errors.\n\nfig From Figure 5A, report the name of the source with the lowest fluence rate at depth 1.\nfig From Figure 5B, report the name of the source with the highest effective fluence rate at depth 1.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "1393d14ea40677cba026911beceb336ddee840ef56d0f47ddd7d3e374c1a24fe",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "tissue light fluence comparison",
+      "skills": [
+        "visualization"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Keep wavelength, depth and fluence units explicit; model outputs require physical assumptions and are not observed biological measurements."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-tissue-light-fluence-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-3269870",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'nn.py' and 'predict.py'.\n\nReport the percentage accuracy of the result.\nReport the percentage precision of the result.\nfig Report the y-axis label of the training plot.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "d5060d1c83f7626f43ae6e21c18ab115ba953b227b42d69e0af29b3e4deba2e3",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_group": "",
+      "workflow": "clinical team performance classification",
+      "skills": [
+        "model-evaluation",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Group repeated teams or simulations appropriately; distinguish a plotted label from evidence that the underlying analysis is correct."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-clinical-team-performance-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-2816027",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Export the following R default packages: datasets,utils,grDevices,graphics,stats,methods. Then, run 'main.R' using Rscript.\n\nfig For CTCF Signature Enrichment, report the name of the group with the highest median GSVA score.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "c2b52ec0c0d9d4854cca0357acce4572827dba6c5f75387ceeeffea233b93881",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "cancer expression signature comparison",
+      "skills": [
+        "enrichment",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Freeze gene identifier matching and scoring conventions; group association does not establish causal pathway activation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-cancer-expression-signature-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-9054015",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'pancancer_calculation.R' using Rscript.\n\nfig Report the percentage sensitivity for cancers A and B that has the highest number of cancers detected per 1,000 women for a 1.0% prevalance of cancer B.\nReport the 5-year probability of diagnosis for breast tissue origin and age 50.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "557b50cdef0416fd905c293ca8d1f51c13f90f96c22b22d6116994c8baa7d7a2",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "screening population risk model",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Report the modeled population and competing-risk assumptions; this is a mathematical scenario, not patient-specific medical advice."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-screening-population-risk-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-0851068",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run the bash script 'demo.sh'.\n\nReport the final AUC after training.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "c2a152388a2cede094142b494d5fcbaba4ef81dcecc1f663dbd4230f54b4a1b1",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "medical image classification",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Prevent patient or duplicate-image leakage; the capsule prompt does not establish imaging modality or external generalization."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-medical-image-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-1394704",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'modular.Rmd' using Rscript and render it as a html. Store the output in ../results. Set clean to 'TRUE'.\n\nfig Report the name of the method with the higher R0.\nReport the R0 of EG.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "be25b25edb203715b28e44a019859a8496df33c578b76eaa92ca378989704a3a",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "epidemiological model comparison",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Separate observed incidence from model assumptions and uncertainty; retain a bounded retrospective public-health analysis."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-epidemiological-model-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-9911222",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run ''OncoBird/vignettes/OncoBird.Rmd' using Rscript and render it as a pdf. Store the output in ../results. Set clean to 'TRUE'. \n\nfig Report the name of the mutually exclusive model with the highest exclusivity score.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "974bfb38a371d5d01a77e268c649928b271f731dbd857bebb9348e3bbefe47a7",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "cancer alteration exclusivity",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Missing calls and sample inclusion affect exclusivity; inspect the null model and multiplicity correction before authoring."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-cancer-alteration-exclusivity"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-7716865",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'manuscript.Rmd' using Rscript and render it as a pdf. Store the output in ../results. Set clean to 'TRUE'.\n\nfig From Table 1, report the sensitivity for 80% power and recalculated mean (regulation).",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "68156caaa5ff8394645a5db6d8c607a4fe3d9e264f034f837e0dbbd21e5314f6",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "research power audit",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Observed effect sizes can be biased; freeze the power model and account for related studies."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-research-power-audit"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-4933686",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run \"Main.R\" using Rscript and xvfb-run.\n\nfig From Figure 2 plot A, report Fisher's P. If the value is in scientific notion, convert it to a floating point number.\nfig From Figure 1 plot A, measuring time vs. metastasis-free survival, report the numerical value of HR (ignore the confidence interval).",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "f7687135441bb030a16d742baa0ffffeb943b0c6efc05ab009e21fe3c3f29e08",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "genomic association and survival",
+      "skills": [
+        "survival",
+        "intervals",
+        "statistics",
+        "data-management",
+        "visualization"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Fisher-test and hazard-ratio endpoints have different populations and assumptions; preserve censoring and effect direction."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-genomic-association-and-survival"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-1175539",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run \"/code/CardioSCZ.R\" using Rscript.\n\nfig Report the name of the patient group with the greater median concentricity.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "e5a029331341fd12055de83034b68758d6f2a3937f68b0de2f4a01f463590e04",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "clinical imaging group comparison",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "clinical",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve measurement units and covariate structure; a median comparison alone does not establish a disease effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-clinical-imaging-group-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-4180912",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run \"clasificador.py\" and \"clasificador_dt.py\".\n\nReport the accuracy of the neural network classifier.\nReport the macro f1 score for the random classifier.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "4eebf2bf6a506464113d4f6ed8b1032c9e19cb0b8ca65aa12c6e01926416042a",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "metabolic phenotype classification",
+      "skills": [
+        "model-evaluation",
+        "network"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Freeze units, label rules and independent patient splits; macro-F1 is not interchangeable with accuracy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-metabolic-phenotype-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-2708693",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'preregSR_manuscript.Rmd' and render it as a pdf. Store the output in ../results. Set clean as 'TRUE'.\n\nfig From table 1, report the k value for the medicide discipline.\nfig From table 3, report n for 'percentage of studies with at least one outcome discrepancy that disclose an outcome discrepancy'.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "901acc96648621989a027e786b0152ae533841ef6d7219c57b47d856fd12ad94",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "registration publication discrepancy review",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Evidence extraction and study linkage need an auditable ledger; distinguish outcome-level and study-level denominators."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-registration-publication-discrepancy-review"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-4252248",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Create the symbolic links for ../results output. Create the symbolic links for ../data Data. Run 'main-ctrpv.R', 'main-nci.R', and 'main-network-generation.R' using Rscript.\n\nfig Report the overall AUC from the PR curve generated with the CTRPv2 sensitivity dataset, tested against ATC annotations and drug-target information from CHEMBL.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "4e68b3fecf68f5cfc7eeb7a27ab745b068254c54538dcd9b4d80af8aadaa35db",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "pharmacogenomic response network",
+      "skills": [
+        "model-evaluation",
+        "network",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Freeze identifier crosswalks and annotation versions; PR-area is distinct from ROC-area and requires a declared positive-label universe."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-pharmacogenomic-response-network"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-7186268",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'SampleCode.Rmd' using Rscript and render it as html. Store the output in ../results. Set clean as 'TRUE'.\n\nfig From laboratory test 18262-6, report the name of the method with the higher missing rate at gap 30.\nfig From laboratory test 2160-0 Creatinine, report the ID number with the highest laboratory result at window 2.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "80f1d5b0fc4ea2328795bc819f10344fdc7c4216c588aeafdf5defb45965628a",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "longitudinal laboratory records",
+      "skills": [
+        "data-management"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Repeated measurements and missingness rules affect eligibility; record the window origin, inclusive boundaries and tie handling."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-longitudinal-laboratory-records"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "capsule-3849634",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Run 'meta-analysis.R' using Rscript.\n\nfig Report N psychosis for Wium-Anderson et al, 2014 for the analysis adjusted for only age, sex, and BMI and CRP measured in adulthood/old age.",
+      "source_question_kind": "original-instruction-and-output-questions",
+      "source_question_sha256": "30063c93653ee43f29ccb92b4d749ff4285d428b9c14363b72d375a73074bdb4",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_group": "",
+      "workflow": "longitudinal biomarker meta analysis",
+      "skills": [
+        "signal-analysis"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Avoid mixing minimally and fully adjusted effects or overlapping cohorts; preserve exposure timing and the effect-size scale."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-core-bench-longitudinal-biomarker-meta-analysis"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

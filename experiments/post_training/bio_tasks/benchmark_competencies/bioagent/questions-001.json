@@ -1,0 +1,539 @@
+{
+  "tasks": [
+    {
+      "task_id": "alzheimer-mouse",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Perform a comparative differential expression analysis of three different Alzheimer's Disease mouse models (5xFAD, 3xTG-AD, and PS3O1S) to identify shared molecular KEGG pathways. The output should be a CSV file with the following columns: 'pathway','5xFAD_pvalue','3xTG_AD_pvalue','PS3O1S_pvalue'. Example csv <example>Pathway,5xFAD_pvalue,3xTG_AD_pvalue,PS3O1S_pvalue\nPhagosome Homo sapiens hsa04145,1.5045916403148935e-09,0.3102788532065793,0.4443015705596512\n</example> ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "85ef669a5fe341dc68247c266da2d6ccb2b1532ec832aa17fd816f2492c41441",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "cross model rnaseq enrichment",
+      "skills": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Exactly three models and their observed control groups; do not treat three technical subsets of one model as three experiments.",
+        "Gene namespace and cross-species mapping, separate background universes, count filtering, model design, shrinkage, directional criterion, enrichment test and multiplicity family.",
+        "Define shared support before seeing results; missing/untestable differs from nonsignificance. Freeze which quantity the source pvalue columns represent."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-cross-model-rnaseq-enrichment"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast",
+        "differential-expression-bh"
+      ]
+    },
+    {
+      "task_id": "comparative-genomics",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Reconstruct phylogeny and identify COGs across four Micrococcus genomes; filter clusters present in all genomes, coding-only, with high-confidence annotations. The output should be a CSV file with the following columns: 'cluster_number, 'consensus_annotation'.<example>cluster_number,consensus_annotation\n1,K07222  K07222, putative flavoprotein involved in K+ transport\n2,K01069  gloB, gloC, HAGH, hydroxyacylglutathione hydrolase [EC:3.1.2.6]\n</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2bb91a557315ba2451fdff857b4f13c4974de1d8eca650b2aab4e2b24ce70193",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "orthology and phylogeny",
+      "skills": [
+        "orthology",
+        "sequence-alignment",
+        "phylogeny"
+      ],
+      "applications": [
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Four genomes, representative-isoform policy, homology thresholds, ortholog/paralog definition and annotation confidence hierarchy.",
+        "Do not equate BUSCO completeness with exhaustive conserved functional-cluster discovery. BUSCO may supply a separate endpoint required by another card.",
+        "Define consensus ties, missing annotations and module grouping; a gene tree alone does not prove co-evolution."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-orthology-and-phylogeny"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "sequence-identity-clusters",
+        "alignment-column-filter",
+        "newick-distances",
+        "real-genome-cds-extraction",
+        "real-genome-translation",
+        "real-protein-alignment"
+      ]
+    },
+    {
+      "task_id": "cystic-fibrosis",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Find the genetic cause of Cystic fibrosis; identify the causal recessive variant consistent with affected siblings NA12885, NA12886, and NA12879. The output should be a CSV file with the following columns: chromosome,position,variant_id,reference,alternate,gene_name,gene_id,annotation,impact,transcript_id,hgvs_c,hgvs_p,clinical_significance,diseases,review_status,rs_id. <example>chromosome,position,variant_id,reference,alternate,gene_name,gene_id,annotation,impact,transcript_id,hgvs_c,hgvs_p,clinical_significance,diseases,review_status,rs_id\nX,123456789,VAR123,A,G,GENE1,ENSG00000000001,missense_variant,MODERATE,ENST00000000001,c.123A>G,p.Lys41Arg,Likely_pathogenic,Disease_A; Disease_B; not_provided,reviewed_by_expert_panel,rs0000001</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1d32792cd3f648acdc03a87f0e82186bf5fdb7fc19afa5bfb0bd0aae9e33feca",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "inherited variant prioritization",
+      "skills": [
+        "variant-analysis",
+        "variant-consequence",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Reference build, normalization, genotype quality/missingness, sex/ploidy, recessive/compound-heterozygote rules and phenotype uncertainty.",
+        "Transcript selection, penetrance assumptions, clinical assertion dates/conflicts and candidate ties. Keep all source-required identity/HGVS/evidence columns."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-inherited-variant-prioritization"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "vcf-genotype-masking",
+        "vcf-multiallelic-splitting",
+        "variant-coding-consequences"
+      ]
+    },
+    {
+      "task_id": "deseq",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Identify differentialy expressed genes between planktonic and biofilm conditions of Candida parapsilosis. The output should be a CSV file with the following columns: gene_id,log2FoldChange,pvalue,padj\nCPAR2_00000,1.0, 2.0, 1e-44",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b8767489126844395cbb30ad35718a33e1986a394ef75422de06a49cda52ea48",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "reads to differential expression",
+      "skills": [
+        "sequence-alignment",
+        "expression-quantification",
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Library orientation, aligner/reference version, multimapping/overlap/paired-fragment assignment and annotation feature level.",
+        "Biological design and contrast sign, low-count filter, DESeq2 settings, shrinkage/reporting policy, independent filtering and NA policy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-reads-to-differential-expression"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "fastq-quality-trimming",
+        "real-rnaseq-size-factors",
+        "differential-expression-bh"
+      ]
+    },
+    {
+      "task_id": "evolution",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Identify and annotate genome variants in two evolved lines relative to an ancestor lines of E. coli; report only variants shared by both evolved lines of moderate or higher predicted severity. The output should be a CSV file with the following columns: 'chrom','pos','ref','alt','gene','impact','effect',status'.<example>CHROM,POS,REF,ALT,GENE,IMPACT,EFFECT,STATUS\nNODE_4_length_102007_cov_6.351643,6352,T,C,ICCIAKIK_00327,MODERATE,missense_variant,shared</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "ecbddff340edeccd96339c98373960ee5dced5bc60b042c43d02e5afcefce194",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "read mapping and variant comparison",
+      "skills": [
+        "sequence-alignment",
+        "variant-analysis",
+        "variant-consequence"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Haploid caller, read/quality/strand filters, indel normalization, common callable territory and missing-call semantics.",
+        "Ancestor subtraction, shared-allele equality, annotation version, MODERATE-or-higher consequence ordering and multi-transcript handling."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-read-mapping-and-variant-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "dna-unique-mapping",
+        "sam-allele-pileup",
+        "vcf-site-filtering"
+      ]
+    },
+    {
+      "task_id": "giab",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Use the sequencing data from NA12878 (Agilent SureSelect v7, ~75M reads) to perform germline variant calling. The output should be a .vcf.gz variant call file.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bea46c5054b289e2bf11be8ceed9bd2ad1d4fe0f9f29dbc3de54597e7f73b7ce",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "variant calling and truth comparison",
+      "skills": [
+        "sequence-alignment",
+        "variant-analysis",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Sample, genome build, capture panel, ploidy regions, duplicate policy, caller/filter settings and variant representation normalization.",
+        "Evaluator version, haplotype/genotype matching, region-boundary behavior, filtered-call policy, type strata and zero-denominator rules."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-variant-calling-and-truth-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "dna-unique-mapping",
+        "sam-allele-pileup",
+        "vcf-site-filtering"
+      ]
+    },
+    {
+      "task_id": "metagenomics",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Perform metagenomic analysis of control (JC1A) and fertilized (JP4D) samples to classify microbial taxa and estimate relative abundances. The output should be a CSV file with the following columns: 'OTU','Kingdom','Phylum','JP4D','JC1A'.<example>OTU,Kingdom,Phylum,JP4D,JC1A\n2771361,Bacteria,Pseudomonadota,84.8612882653061,66.4367816091954</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4cff105adda827aaf6841647c4297079527bbb4f12f157418115f30778e7134b",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "metagenomic taxonomic profile",
+      "skills": [
+        "taxonomic-profiling",
+        "composition"
+      ],
+      "applications": [
+        "genome-variation",
+        "microbiology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Read versus pair counting, classification confidence, taxonomy/rank version, ancestor aggregation and ambiguous/unclassified policy.",
+        "Total-read versus classified-read denominators, abundance estimator and zero handling; retain distinct sample columns."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-metagenomic-taxonomic-profile"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "taxonomic-lca",
+        "taxonomy-counts",
+        "bray-curtis"
+      ]
+    },
+    {
+      "task_id": "single-cell",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze single-cell RNA-seq data from pre- and post-exercise skeletal muscle samples. Perform clustering, cell type identification, and differential expression analysis within each cell type between conditions. The output should be a CSV file with the following columns: 'cluster_id','predicted_cell_type','gene_name','logfoldchanges','pvals','pvals_adj','direction','abs_logfc'.<example>cluster_id,predicted_cell_type,gene_name,logfoldchanges,pvals,pvals_adj,direction,abs_logfc\n0,Perivascular cell,RNASE1,-6.658449,3.443035537523368e-15,6.886071075046736e-12,down,6.658449</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0004e9e2a4bf924991b25c77e40df1a6e2ee0ac257662c9efc2db17beec7e9a0",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "single cell condition comparison",
+      "skills": [
+        "clustering",
+        "cell-annotation",
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "QC/normalization/feature rules, graph and clustering settings, annotation evidence hierarchy and ambiguous labels.",
+        "Documented donor pairing, cell-type eligibility and count aggregation, model design, contrast direction and complete tested-gene universe; never treat cells as independent donors."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-single-cell-condition-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "matrixmarket-cell-qc",
+        "matrixmarket-log-normalization",
+        "donor-counts",
+        "cell-fractions"
+      ]
+    },
+    {
+      "task_id": "transcript-quant",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Perform transcript quantification on the provided paired-end RNA-Seq reads using the transcriptome reference. The output should be a .tsv file with the following columns:'transcript_id'\t'count'.<example>transcript_id\tcount\nENST000000001\t523</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "511424e5a7b854ece3ccb463867b936a655a93c1bc0eba9c88a47196e3f1de6c",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "transcript abundance",
+      "skills": [
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Transcript reference/decoys, native tool/version, library type, bias settings, count unit (fragments versus reads), bootstrap/uncertainty policy and zero-length rules.",
+        "Do not round estimated fractional counts to invented exact observed transcript counts. Freeze numerical tolerances from native repeatability and independent accounting, before solver runs."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-transcript-abundance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "transcript-tpm"
+      ]
+    },
+    {
+      "task_id": "viral-metagenomics",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze paired-end metagenomic sequencing data from a dolphin fecal sample to identify potential viral agents. Assemble and classify contigs, then summarize results by taxonomic domain and species. The output should be a CSV file with the following columns: 'contig_count','domain','species'.<example>contig_count,domain,species\n2,Viruses,H1N1 5\n68,Unclassified,</example>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7a3fc3e542ca131fe88b71f0a0144da53858b8ffcdd6e0d641b0439f33544f22",
+      "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+      "source_group": "",
+      "workflow": "metagenomic assembly and classification",
+      "skills": [
+        "assembly",
+        "taxonomic-profiling"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Assembler version/parameters, minimum contig length, read-support rules, reference content, classifier score thresholds and multi-hit rank reconciliation.",
+        "One contig/one summary-count contribution under explicit ambiguity rules; retain excluded and unclassified counts separately."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bioagent.json",
+          "id": "portfolio-bioagent-metagenomic-assembly-and-classification"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "assembly-nx",
+        "protein-local-search",
+        "taxonomic-lca",
+        "real-fastq-pair-filter",
+        "real-fastq-cycle-quality",
+        "real-fastq-quality-yield"
+      ]
+    }
+  ]
+}

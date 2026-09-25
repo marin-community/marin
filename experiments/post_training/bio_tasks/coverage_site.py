@@ -18,11 +18,21 @@ SOURCE = Path(__file__).parent
 REPO = SOURCE.parents[2]
 SITE = REPO / "docs/experiments/bio-task-coverage.html"
 BENCHMARK_REVIEW = REPO / "docs/experiments/bixbench-verified-competencies.md"
+CATEGORY_REVIEW = REPO / "docs/experiments/bio-benchmark-categories.md"
 GITHUB = "https://github.com/marin-community/marin/blob/codex/bio-task-generators/"
 
 
 def load(name: str) -> dict:
     return json.loads((SOURCE / name).read_text())
+
+
+def load_benchmark_review(name: str) -> dict:
+    """Load a review manifest and its bounded, editable question files."""
+    review = load(name)
+    review["tasks"] = [row for path in review["task_files"] for row in load(path)["tasks"]]
+    if len(review["tasks"]) != review["task_count"]:
+        raise ValueError(f"Review record count mismatch: {name}")
+    return review
 
 
 def primary_competency(taxonomy: dict, recipe: str) -> str:
@@ -60,27 +70,37 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
         annotations = {}
         if (SOURCE / review_file).exists():
             inputs.append(review_file)
-            review = load(review_file)
-            if review["benchmark"] != name or review["source_revision"] != inventory["source_revision"]:
-                raise ValueError(f"Competency review source mismatch: {name}")
+            review = load_benchmark_review(review_file)
+            inputs.extend(review["task_files"])
+            if review["schema_version"] != 2 or review["benchmark"] != name:
+                raise ValueError(f"Competency review schema/source mismatch: {name}")
+            if review["inventory_sha256"] != hashlib.sha256((SOURCE / release["tasks_file"]).read_bytes()).hexdigest():
+                raise ValueError(f"Inventory changed since review: {name}")
             annotations = {row["task_id"]: row for row in review["tasks"]}
             if len(annotations) != len(review["tasks"]) or set(annotations) != {
                 row["task_id"] for row in inventory["tasks"]
             }:
                 raise ValueError(f"Competency review must cover each question exactly once: {name}")
-            competency_ids = {row["id"] for row in review["competencies"]}
-            if len(competency_ids) != len(review["competencies"]):
-                raise ValueError(f"Duplicate competency definitions: {name}")
-            for row in inventory["tasks"]:
-                annotation = annotations[row["task_id"]]
-                labels = annotation["competencies"]
-                if len(labels) != len(set(labels)) or not set(labels) <= competency_ids:
-                    raise ValueError(f"Invalid competency labels: {name}/{row['task_id']}")
-                eligible = annotation["verification_status"] == "numeric-contract"
-                if bool(labels) != eligible:
-                    raise ValueError(f"Only verifiable questions may have competency labels: {name}/{row['task_id']}")
-                if annotation["source_question_sha256"] != row["source_question_sha256"]:
-                    raise ValueError(f"Question changed since review: {name}/{row['task_id']}")
+            definitions = load("benchmark_competencies/taxonomy.json")
+            for annotation in annotations.values():
+                identity = f"{name}/{annotation['task_id']}"
+                eligible = annotation["disposition"] == "reframe"
+                if annotation["disposition"] not in {"reframe", "excluded", "unavailable"}:
+                    raise ValueError(f"Unknown question disposition: {identity}")
+                for facet in ("skills", "applications"):
+                    labels = annotation[facet]
+                    allowed = {row["id"] for row in definitions[facet]}
+                    if len(labels) != len(set(labels)) or not set(labels) <= allowed or bool(labels) != eligible:
+                        raise ValueError(f"Invalid {facet} assignment: {identity}")
+                if eligible and not all(
+                    annotation[key] for key in ("source_question", "reframed_question", "outputs", "verification")
+                ):
+                    raise ValueError(f"Missing executable framing: {identity}")
+                question = annotation["source_question"]
+                if question and hashlib.sha256(question.encode()).hexdigest() != annotation["source_question_sha256"]:
+                    raise ValueError(f"Question text/hash mismatch: {identity}")
+                if not eligible and not annotation["reason"]:
+                    raise ValueError(f"Missing exclusion/access reason: {identity}")
             page["review"] = {key: value for key, value in review.items() if key != "tasks"}
             page["review_file"] = review_file
         for task in inventory["tasks"]:
@@ -125,101 +145,151 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
 
 
 def benchmark_markdown(review: dict) -> str:
-    """Render the flat question review for editing alongside the explorer."""
-    names = {row["id"]: row["name"] for row in review["competencies"]}
-    included = [row for row in review["tasks"] if row["competencies"]]
-    excluded = [row for row in review["tasks"] if not row["competencies"]]
+    """Render an editable view of the BixBench review and its independent facets."""
+    github = GITHUB.replace("blob/codex/", "blob/codex%2F")
+    taxonomy = load("benchmark_competencies/taxonomy.json")
+    names = {row["id"]: row["name"] for row in taxonomy["skills"] + taxonomy["applications"]}
+    included = [row for row in review["tasks"] if row["disposition"] == "reframe"]
     counts = sorted(
-        (
-            (competency, sum(competency["id"] in row["competencies"] for row in included))
-            for competency in review["competencies"]
-        ),
+        ((skill, sum(skill["id"] in row["skills"] for row in included)) for skill in taxonomy["skills"]),
         key=lambda row: (-row[1], row[0]["name"]),
     )
     lines = [
-        "# BixBench-Verified: flat competency review",
+        "# BixBench-Verified: skills and applications",
         "",
-        f"Draft for review: {len(included)} of {len(review['tasks'])} source questions have "
-        f"proposed executable checks and {len(review['competencies'])} provisional competencies. "
-        "Task generation remains paused. No LLM judge is in scope.",
+        f"Draft: {len(included)} of {len(review['tasks'])} questions have a proposed executable framing. "
+        "This includes explicit adaptations of underspecified or interpretive source questions. "
+        "These are authoring proposals, not newly validated Harbor tasks. No LLM judge is in scope.",
         "",
-        "An **analysis competency** is a reusable scientific analysis with a checkable outcome. "
-        "A **workflow recipe** connects competencies to answer a scientific question on observed data. "
-        "Filters, covariates, model options and denominators belong in the question-specific contract "
-        "unless they change the analysis being assessed. These boundaries are open for review.",
+        "A **skill** is a reusable analysis operation with a checkable result. An **application** "
+        "describes its biological setting. A **workflow** connects operations, scientific decisions "
+        "and artifacts to answer a question. Keep these as independent fields: application is not "
+        "a second level below skill, and not every possible skill/application pair is meaningful.",
         "",
-        "Use the same competency when two tasks require the same scientific analysis and a comparable "
-        "output contract, even if species, tool or threshold changes. Split it when the scientific "
-        "decision or required artifacts change substantially. A task can carry several competencies "
-        "when its verifier checks the connected intermediate results.",
+        "Use workflow proposals to select the next tasks. Prefer missing combinations of required "
+        "operations and decisions on observed data, with a credible executable check. Vary studies, "
+        "contrasts, input stages and methods while retaining a scientific purpose. Do not allocate "
+        "tasks merely in proportion to label counts or count incidental input terminology as work.",
         "",
-        "Each question may require several competencies; it is counted once per assigned label. "
-        "The counts overlap and do not measure unique studies, independent workflows or validated generated tasks.",
+        "Labels describe requirements, not demonstrated competence. An endpoint-only reward does "
+        "not prove that each intermediate skill was exercised. Group related questions and overlapping "
+        "benchmark releases before using frequencies as planning weights.",
         "",
-        "[Versioned annotations, original questions and verification notes]"
-        "(../../experiments/post_training/bio_tasks/benchmark_competencies/bixbench-verified-50.json) · "
-        "[Source inventory](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) · "
-        "[Licensed source dataset](https://huggingface.co/datasets/phylobio/BixBench-Verified-50)",
+        "[Annotations and exact original questions]"
+        f"({github}experiments/post_training/bio_tasks/benchmark_competencies/bixbench-verified-50.json) · "
+        "[Shared flat vocabulary]"
+        f"({github}experiments/post_training/bio_tasks/benchmark_competencies/taxonomy.json)",
         "",
-        "The naming follows [EDAM's separation of operations, topics, data and formats]"
-        "(https://edamontology.org/). These are local draft labels, not official EDAM terms.",
+        "The facets borrow [EDAM's distinction between operations and topics]"
+        "(https://edamontologydocs.readthedocs.io/en/latest/editors_guide.html). These draft labels "
+        "are not official EDAM terms. Differential expression remains a recognizable specialized "
+        "skill; normalization, transformation and dimensionality reduction can be separate skills "
+        "when the solver actually performs them.",
         "",
-        "## Ranked competencies",
+        "## Skills ranked by eligible questions",
         "",
-        "| Competency | Questions | Checkable outcome |",
+        "Counts overlap. Each source question counts at most once per skill.",
+        "",
+        "| Skill | Questions | Checkable outcome |",
         "| --- | ---: | --- |",
     ]
-    for competency, count in counts:
-        lines.append(f"| {competency['name']} | {count} | {competency['outcome']} |")
-    lines.extend(
-        [
-            "",
-            "## Questions with proposed executable checks",
-            "",
-            "These are prospective verifier designs. No new Harbor validation is claimed.",
-            "",
-            "| Question | Short description | Competencies |",
-            "| --- | --- | --- |",
-        ]
-    )
+    for skill, count in counts:
+        if count:
+            lines.append(f"| {skill['name']} | {count} | {skill['outcome']} |")
+    lines += ["", "## Question assignments", "", "| Question | Skills | Applications |", "| --- | --- | --- |"]
     for row in included:
-        labels = "; ".join(names[key] for key in row["competencies"])
-        lines.append(f"| {row['task_id']} | {row['question_summary']} | {labels} |")
-    lines.extend(
-        [
+        skills = "; ".join(names[key] for key in row["skills"])
+        applications = "; ".join(names[key] for key in row["applications"])
+        lines.append(f"| {row['task_id']} | {skills} | {applications} |")
+    lines += ["", "## Original questions and proposed checks", ""]
+    for row in review["tasks"]:
+        lines += [f"### {row['task_id']}", "", row["source_question"], ""]
+        if row["disposition"] != "reframe":
+            lines += [row["reason"], ""]
+            continue
+        lines += ["**Proposed framing:** " + row["reframed_question"], "", "**Check:** " + row["verification"], ""]
+        lines += ["- " + item for item in row["decisions"] + row["scope_changes"]]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def benchmark_statistics(benchmarks: list[dict]) -> dict:
+    """Count category requirements across eligible ID records and source releases."""
+    id_benchmarks = [benchmark for benchmark in benchmarks if benchmark["distribution"] == "ID"]
+    reviewed = [benchmark for benchmark in id_benchmarks if benchmark["review"]]
+    eligible = {
+        benchmark["id"]: [q["annotation"] for q in benchmark["questions"] if q["annotation"]["disposition"] == "reframe"]
+        for benchmark in reviewed
+    }
+    taxonomy = load("benchmark_competencies/taxonomy.json")
+    facets = {}
+    for facet in ("skills", "applications"):
+        counts = []
+        for category in taxonomy[facet]:
+            sources = []
+            for name, questions in eligible.items():
+                count = sum(category["id"] in question[facet] for question in questions)
+                if count:
+                    sources.append({"benchmark": name, "count": count, "eligible": len(questions)})
+            counts.append(
+                {
+                    "id": category["id"],
+                    "name": category["name"],
+                    "count": sum(source["count"] for source in sources),
+                    "benchmarks": len(sources),
+                    "sources": sorted(sources, key=lambda row: (-row["count"], row["benchmark"])),
+                }
+            )
+        facets[facet] = sorted(counts, key=lambda row: (-row["count"], row["name"]))
+    return {
+        "inventoried_releases": len(reviewed),
+        "source_records": sum(len(benchmark["questions"]) for benchmark in reviewed),
+        "eligible_records": sum(len(questions) for questions in eligible.values()),
+        "missing_inventories": [benchmark["id"] for benchmark in id_benchmarks if not benchmark["review"]],
+        "facets": facets,
+    }
+
+
+def category_markdown(statistics: dict) -> str:
+    """Render the global rankings with explicit denominators and access gaps."""
+    total = statistics["eligible_records"]
+    lines = [
+        "# Categories across ID benchmarks",
+        "",
+        f"{total:,} candidate verifiable source records across {statistics['inventoried_releases']} "
+        f"inventoried ID releases, out of {statistics['source_records']:,} inventoried records. "
+        "Excluded questions and unavailable instructions contribute no category counts.",
+        "",
+        "Assignments are provisional requirements, not validated task coverage. Each question counts "
+        "once per assigned category. Categories overlap; percentages need not sum to 100%. Releases "
+        "are not deduplicated: overlapping benchmarks and shared protocols can inflate raw frequency. "
+        "Release counts show breadth of representation, not the number of independent studies.",
+        "",
+        "Use these counts to find candidate workflows for review, alongside scientific decisions, "
+        "available observed inputs and an executable reward. They are not generation quotas.",
+    ]
+    for facet, title in (("skills", "Analytical skills"), ("applications", "Biological applications")):
+        lines += [
             "",
-            "## Set aside for now",
+            f"## {title}",
             "",
-            "These questions have no competency assignment or count while their complete endpoint lacks "
-            "an executable contract.",
-            "",
-            "| Question | Short description | Reason |",
-            "| --- | --- | --- |",
+            "| Category | Question records | % of eligible records | ID releases |",
+            "| --- | ---: | ---: | ---: |",
         ]
-    )
-    for row in excluded:
-        lines.append(f"| {row['task_id']} | {row['question_summary']} | {row['decisions']} |")
-    lines.extend(
-        [
-            "",
-            "## Boundaries to review",
-            "",
-            "- Differential expression analysis is one competency here; shrinkage, design formula and "
-            "filtering specify the task instance.",
-            "- Phylogenetic tree metrics currently share one competency; we could split it if the metrics "
-            "require distinct assessment contracts.",
-            "- Spearman correlation and Mann-Whitney tests are counted as competencies. They might instead "
-            "be cross-cutting statistical tags.",
-            "- Eligibility and denominator choices are required verifier checks, not separate competencies "
-            "in this draft.",
-            "- A question requiring both differential expression and pathway enrichment counts toward "
-            "both competencies. A generated task must validate the connected workflow.",
-            "",
-            "Rebuild this Markdown and the HTML with "
-            "`uv run python -m experiments.post_training.bio_tasks.coverage_site`.",
-        ]
-    )
-    return "\n".join(lines) + "\n"
+        for row in statistics["facets"][facet]:
+            percentage = 100 * row["count"] / total if total else 0
+            lines.append(f"| {row['name']} | {row['count']} | {percentage:.1f}% | {row['benchmarks']} |")
+    lines += [
+        "",
+        "## Inventory gaps",
+        "",
+        "These ID sources have benchmark pages but no task manifest in this review. "
+        "Their unknown task counts are not treated as zero skill demand.",
+        "",
+    ]
+    lines += ["- " + name for name in statistics["missing_inventories"]]
+    lines += ["", "Rebuild with `uv run python -m experiments.post_training.bio_tasks.coverage_site`.", ""]
+    return "\n".join(lines)
 
 
 def site_data() -> dict:
@@ -342,6 +412,7 @@ def site_data() -> dict:
         "vendor/d3-hierarchy-3.1.2.min.js",
         "vendor/d3-hierarchy-LICENSE",
         "benchmark_pages.js",
+        "benchmark_competencies/taxonomy.json",
         *benchmark_inputs,
     ]
     return {
@@ -353,6 +424,8 @@ def site_data() -> dict:
         "repositories": repositories,
         "sources": sources,
         "benchmarks": benchmarks,
+        "review_taxonomy": load("benchmark_competencies/taxonomy.json"),
+        "category_statistics": benchmark_statistics(benchmarks),
         "policy": taxonomy["policy"],
         "references": taxonomy["references"],
         "facets": taxonomy["facets"],
@@ -366,7 +439,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Fail if the committed HTML needs regeneration.")
     args = parser.parse_args()
-    payload = json.dumps(site_data(), separators=(",", ":"), ensure_ascii=True).replace("<", "\\u003c")
+    data = site_data()
+    payload = json.dumps(data, separators=(",", ":"), ensure_ascii=True).replace("<", "\\u003c")
     template = (SOURCE / "coverage_site.html").read_text()
     assert template.count("__BIO_DATA__") == 1
     rendered = (
@@ -375,8 +449,11 @@ def main() -> None:
         .replace("__D3_LICENSE__", (SOURCE / "vendor/d3-hierarchy-LICENSE").read_text())
         .replace("__BENCHMARK_PAGES__", (SOURCE / "benchmark_pages.js").read_text())
     )
-    markdown = benchmark_markdown(load("benchmark_competencies/bixbench-verified-50.json"))
+    markdown = benchmark_markdown(load_benchmark_review("benchmark_competencies/bixbench-verified-50.json"))
+    categories = category_markdown(data["category_statistics"])
     if args.check:
+        if CATEGORY_REVIEW.read_text() != categories:
+            raise ValueError("Global category Markdown is stale; rerun this module without --check")
         if SITE.read_text() != rendered:
             raise ValueError("Coverage HTML is stale; rerun this module without --check")
         if BENCHMARK_REVIEW.read_text() != markdown:
@@ -384,6 +461,7 @@ def main() -> None:
     else:
         SITE.write_text(rendered)
         BENCHMARK_REVIEW.write_text(markdown)
+        CATEGORY_REVIEW.write_text(categories)
     print(f"{'Checked' if args.check else 'Wrote'} {SITE.relative_to(REPO)} ({len(rendered):,} bytes)")
 
 

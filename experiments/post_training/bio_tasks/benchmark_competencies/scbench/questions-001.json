@@ -1,0 +1,290 @@
+{
+  "tasks": [
+    {
+      "task_id": "T04a_endothelin_niche_sources",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the provided first-pass filtered Illumina/PIP-seq mouse DRG snRNA-seq h5ad, run an exploratory clustering workflow (normalize to 10,000, log1p, 3,000 HVGs, PCA, neighbors, Leiden at resolution 0.8). Annotate each cluster by computing the mean log-normalized expression for each lineage marker panel:\n- Neuron: Prph, Isl1, Snap25, Rbfox3, Tubb3\n- SGC: Fabp7, Kcnj10, Apoe, Glul\n- Myelinating Schwann: Mpz, Mag, Mbp, Ncmap\n- Non-myelinating Schwann: L1cam, Scn7a, Ngfr, Sox10\n- Fibroblast: Col1a1, Col1a2, Pdgfra, Dcn\n- Endothelial: Pecam1, Flt1, Kdr, Cldn5\n- Mural/pericyte: Rgs5, Notch3, Pdgfrb, Acta2\n- Macrophage: C1qa, Aif1, Lyz2, Csf1r\n\nAssign each cluster to the lineage with the highest mean panel score. Report the total number of nuclei across all clusters assigned to the mural/pericyte lineage. Then assess why this result occurs.\n\n1. The result is biologically expected — pericytes are rare in peripheral ganglia and fall below the detection limit for clustering-based analysis at this sample size\n2. Nuclear isolation selectively depletes pericytes — their perivascular embedding and thin cytoplasmic processes make them vulnerable to mechanical loss during tissue homogenization, so mural cells are genuinely underrepresented in this snRNA preparation\n3. The panel-averaging method fails when nuclear RNA detection varies across marker genes — if some mural panel genes are preferentially cytoplasmic, their nuclear expression approaches zero, deflating the panel average below competing lineages even when one mural marker remains highly expressed in a specific cluster\n4. Mural cells share mesenchymal transcriptional programs with fibroblasts and are absorbed into fibroblast-assigned clusters — the current four-gene mural panel lacks discriminating power against fibroblast overlap\n5. At Leiden resolution 0.8, clusters below approximately 100 nuclei cannot be reliably annotated — increasing resolution to 2.0 would reveal a small but distinct mural population\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"mural_nuclei\": <int>, \"interpretation\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4fde63ab05e48bd4b6a862a8b8739aa5dc154b6d534c294631e4d3373aafa9e1",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/cell_typing/T04a_endothelin_niche_sources.json",
+      "source_group": "",
+      "workflow": "single nucleus cluster annotation",
+      "skills": [
+        "normalization",
+        "transformation",
+        "feature-selection",
+        "dimension-reduction",
+        "clustering",
+        "cell-annotation"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Execute the specified normalization, HVG, PCA and Leiden workflow; assign clusters using the stated marker-panel means. Return mural-nucleus counts and per-marker detection/score evidence. Compare the assignment under a prespecified marker-detection sensitivity check.",
+      "outputs": [
+        "cluster_labels.tsv: cluster, cell count, panel scores and assigned lineage",
+        "marker_detection.tsv: cluster, marker, detection fraction and mean expression",
+        "summary.json: mural_nuclei and declared sensitivity comparison"
+      ],
+      "verification": "Recompute every panel score, label and count; check the sensitivity result against its frozen comparison. Do not score a mechanistic explanation of nuclear isolation or the cause of under-detection from an answer label alone.",
+      "decisions": [
+        "Require measured marker-detection evidence; a numerical cluster assignment alone cannot establish a causal explanation for missed cells."
+      ],
+      "scope_changes": [
+        "Replaces the unrestricted causal explanation with measurable marker-detection and annotation-sensitivity evidence. It does not establish why nuclear RNA is absent."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-single-nucleus-cluster-annotation"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "tapestri_ccus_clustering_12_largest_mutant_clone",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In the attached Mission Bio Tapestri scDNA+protein dataset containing multiple CCUS patient samples, identify the sample with co-occurring somatic DNMT3A and TP53 mutations where the DNMT3A somatic clone exceeds 10% mutant fraction. Scan the full 181-variant panel for ALL somatic driver variants in this sample — do not limit your analysis to DNMT3A and TP53 alone. Using all identified somatic driver variants, classify cells genotyped at all driver loci into genotype-defined clonal populations. What percentage of genotyped cells belong to the single largest MUTANT clone (any clone carrying at least one somatic mutation)? Then explain why genotype-based clonal clustering requires DNA data rather than protein data.\n\n1. Clonal populations are defined by shared somatic genotype patterns, which are inherited through cell division and independent of cell type. Protein markers define differentiation state (cell type), not clonal identity, so the same clone appears across multiple cell types\n2. Protein-based clustering is equivalent to genotype-based clustering because cells with the same mutations always express the same surface proteins\n3. DNA-based clustering is unreliable because allelic dropout introduces random genotype errors that fragment true clones into artifactual subclusters\n4. Protein markers are better for clone identification because mutant cells upregulate specific surface markers that distinguish them from wild-type cells in the same lineage\n5. DNA and protein clustering always produce identical results in Tapestri data because the platform measures both modalities from the same cell, ensuring perfect correlation\n6. Genotype-based clustering should use germline variants rather than somatic mutations because germline variants have higher genotyping rates and provide more stable clustering features\n7. Protein-based clustering is preferred because it captures functional cellular state, while DNA mutations may be passenger events with no phenotypic consequence\n8. The number of clones from DNA clustering equals the number of cell types from protein clustering because each clone differentiates into a single cell type\n9. DNA-based clone identification requires whole-genome sequencing and cannot be performed from targeted amplicon panels because the limited variant panel misses the majority of somatic mutations\n10. Protein and DNA clustering should be concatenated into a single feature matrix for joint clustering, as this maximizes information content and produces the most biologically meaningful cell groupings\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"largest_clone_pct\": <number>, \"interpretation\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5fc2a8c46c2b9f181e8df328a63e1af4bd3d9e36874ae758efdb284d3a2feeba",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/clustering/tapestri_ccus_clustering_12_largest_mutant_clone.json",
+      "source_group": "",
+      "workflow": "single cell clonal genotypes",
+      "skills": [
+        "variant-analysis",
+        "composition"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Use a declared somatic-driver and genotype-quality policy to identify the eligible sample, scan the full variant panel, form genotype-defined clones, and report the largest mutant clone fraction among cells genotyped at all selected driver loci.",
+      "outputs": [
+        "driver_variants.tsv: eligibility and supporting annotations for all panel variants",
+        "cell_genotypes_clones.tsv: sample, cell, complete driver genotype and clone",
+        "summary.json: largest_clone_pct and denominator"
+      ],
+      "verification": "Recompute somatic eligibility, complete-case mask, genotype partitions and clone fractions. Check every driver locus and reject protein-based partitions that disagree with the specified genotype definition.",
+      "decisions": [
+        "Use genotype-defined clones, all retained driver loci and an explicit missing-call denominator."
+      ],
+      "scope_changes": [
+        "The conceptual explanation is replaced by an executable check that partitions are genotype-defined. Protein measurements alone cannot substantiate missing genotypes."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-single-cell-clonal-genotypes"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "DE01_pseudobulk_de",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset is a 100,000-cell subsample from a human cytokine perturbation atlas. PBMCs from 12 healthy donors were stimulated in vitro with 90 individual cytokines or a PBS vehicle control for 24 hours, then profiled by scRNA-seq. \n\nIFN-beta is a type I interferon known to induce a strong antiviral transcriptional program in monocytes. Identify genes that are differentially expressed in CD14 monocytes in response to IFN-beta stimulation compared to the PBS control. Exclude donors with fewer than 5 cells in either condition, and filter to genes with at least 10 total counts across all samples.\n\nReport the number of differentially expressed genes (DEGs) at adjusted p-value < 0.05 and |log2 fold change| > 1.0.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_degs\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d69acf9b20fe91ddcf5a4960d0ed052fba887695a6f49b31c1e914adc8a62404",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/differential_expression/DE01_pseudobulk_de.json",
+      "source_group": "",
+      "workflow": "paired donor pseudobulk",
+      "skills": [
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Aggregate observed CD14 counts by donor and condition, apply the source cell/gene eligibility thresholds, fit a paired donor-adjusted IFN-beta versus PBS contrast and report the number of DEGs under the requested cutoffs.",
+      "outputs": [
+        "pseudobulk_counts.tsv and sample_design.tsv",
+        "differential_expression.tsv: gene, log2FC, p-value and adjusted p-value",
+        "summary.json: n_degs"
+      ],
+      "verification": "Check aggregation and donor eligibility against cell metadata, run the frozen count-model contrast, and recompute the DEG count. Reject pseudoreplication, changed contrast orientation and incorrect fold-change or adjusted-p thresholds.",
+      "decisions": [
+        "Cells are observations nested in donors; preserve donor pairing and per-condition eligibility."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-paired-donor-pseudobulk"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "dr_05_pca_preprocessing_sentinels",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This 10x Genomics Chromium scRNA-seq mouse 4T1 mammary-tumor whole-tumor single-cell RNA-seq data. Quality control and log-normalization have already been applied: `.X` holds log1p(CP10k);\n\nProduce a principal-component embedding of these cells suitable for downstream clustering and cell-type annotation, then characterise the embedding you would hand to the neighbour graph along two diagnostic axes:\n\n  - `pc1_top_abs_load`: the maximum |gene loading| on PC1 (over `adata.varm['PCs'][:, 0]` on the gene universe you passed to PCA) -- i.e., how strongly the principal axis of variation in your embedding is driven by a single gene versus distributed across many. Report to 3 decimals.\n  - `max_top5_depth_corr`: the strongest absolute Pearson correlation between any of your top 5 PCs and `log1p(adata.obs['total_counts'])` across all cells -- i.e., how much of the variance on the axes that will define your neighbour graph reflects per-cell capture efficiency / library size rather than transcriptional state. Report to 3 decimals.\n\nBoth fields are measured on the SAME PCA embedding you would hand to downstream clustering.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"pc1_top_abs_load\": <float>, \"max_top5_depth_corr\": <float>}\n</EVAL_ANSWER>\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "cd32f00cdb1bdd2c3afc78311d66bcae97b6a1cf1f1247097e42b496270aee2d",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/dimensionality_reduction/dr_05_pca_preprocessing_sentinels.json",
+      "source_group": "",
+      "workflow": "single cell pca diagnostics",
+      "skills": [
+        "dimension-reduction",
+        "association"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Starting from the supplied log-normalized matrix, freeze the feature-selection and scaling policy, fit PCA, and report the maximum absolute PC1 loading and strongest absolute depth correlation among the top five PCs.",
+      "outputs": [
+        "pca_scores.tsv and pca_loadings.tsv with cell/gene identities",
+        "summary.json: pc1_top_abs_load, max_top5_depth_corr"
+      ],
+      "verification": "Recompute loadings, sample-aligned Pearson correlations and the two requested summaries under the frozen preprocessing policy; allow equivalent component signs and check that both summaries use the same embedding.",
+      "decisions": [
+        "Compute both diagnostics from the same embedding; do not double-log already transformed counts."
+      ],
+      "scope_changes": [
+        "Normalization and QC are already supplied in the source input; they receive no required-skill credit. The authoring contract must resolve what makes an embedding suitable."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-single-cell-pca-diagnostics"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "NRM01_sparse_normalization",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset contains approximately 11,700 PBMCs from 4 donors profiled using the CS Genetics combinatorial indexing platform.\n\nTo characterize the major sources of biological variation in these cells, identify the top 2,000 highly variable genes. Filter genes detected in fewer than 10 cells before selecting HVGs.\n\nReport the median total UMI counts per cell across the dataset, the percentage of non-zero entries in the count matrix that equal exactly 1, and the median number of cells in which the 2,000 selected HVGs are detected.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"median_umis_per_cell\": <int>, \"pct_counts_one\": <float>, \"median_hvg_prevalence\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0a02ae74a02230cbff08a022cfb6fe9bf25b903c217e571c3dc6276c5946d819",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/normalization/NRM01_sparse_normalization.json",
+      "source_group": "",
+      "workflow": "depth aware variable genes",
+      "skills": [
+        "feature-selection",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Filter genes detected in fewer than 10 cells, select 2,000 HVGs under a declared count-aware method, and return the three requested count and prevalence statistics. Preserve sparse zeros in every denominator.",
+      "outputs": [
+        "selected_hvgs.tsv: gene identifiers and selection statistics",
+        "summary.json: median_umis_per_cell, pct_counts_one, median_hvg_prevalence"
+      ],
+      "verification": "Recompute count totals and the nonzero-entry denominator from the raw sparse matrix. Re-run the frozen HVG procedure and check all three summaries and the full selected gene set.",
+      "decisions": [
+        "Keep sparse observations and distinguish technical depth from biological variability."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-depth-aware-variable-genes"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "bd_rhapsody_tnbc_panel_aware_qc",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This BD Rhapsody scRNA-seq dataset profiles immune cells from a triple-negative breast cancer cohort. After deciding which cells you want to keep for downstream analysis, characterise the major immune lineages of the peripheral-blood compartment.\n\nReport (a) the number of peripheral-blood cells you retain after QC, (b) the median number of detected genes per retained peripheral-blood cell, and (c) the number of retained peripheral-blood cells you assign to the classical-monocyte lineage.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_pbmcs_retained\": <int>, \"median_genes_per_pbmc\": <float>, \"n_monocytes_pbmc\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2cd209cf19d2a9a7e136d41a8bf24cb17dca831c8d7b47c7216a357fc5f83748",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/qc/bd_rhapsody_tnbc_panel_aware_qc.json",
+      "source_group": "",
+      "workflow": "panel aware single cell qc",
+      "skills": [
+        "cell-qc",
+        "cell-annotation",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Apply declared panel-aware QC and a frozen marker/reference assignment policy, then return retained peripheral-blood cell counts, median detected genes and classical-monocyte counts.",
+      "outputs": [
+        "cell_qc_labels.tsv: cell ID, keep decision, compartment and label",
+        "summary.json: n_pbmcs_retained, median_genes_per_pbmc, n_monocytes_pbmc"
+      ],
+      "verification": "Independently recompute the retention mask and panel-aware metrics, check reference-supported labels, and verify all three summaries with their exact cell denominators.",
+      "decisions": [
+        "Whole-transcriptome gene-count or mitochondrial cutoffs may be inappropriate for targeted panels."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-panel-aware-single-cell-qc"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

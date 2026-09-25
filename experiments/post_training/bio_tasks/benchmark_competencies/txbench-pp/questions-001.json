@@ -1,0 +1,586 @@
+{
+  "tasks": [
+    {
+      "task_id": "HAI2027_MECH01_supported_mechanism_chain",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given a bundle of preclinical assay files from a study of AZD2014 (an mTOR kinase inhibitor) plus AZD1775 (a WEE1 inhibitor) in NSCLC models. Inspect the files to discover the assays, treatments, and readouts.\n\nUsing only these data, infer the most supported mechanism chain explaining why AZD2014 plus AZD1775 reduces tumor-cell viability. \n\nConstruct exactly 6 ordered mechanism links, from immediate drug action to loss of tumor-cell viability, and assign 1 to 3 labels from the allowed set to each link. Then give the labels for the alternative mechanisms that are NOT supported by these data.\n\nAllowed labels:\nMTOR_PATHWAY_INHIBITION, WEE1_CHECKPOINT_INHIBITION, CHECKPOINT_ABROGATION, PREMATURE_MITOTIC_ENTRY, REPLICATION_STRESS, DNA_DAMAGE_ACCUMULATION, COMPENSATORY_HR_RESPONSE, HR_REPAIR_SUPPRESSION, CYCLIN_D1_DOWNREGULATION, CYCLIN_D1_DEPENDENT_RAD51_RESCUE, MITOTIC_CATASTROPHE, APOPTOSIS_EXECUTION, CLONOGENIC_VIABILITY_LOSS, KRAS_STATUS_SUFFICIENT, P53_DEPENDENT_APOPTOSIS, GENERAL_PROLIFERATION_SLOWING, ROS_MEDIATED_KILLING, AUTOPHAGY_MEDIATED_KILLING, ERK_FEEDBACK_ESCAPE, MTOR_TARGET_ENGAGEMENT_ONLY, WEE1_TARGET_ENGAGEMENT_ONLY, NONSPECIFIC_CYTOTOXICITY, UNSUPPORTED_CAUSAL_LINK.\n\nReturn EXACTLY (a single flat JSON object):\n\n<EVAL_ANSWER>\n{\n  \"step_1_labels\": [\"<LABEL>\", \"...\"],\n  \"step_2_labels\": [\"<LABEL>\", \"...\"],\n  \"step_3_labels\": [\"<LABEL>\", \"...\"],\n  \"step_4_labels\": [\"<LABEL>\", \"...\"],\n  \"step_5_labels\": [\"<LABEL>\", \"...\"],\n  \"step_6_labels\": [\"<LABEL>\", \"...\"],\n  \"rejected_alternative_labels\": [\"<LABEL>\", \"...\"]\n}\n</EVAL_ANSWER>\n\nThe step_N_labels fields carry the ordered labels for links 1 through 6, and rejected_alternative_labels carries the labels for the unsupported alternatives.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c5d748a87840b2cc6c25cea41a198dbe3743c622c8f8555850c9c4dadcc4b1b5",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/HAI2027_MECH01_supported_mechanism_chain/eval.json",
+      "source_group": "",
+      "workflow": "Reconcile intervention assays into an evidence-supported mechanism ordering",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "A deterministic label grader does not establish causality. An independent task needs explicit evidence-to-claim rules and checks on the quantitative assay artifacts."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-multi-assay-mechanism"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "PRISM_S4_10_mechanism_family_mining",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The HTS secondary screen tested approximately 1,500 compounds across hundreds of cancer cell lines in dose-response. The provided data includes secondary-screen response measurements, compound annotations, cell-line annotations, and baseline molecular features.\n\nAmong compounds whose annotations do not identify them as oncology or hematologic malignancy drugs, focus on metal-containing small molecules or closely related inorganic/coordination-chemistry annotations. Identify a representative compound or chemically related compound class whose selective activity is best explained by a molecular feature of the cell lines. Your analysis should distinguish a mechanistic biomarker from lineage confounding and broad cytotoxicity.\n\nReport the compound or compound class, the nominated biomarker, the biomarker-response association you used for discovery, the corresponding association after accounting for the main cell-line confounder, and an association statistic from a negative-control analysis for broad activity. For the two response association fields, keep the dose-response variable in its AUC-space orientation, where lower values indicate greater sensitivity; report correlations with that variable directly rather than with an inverted sensitivity or activity transform.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"compound_family\": [\"<compound or class>\"], \"biomarker\": [\"<gene symbol or molecular feature>\"], \"response_association_r\": <float, 4 decimal places>, \"confounder_adjusted_association_r\": <float, 4 decimal places>, \"negative_control_association_r\": <float, 4 decimal places>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5fe9a57c00cf05e9ed956d36078916b10778e5f6776e28e8485033406d6393b6",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_S4_10_mechanism_family_mining/eval.json",
+      "source_group": "",
+      "workflow": "Test a compound-response biomarker while controlling lineage and broad activity",
+      "skills": [
+        "association",
+        "model-evaluation",
+        "cell-annotation",
+        "trajectory",
+        "dose-response",
+        "database-query",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve the direction of response AUC; predefine the association statistic, covariates, missingness and multiple-testing policy. An adjusted association alone is not causal evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-pharmacogenomic-confounding"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "PRISM_V10_C_primary_hit_triage",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A primary pooled cancer-cell-line viability HTS screen tested many compounds across hundreds of cell lines.\n\nChoose exactly 10 compounds to advance to dose-response confirmation. The slate should prioritize compounds with strong activity in a subset of cell lines, limited broad pan-toxicity across the panel, and broad usable cell-line coverage at the shared primary-screen triage dose.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"advancing_broad_ids\": [\"<BRD-ID>\"], \"n_candidates\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "01c39e7fe4b3a8ba72414e6631322651fbb0c268c24b1d28f861bc0c7f2fcfe3",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_V10_C_primary_hit_triage/eval.json",
+      "source_group": "",
+      "workflow": "Select selective screening hits with usable coverage and limited broad toxicity",
+      "skills": [
+        "dose-response",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The public question leaves parts of the ranking rule implicit. A judge-free adaptation needs an explicit rule, tie policy and compound-level evidence table."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-screen-hit-selection"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "de_10_cross_modality_herg_convergence",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A small-molecule cardiotoxicity label dataset is paired with two independent feature representations: predicted protein-target activity scores at multiple concentrations, and a set of substructure rules derived from related cardiotoxicity classification work. Determine which biological mechanism is most strongly supported by the convergent signal across these two representations.\n\nFor the predicted-target representation, aggregate the per-concentration activity scores by taking the maximum across concentrations per protein per compound, then rank proteins by an effect-size measure of association with the three-level cardiotoxicity concern annotation. Take the top five proteins as the candidate target set, identifying each protein by its human-readable name from the target-mapping table.\n\nFor the substructure-rule representation, score each rule by its enrichment for the highest-concern category among compounds it matches, restricting to rules with at least ten matching compounds, and take the top seven rules as the candidate rule set. Identify each rule by its discriminating SMARTS pattern; do not use the uniform class-label column in the rule file as a rule identifier.\n\nA Python cheminformatics toolkit (`rdkit`) is available in this environment for SMARTS substructure matching.\n\nReport:\n- convergent_features: the subset of the candidate target set and the candidate rule set that jointly point at the same biological mechanism. Use the protein-name string for each protein entry and the literal SMARTS string for each rule entry.\n- mechanism_attribution_statements: select all supported statements:\n  A. The convergent signal across the two representations primarily implicates hERG / Kv11.1 potassium channel blockade as the most strongly supported cardiotoxicity mechanism in this dataset.\n  B. The convergent signal primarily implicates sodium-channel blockade as the most strongly supported cardiotoxicity mechanism in this dataset.\n  C. The convergent signal primarily implicates cyclooxygenase inhibition as the most strongly supported cardiotoxicity mechanism in this dataset.\n  D. Convergence of two independent feature representations on the same mechanism is consistent with that mechanism contributing to cardiotoxicity risk in this dataset.\n  E. Convergence of two independent feature representations on the same mechanism is sufficient causal proof of that mechanism in humans.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"convergent_features\": [\"<feature>\", ...], \"mechanism_attribution_statements\": [\"<letter>\", ...]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "56ff726135c79f653c6b3a2ab3e5f8aa7957aabb483c75b512d6732992b9db5d",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/de_10_cross_modality_herg_convergence/eval.json",
+      "source_group": "",
+      "workflow": "Compare target-activity associations with chemical-substructure safety signals",
+      "skills": [
+        "enrichment",
+        "prediction",
+        "molecular-descriptors",
+        "database-query",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-sequence",
+        "chemical-biology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Predicted target activity is model-derived evidence, not an observed binding assay. Define the effect-size statistic and chemical exclusions; convergent association does not establish human causation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-cross-modality-safety"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lee2024_RNA1_raw_scrna_target_specificity",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A glioblastoma single-cell RNA-seq dataset contains raw counts, cell metadata with broad compartment labels (tumor/brain-lineage versus immune), and primary-target annotations from a neuroactive-drug study.\n\nFor neuroactive-drug repurposing, a target is only viable if it is actually expressed across a large fraction of the tumor/brain-compartment cells, not merely enriched there relative to a small number of immune cells. Among the annotated primary targets, identify the one whose expression is most consistently concentrated in the brain compartment relative to immune cells across patients, and report a score capturing that compartment specificity. Then choose the interpretation best supported by the result.\n\nWhich interpretation is best supported?\n  A. The selected target is best explained by absolute expression rather than compartment specificity.\n  B. The selected target shows weak or patient-variable compartment specificity.\n  C. The selected target is brain-compartment specific relative to immune cells.\n  D. The metadata are insufficient for compartment-specific target analysis.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"top_compartment_specific_target\": [\"<gene>\"], \"compartment_specificity_score\": <float>, \"answer\": \"<letter>\"}\n</EVAL_ANSWER>\n\nReport the score rounded to two decimals, where <letter> is A, B, C, or D. Provide a one-line rationale outside the answer tags.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0fc69fea8416d3b002101946240668686c54697c79d1abf793038bc895e28aae",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_RNA1_raw_scrna_target_specificity/eval.json",
+      "source_group": "",
+      "workflow": "Evaluate target expression prevalence and compartment specificity across patients",
+      "skills": [
+        "enrichment",
+        "trajectory",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Cells are nested within patients. Enrichment and absolute prevalence answer different questions; an adaptation needs a defined specificity score and zero-count behavior."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-patient-aware-target-expression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lee2024_SRC2_calcium_response_mode",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A set of source tables summarizes calcium-imaging assays in glioblastoma models before and after drug treatment.\n\nUsing these tables, characterize the dominant mode of the treatment-evoked calcium response, and determine how treatment changes the cells' oscillatory behavior.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"calcium_response_mode\": [\"<label>\"], \"oscillation_effect_direction\": [\"<label>\"]}\n</EVAL_ANSWER>\n\nFor calcium_response_mode, use exactly one of: amplitude_change, baseline_oscillation, er_store_release, extracellular_influx, mitochondrial_release, no_significant_response, ryanodine_receptor_release, store_refilling.\nFor oscillation_effect_direction, use exactly one of: amplitude_mixed, baseline_only, decreased_fraction_oscillating, frequency_increase_only, increased_amplitude_only, increased_fraction_oscillating, no_change_in_fraction, not_assessed.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d001c626e81ab6f62e5c7cfa22c8bfd7f474af93b9abf03c4c7e3aed45834090",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_SRC2_calcium_response_mode/eval.json",
+      "source_group": "",
+      "workflow": "Reconcile calcium-response perturbations and oscillation changes",
+      "skills": [
+        "image-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology",
+        "bioimaging",
+        "physiology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Mean amplitude and fraction of oscillating cells are distinct endpoints. State mechanistic decision rules and preserve replicate units; do not infer an unmeasured pathway from a category name."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-calcium-response-interpretation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "DMA_02_mechanism_sign",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Bulk CRISPR knockout dependency screen (HTS pooled-library) across a panel of cancer cell lines. You are given a curated table of lineage-replicated dependency-marker associations -- each row pairs a dep-gene with a driver-marker whose association reproduces in tissue-specific cohorts -- together with the per-gene dependency log fold-change matrix, the per-cell driver-mutation and copy-number marker indicator matrices, a cell-line annotation, and a curated driver-role lookup.\n\nFor each association, decide whether it represents an ADDICTION dependency (cells positive for the marker are MORE dependent on the dep-gene, driven by a gain-of-function driver alteration in an oncogene) or a SYNTHETIC-LETHAL dependency (cells positive for the marker are MORE dependent on the dep-gene, driven by a loss-of-function alteration in a tumour suppressor).\n\nReturn EXACTLY two disjoint dep-gene sets -- if a dep-gene has supporting associations on both sides, decide its dominant mechanism class and submit it in that single bucket. Submitting the same dep-gene in both lists is a grading error.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"addiction_dep_genes\": [<list of HGNC gene symbol strings>], \"synthetic_lethal_dep_genes\": [<list of HGNC gene symbol strings>]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "826dd505381649956a03718f8c98d599c71542ea8f732adf58a3c7a2081dbd29",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/DMA_02_mechanism_sign/eval.json",
+      "source_group": "",
+      "workflow": "Classify replicated dependency associations using effect direction and driver role",
+      "skills": [
+        "trajectory",
+        "database-query",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Define how mixed evidence selects one gene-level class. Dependency sign and oncogene/tumor-suppressor annotation do not by themselves prove a mechanistic interaction."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-dependency-mechanism-sign"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "sp_01_plate_well_position_confounder",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given a set of image-based morphological profiles from a small-molecule screen run in 384-well plates, where many distinct compounds were assayed and each plate layout places a different compound in any given well. Many compounds were screened in more than one well position and across more than one plate layout.\n\nQuantify how strongly a well's physical position on the plate biases a profile independently of which compound was added to that well. Report this as a position-effect magnitude: the excess mean pairwise profile similarity (Pearson correlation) attributable to shared well position, after subtracting a matched null in which the association between profiles and well positions is broken by permutation. Restrict the analysis to treatment profiles, use the full feature set, and measure similarity as Pearson correlation between profiles.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\nposition_effect_magnitude: <float, rounded to 3 decimals>\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7c72dabc23533104cb64906c03798bc18b03612af4f6fd5c603f95e67ded99fd",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/sp_01_plate_well_position_confounder/eval.json",
+      "source_group": "",
+      "workflow": "Estimate a plate-position effect against a matched permutation null",
+      "skills": [
+        "association",
+        "image-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Compound and plate identities affect exchangeability; do not treat all well pairs as independent. Fix permutation count/seed or use exact expectations and grade complete summaries."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-screen-position-artifact"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "CTRL01_no_cc1_gate_for_crizotinib_hits",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "HTS live-cell NanoBRET kinase target-engagement control-compound outcomes are provided for an anonymized kinase panel. A medicinal chemistry team wants to summarize which targets are responsive to the crizotinib control compound in this screen and determine whether the separate broad-control compound outcome changes that crizotinib follow-up set.\n\nFor this screen-level follow-up summary, treat a target as crizotinib-responsive when its expected crizotinib occupancy at 1 uM is at least 50%. Inspect the provided data and return the number of crizotinib-responsive targets. Also determine whether the separate broad-control compound outcome provides a basis to remove any targets from that crizotinib-responsive set; if so, return how many are removed, and if not, return 0.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"crizotinib_responsive_count\": <integer>, \"cc1_gated_crizotinib_removed_count\": <integer>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5d241e3c42f4b9efc64ea6bdf7adbbf70802995914d7604a5a22b7cfb5647ac1",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/CTRL01_no_cc1_gate_for_crizotinib_hits/eval.json",
+      "source_group": "",
+      "workflow": "Compute target engagement while distinguishing separate control purposes",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The response model, assay validity rules and role of each control must be explicit. A general control outcome is not automatically an exclusion criterion for another treatment."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-target-engagement-controls"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "H2_toxfree_advance_image",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The dataset is a blinded multiplex IF package from an HTS intestinal culture assay. Commit which candidate, if any, should move forward from the image evidence.\n\nprogram_call_class codebook: 1 Agent A moves forward with paired activity and healthy-context sparing evidence; 2 Agent B moves forward with paired activity and healthy-context sparing evidence; 3 Agent C moves forward with paired activity and healthy-context sparing evidence; 4 no candidate moves forward because paired activity-safety evidence fails together; 5 Agent A moves forward from activity despite healthy-context injury; 6 Agent B moves forward from healthy-context sparing despite weak activity; 7 Agent C moves forward from activity despite healthy-context injury; 8 all candidates move forward because each shows one favorable panel; 9 no candidate can be evaluated because the image is unreadable; 10 the safest-appearing candidate moves forward regardless of tumour activity.\n\npackage_balance_class codebook: 1 active but unsafe; 2 safety-sparing but weak activity; 3 no candidate shows both activity and safety; 4 image evidence is insufficient to read; 5 activity and safety are matched in one candidate.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"program_call_class\": <int>, \"package_balance_class\": <int>}\n</EVAL_ANSWER>\n\nWhere both fields are integer options from the codebooks above.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b3be3bffc25fc205cf6af8c3c885492e79e498a7522fa38f032c3a1ea480cd2e",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/H2_toxfree_advance_image/eval.json",
+      "source_group": "",
+      "workflow": "Combine tumor activity and healthy-context safety in a matched imaging assay",
+      "skills": [
+        "image-analysis"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Image-level choice labels need independently checkable segmentation and quantitative phenotype references. One favorable panel does not establish both activity and safety."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-paired-activity-safety-imaging"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "txbx_org_organoid_doseresponse_resistant_fraction",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A 3x3 image montage is provided: three vehicle replicates (Vehicle 1-3) and an ascending six-point dose series of one compound (Dose 1 lowest .. Dose 6 highest), each a brightfield organoid field imaged after 7-day treatment. Vehicle wells establish the untreated reference for this assay. Relative to the vehicle reference, report ic50_dose_level (lowest dose 1-6 at which the viable response falls to <=50% of vehicle, 0 if never reached) and resistant_population_present (1 if a viable organoid population persists at Dose 6, else 0).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"ic50_dose_level\": <int 0-6>, \"resistant_population_present\": <0 or 1>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e6b92d5ce9a72b8d3a3c945cab551cdc90116d0404fde98bf6581aee3a72e306",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_organoid_doseresponse_resistant_fraction/eval.json",
+      "source_group": "",
+      "workflow": "Measure organoid response relative to vehicle and residual viable population",
+      "skills": [
+        "image-analysis",
+        "dose-response"
+      ],
+      "applications": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A discrete dose index is not a fitted concentration IC50. Specify viability measurement, normalization and uncertainty; a visually persistent object alone is not proven viable resistance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-organoid-response-imaging"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "txbx_org_program_ti_exposure_gonogo",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Eight blinded compounds (CMP-01..08) are under evaluation in a colorectal-cancer-organoid program seeking a cytostatic agent. Attached: primary_screen_plate.csv, mechanism_validation_montage.png, toxicity_counterscreen.csv, dmpk_exposure.csv. Decide which single compound to advance (or 0 if none is advanceable) and identify the basis for that decision.\n\nOptions for decision_basis (return the integer):\n1) Advance the most potent compound in the screen.\n2) Advance the compound with the widest hepatocyte safety margin.\n3) Advance the compound with the highest total plasma exposure.\n4) Advance the compound showing the desired mechanism in the validation image.\n5) Advance the compound jointly supported by screen efficacy, the validation image, the safety counter-screen, and adequate free-drug exposure; advance none if no compound meets all.\n6) Advance any compound that lowers viability below half.\n7) Advance the compound with the lowest in-vitro potency value.\n8) Advance on free-drug exposure alone.\n9) Advance on efficacy and safety, setting exposure aside.\n10) Advance on the validation image alone.\n11) Reject the entire series.\n12) No decision is possible without in-vivo data.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"nominated_compound\": <int 0-8>, \"decision_basis\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1dc9a1c11e059dfee93ab56929e5b816c9133087511d32b97de71e746b46d581",
+      "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_program_ti_exposure_gonogo/eval.json",
+      "source_group": "",
+      "workflow": "Integrate efficacy, mechanism images, safety and free exposure into a program decision",
+      "skills": [
+        "image-analysis",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The source marks this package synthetic_biology_calibrated. Do not copy its observations into the real-data release; use independent observed assays and make exposure/mechanism rules executable."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-pp-multi-assay-advancement"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

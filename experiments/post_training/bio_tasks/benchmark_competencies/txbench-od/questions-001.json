@@ -1,0 +1,194 @@
+{
+  "tasks": [
+    {
+      "task_id": "meta_ev0570_depletion_depth_sets_the_loss",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Two silencing programmes, one attachment each. The question for both is how much of the target transcript each programme's sequencing shows is gone.\n\nWork the two packages separately, then report the loss each establishes against that programme's control level, and how many of the delivered libraries go into each figure. Programme A's target is the Atxn2 row. Programme B's is STMN2.\n\nGive a loss as a fraction between 0 and 1 to two decimal places. Keep a programme's two lists in the same order, so every loss lines up with the count of libraries behind it.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"program_A_losses\": [<number>, ...], \"program_A_libraries\": [<integer>, ...], \"program_B_losses\": [<number>, ...], \"program_B_libraries\": [<integer>, ...]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "660ae30aedbba8766961b38d80163684e2696500a45823bd283f8ac5932fd355",
+      "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/meta_ev0570_depletion_depth_sets_the_loss/eval.json",
+      "source_group": "",
+      "workflow": "Estimate transcript reduction with program-specific controls and library accounting",
+      "skills": [
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Do not pool independent programs or assume libraries are independent biological replicates. Grade cohort membership, denominators, normalization and loss estimates together."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-od-transcript-reduction-cohort"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A repeated-dose mouse screen scored chemically modified antisense oligonucleotides for liver injury. The delivered table and study narrative are the record of that screen.\n\nSome candidates lack a serum ALT value. Decide how those rows should be treated before summarizing ALT among animals with liver lesions, and report that summary as the panel's headline lesion-associated ALT.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"special_handling_sequences\": [\"<core sequence>\", \"...\"], \"lesions_group_mean_alt\": <number>}\n</EVAL_ANSWER>\n\n`special_handling_sequences` lists, by core nucleotide sequence, every missing-ALT row that requires handling other than plain exclusion. `lesions_group_mean_alt` is the Lesions-group mean serum ALT (U/L) under that handling.\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "9a1c2a83ca53b5249331a937e7cba574f0c6d89ce62b06b672435048af54afa6",
+      "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007/eval.json",
+      "source_group": "",
+      "workflow": "Audit missing chemistry values before summarizing lesion-associated measurements",
+      "skills": [
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Missingness may depend on biological outcome. Do not invent measured values; specify how documented censoring, death or assay failure changes eligibility and summaries."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-od-informative-missingness-toxicity"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "eval_0012_s8_hepatic_biomarker_panel",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This table holds in vivo liver-safety readouts for antisense oligonucleotides, taken from patent filings. Each row is one dose group and carries the species and, where recorded, the strain; the route of administration; the dose level in mg/kg and the dosing regimen the group received; the sample matrix; an identifier for the source filing and for the table within it; the compound's Compound ID and, where recorded, its HELM annotation and target RNA; and a clinical-chemistry panel (ALB, ALT, AST, BUN, CREA, TBIL and the protein/creatinine ratio) in which each analyte is a list of the individual values reported for the animals in that group, empty where the analyte was not reported. Plasma alanine aminotransferase (ALT) is reported in IU/L.\n\nWork within the mouse dose groups given subcutaneously at the 50 mg/kg dose level and read out as plasma ALT.\n\nReport:\n\n1. the 15 compounds, by Compound ID, that you would nominate as the best tolerated hepatically in that setting;\n2. in one or two sentences, what you treated as a like-for-like comparison when you built that ranking, and why;\n3. in one sentence, how far the resulting ranking can be carried beyond the compounds in this collection.\n\nReturn EXACTLY:\n<EVAL_ANSWER>{\"best_tolerated_compound_ids\": [\"<id>\", ...], \"comparison_basis\": \"<one or two sentences>\", \"generalisation\": \"<one sentence>\"}</EVAL_ANSWER>\n\n`best_tolerated_compound_ids` must hold exactly 15 distinct Compound IDs, each written as a JSON string (for example \"123456\"), in any order. Only that field is scored.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f90b561a1853d4de7ddecbd3c08550de12c33463166d8b96fdb7ef882a4cab9e",
+      "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0012_s8_hepatic_biomarker_panel/eval.json",
+      "source_group": "",
+      "workflow": "Rank liver-safety observations within comparable study and dosing contexts",
+      "skills": [
+        "database-query",
+        "evidence-extraction",
+        "statistics"
+      ],
+      "applications": [
+        "genome-sequence",
+        "chemical-biology",
+        "clinical",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The source states that only the selected IDs are scored; explanatory comparison and generalization claims are unchecked. Define pooling, repeated groups, missingness and tie rules and grade the underlying evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-od-cross-study-safety-comparability"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "eval_0056_prion_s8_pk",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "An IND filing for a divalent siRNA conjugate delivered by a single lumbar intrathecal injection needs a toxicokinetic exposure package before a first-in-human starting dose can be set. That starting dose stands only if the pivotal dog study's systemic exposure record supports the projected clinical exposure margin; if the exposure duration is not honestly characterizable, the toxicokinetic arm has to be re-run or the projected dose lowered before the filing can rely on it. The attached GLP bioanalytical table holds per-animal plasma concentrations from a vehicle group and three intrathecally dosed groups at 20 mg, 60 mg, and 200 mg, sampled at nominal times from 0 to 72 hours after the single dose.\n\nCharacterize the systemic exposure for each of the three dosed groups, using all animals dosed at that level.\n\nDeliverables:\n1. The peak plasma concentration for each dosed group.\n2. The exposure over the sampled window for each dosed group.\n3. The terminal elimination half-life for each dosed group.\n4. The latest sampling time you treat as a measurement for each dosed group.\n5. The count of concentrations in the table as a whole, across all rows, that you did not treat as measurements.\n6. A summary stating, for each dosed group, which sampling points you treated as measured and which you excluded.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\n  \"cmax_ng_ml_200mg\": <float>,\n  \"t_half_h_20mg\": <float>,\n  \"last_quantifiable_timepoint_h\": {\"20mg\": <number>, \"60mg\": <number>, \"200mg\": <number>},\n  \"n_excluded_values\": <integer>\n}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6eacf422f2c26e354772cd3b9bdd6d09a981b4537fbdd43b8b14a1bc5adb2328",
+      "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0056_prion_s8_pk/eval.json",
+      "source_group": "",
+      "workflow": "Estimate exposure from a concentration-time series with quantifiability limits",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology",
+        "clinical",
+        "systems-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The narrative requests all groups, windowed exposure and exclusions, but the answer schema covers only a subset. A fresh contract must check all required artifacts and define censoring, integration and terminal-fit rules."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-od-censored-pharmacokinetics"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

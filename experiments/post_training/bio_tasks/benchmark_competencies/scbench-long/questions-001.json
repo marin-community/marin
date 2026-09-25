@@ -1,0 +1,204 @@
+{
+  "tasks": [
+    {
+      "task_id": "green_2_tme_context_dependence",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Experimental context. Paired scRNA-seq + scATAC-seq (10x Multiome) of P14 CD8 T cells (GP33-41-specific TCR-transgenic) spanning LCMV infection (Arm spleen/IEL, CL13 spleen, naive) and four GP33-41-expressing syngeneic tumour models. RNA is one .h5ad. ATAC is per-sample atac_fragments.tsv.gz. Condition, model, and sort-gate labels are in the cell metadata.\n\nTask. For tumour-infiltrating CD8 T cells, dissect the regulatory basis of the CD103+ Trm-like program across the four GP33-matched models, using the infection arms as references. The four models share one TCR and one epitope, so they form a controlled panel: differences between them are not antigen or affinity. Quantify the program per model, determine where and how it is controlled, and decide what does and does not separate the models.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"core_residency_signature\": [\"<gene>\"], \"excluded_confounders\": [\"<gene>\"], \"generic_signature_relations\": [{\"pair\": \"<MODEL>_vs_<MODEL>\", \"relation\": \"<relation>\"}], \"cd103_program_relations\": [{\"pair\": \"<MODEL>_vs_<MODEL>\", \"relation\": \"<relation>\"}], \"program_map\": [{\"model\": \"<model>\", \"call\": \"<program_call>\"}], \"per_model_regulatory_state\": [{\"model\": \"<model>\", \"program\": \"<program_call>\", \"brake_state\": \"<brake_state>\", \"activator_state\": \"<activator_state>\", \"locus_state\": \"<locus_state>\", \"blocking_step\": \"<blocking_step>\"}], \"regulator_tuples\": [{\"regulator\": \"<gene>\", \"role\": \"<regulator_role>\", \"gating_step\": \"<gating_step>\", \"evidence_basis\": \"<evidence_basis>\", \"expr_vs_activity\": \"<expr_vs_activity>\"}], \"locus_differential\": \"<locus_differential>\", \"formation_limited_by\": \"<formation_limited_by>\", \"locus_competent_in_naive\": \"<yes_no>\", \"ready_silent_fraction_relations\": [{\"pair\": \"<MODEL>_vs_<MODEL>\", \"relation\": \"<relation>\"}], \"activator_chromatin_footprint\": \"<activator_chromatin_footprint>\", \"exhaustion_comparable_across_split\": \"<yes_no>\", \"exhaustion_separable_program\": \"<yes_no>\", \"exhaustion_explains_split\": \"<yes_no>\", \"exhaustion_counterexample_model\": \"<model>\", \"exhaustion_relations\": [{\"pair\": \"<MODEL>_vs_<MODEL>\", \"relation\": \"<relation>\"}]}\n</EVAL_ANSWER>\nAll labels come from vocabulary.json (a data node). Give a relation list its full set of model pairs; gene lists hold gene symbols only.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e6c25a8eb14358b438a6401775d4c7230c5f36dc370a407203e82d97db8259ba",
+      "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/green_2_tme_context_dependence/eval.json",
+      "source_group": "",
+      "workflow": "paired rna accessibility regulatory comparison",
+      "skills": [
+        "differential-expression",
+        "chromatin",
+        "motifs",
+        "integration"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Compare the specified residency program across the four models using donor/sample-aware RNA contrasts and reference-linked ATAC evidence. Return model-pair program differences and expression/accessibility support for a prespecified regulator panel under explicit thresholds.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Shared receptor and antigen context does not remove all model confounders; chromatin accessibility and regulator expression are not direct causal activity measurements."
+      ],
+      "scope_changes": [
+        "Regulatory-state labels are defined by measured expression, accessibility and motif evidence. Those measurements do not establish a causal blocking step; causal mechanism claims are outside the adapted reward."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-long-paired-rna-accessibility-regulatory-comparison"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Experimental context. 5' single-cell RNA-sequencing with paired single-cell TCR-sequencing of dissociated human melanoma metastases (n=5 patients). Cells were flow-sorted and the sort gate of each cell is recorded in the cell metadata. Two of the gates are 'singlets' and 'tumor_cluster': the 'tumor_cluster' gate captures CD8+ T cells that were physically clustered/conjugated with tumour cells at the time of sorting, whereas the 'singlets' gate captures unconjugated single CD8+ T cells.\n\nTask. Deliverable on the CD8+ T cells captured by the 'singlets' gate vs the 'tumor_cluster' gate (use only these two gates). Interpret your findings in the context of what each gate physically captures and established CD8+ tumour-infiltrating-lymphocyte biology. (1) Return, for each gate, the 3 CD8 states that best characterize its dominant CD8+ biology, with the functional_category of each; for the gate enriched in the antigen-experienced/exhausted compartment, the three states must span the exhaustion differentiation lineage and include its self-renewing stem-like precursor (resolved from TCF7+ naive cells), not only terminal-exhausted and cycling states. (2) Return the direction of TCR clonal expansion between the two gates. (3) Return the single joint inference of which in-vivo CD8+ TIL subset each gate predominantly captures. (4) In `biological_relations`, report exactly one relation token (from relation_token_vocabulary) for each key listed in biological_relation_vocabulary; each key is named `<quantity>_in_<groupA>_vs_<groupB>` and its token states the relation of <groupA> to <groupB> among CD8+ T cells. Derive every quantity from the data, controlling for per-patient composition and (for clonotype metrics) cell number / sequencing depth; use approximately_equal when there is no robust difference and not_assessable only when a quantity genuinely cannot be derived.\n\nUse cd8_state names, functional_category values, the clonotype_expansion_finding label, the biological_inference label, and the relation tokens from vocabulary.json (provided as a data node).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\n  \"cd8_states_enriched_in_singlet_fraction\": [\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"},\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"},\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"}\n  ],\n  \"cd8_states_enriched_in_tumor_cluster_fraction\": [\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"},\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"},\n    {\"state_label\": \"<cd8_state_vocabulary>\", \"functional_category\": \"<functional_category_vocabulary>\"}\n  ],\n  \"clonotype_expansion_finding\": \"<clonotype_expansion_finding_vocabulary>\",\n  \"biological_inference\": \"<biological_inference_vocabulary>\",\n  \"biological_relations\": {\n    \"exhaustion_program_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"naive_memory_program_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"proliferation_program_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"clonal_expansion_richness_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"multichain_tcr_rate_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"intermediate_exhausted_gzmk_frequency_in_singlets_vs_tumor_cluster\": \"<relation_token>\",\n    \"melanocytic_transcript_content_in_tumor_cluster_vs_singlets\": \"<relation_token>\"\n  }\n}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "8ed9be1047e3368569bf3fd7bad1ff3f88155a114b7f399823252329747e0ccf",
+      "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1/eval.json",
+      "source_group": "",
+      "workflow": "paired transcriptome repertoire comparison",
+      "skills": [
+        "cell-annotation",
+        "composition",
+        "repertoire",
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Using a pinned CD8 state-reference policy, compare state composition and TCR clonal expansion between the two source gates while controlling patient composition and cell-depth sampling. Derive each requested relation token from declared statistics and uncertainty thresholds.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Verify sort-gate claims against the observations; distinguish naive and precursor exhausted states, doublets, and depth-sensitive clonal metrics."
+      ],
+      "scope_changes": [
+        "The biological interpretation is limited to relations supported by measured state, clonotype and transcript evidence; the gate labels do not alone prove in-vivo physical interactions."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-long-paired-transcriptome-repertoire-comparison"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gse155381_q7_xspecies_epi_communication",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Smart-seq2 scRNA-seq of primate embryos at multiple developmental stages. Three cohorts are encoded in `obs.embryo_kind`: `chimera_human` (human cells, hEPSC-derived, recovered from chimeric monkey embryos), `chimera_monkey` (monkey HOST cells from the same chimeric embryos; NOT hEPSC-derived), `control_monkey` (monkey cells from non-injected control embryos).\n\nDo `chimera_human` EPI cells engage in cross-species cell-cell signaling with `chimera_monkey` EPI cells? If so, characterise the dominant signaling axes you observe AND the directionality of the signal (which cells are the predominant senders / receivers).\n\nUse vocabulary.json (provided as a data node) for all controlled labels and per-field answer semantics.\n\nFor `dominant_axis_support`, list the HGNC gene symbols (ligands and receptors) of the specific significant pairs in your own ranking that drive your `dominant_signaling_axis` choice.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"xspecies_signaling_richness\": \"<richness_label>\", \"dominant_signaling_axis\": \"<axis_label>\", \"dominant_axis_support\": [\"<HGNC_symbol>\", \"...\"], \"signaling_directionality\": \"<directionality_label>\", \"top_signal_interaction_class\": \"<interaction_class_label>\"}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a1aec480bc050e572d2b066192501e62d5bdadc54a80efa2329d127a0a8e5c15",
+      "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse155381_q7_xspecies_epi_communication/eval.json",
+      "source_group": "",
+      "workflow": "cross species expression supported communication",
+      "skills": [
+        "communication",
+        "orthology"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Resolve the human and monkey ligand/receptor identifiers, compute cross-species expression-supported interaction scores under a frozen reference and null model, and return ranked axes, supporting gene pairs and direction under defined tie rules.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Human-derived and host cells have distinct origins; orthology, developmental stage and sampling imbalance affect inferred directionality. Expression-supported interactions do not demonstrate signaling."
+      ],
+      "scope_changes": [
+        "The adapted endpoint measures expression-supported communication potential, not demonstrated signaling between cells."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-long-cross-species-expression-supported-communication"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gse297023_q2_senescence_not_mechanism",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Single-cell RNA-seq (Parse Biosciences) of tumor-bearing lungs from a mouse model of oncogenic KRAS-driven lung cancer.\n\nDetermine how the host's age bears on the cancer cells in this model. Establish what age comparison the profiled cancer-cell cohort actually supports, name the program you would most strongly hypothesize to account for an age effect on these cells, state what your evidence implies for the hypothesized program's role.\n\nUse vocabulary.json (provided as a data node).\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"cohort_host_age_design\": \"<token>\", \"candidate_mechanism\": \"<token>\", \"arrest_core_engaged\": \"<token>\", \"secretory_arm_identity\": \"<token>\", \"secretory_arm_direction\": \"<token>\", \"age_associated_program_identity\": \"<token>\", \"nominated_mechanism_role\": \"<token>\"}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "de6ac1b2e98846592fc303db6912b9058f77e9c0298c055372932924e10ff304",
+      "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse297023_q2_senescence_not_mechanism/eval.json",
+      "source_group": "",
+      "workflow": "cohort design and expression program audit",
+      "skills": [
+        "data-management",
+        "differential-expression",
+        "enrichment"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Audit which age contrasts the cohort supports; calculate prespecified arrest, secretory and age-associated gene-program evidence under an eligible sample design. Report supported, unsupported or unassessable program calls using declared numerical rules.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not manufacture a young-versus-old contrast if the profiled cohort lacks it; overlapping gene signatures do not prove senescence or causation."
+      ],
+      "scope_changes": [
+        "Program support is assessed from measured expression and cohort design; it is not evidence that a hypothesized mechanism causes the age effect."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scbench-long-cohort-design-and-expression-program-audit"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

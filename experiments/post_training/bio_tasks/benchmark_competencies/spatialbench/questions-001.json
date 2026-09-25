@@ -1,0 +1,816 @@
+{
+  "tasks": [
+    {
+      "task_id": "curio_ovary_cumulus_gc_count_immature",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are analyzing a Curio Seeker spatial transcriptomics dataset of mouse ovary tissue collected across 8 developmental time points during superovulation (Immature, 0hr, 1hr, 4hr, 6hr, 8hr, 11hr, 12hr post-hCG).\n\nIn the Immature (Untreated) sample, identify cumulus granulosa cells — the granulosa cells that physically surround oocytes within follicles. Report the number of cumulus GC beads in the Immature sample.\n\nBased on your analysis, how should cumulus granulosa cells be distinguished from mural granulosa cells?\n\n1. By unique marker gene expression — cumulus cells express a distinct set of genes (e.g., specific keratins, Areg) that are detectable by standard scRNA-seq clustering regardless of spatial information\n2. By spatial proximity to oocytes — cumulus cells physically surround oocytes and are only reliably identified by their spatial location relative to oocytes, as their transcriptome is near-identical to mural granulosa\n3. By cell size — cumulus cells are significantly larger than mural cells and can be identified by bead capture efficiency differences in spatial data\n4. By mitochondrial content — cumulus cells have elevated pct_counts_mt that clearly distinguishes them from mural granulosa\n5. By proliferation state — cumulus cells are all actively dividing (high Mki67) while mural cells are uniformly quiescent\n6. By hormone receptor expression alone — cumulus cells uniquely express Fshr while mural cells express Lhcgr, providing clean separation\n7. By total UMI counts — cumulus cells consistently capture more transcripts per bead due to their higher transcriptional activity\n8. By connexin expression alone — Gja1 (connexin-43) expression is sufficient to cleanly distinguish cumulus from mural granulosa\n9. By Wnt pathway activation — cumulus cells are identifiable through canonical Wnt signaling markers (Wnt4, Ctnnb1) that are absent in mural cells\n10. No reliable distinction exists — cumulus and mural granulosa are fundamentally the same cell type and cannot be separated by any method\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"cumulus_count\": <int>, \"distinction_answer\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0596c7f8c477c9ac6216c2ceb2b36ce71f044e9fc20bc17cdbbb6c81e8719762",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_cumulus_gc_count_immature.json",
+      "source_group": "",
+      "workflow": "spatially resolved cell subtypes",
+      "skills": [
+        "clustering",
+        "cell-annotation",
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "context_tags": [
+        "single-cell",
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Marker similarity alone cannot establish a spatially defined subtype."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatially-resolved-cell-subtypes"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "curio_ovary_follicle_count_immature",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are analyzing a Curio Seeker spatial transcriptomics dataset of mouse ovary tissue collected across 8 developmental time points during superovulation (Immature, 0hr, 1hr, 4hr, 6hr, 8hr, 11hr, 12hr post-hCG).\n\nIn the Immature sample, identify individual follicle structures. A follicle is a spatially coherent group of granulosa cells surrounding an oocyte. Using spatial coordinates (x, y) and cell type annotations, count how many distinct follicle structures you can identify. Each follicle should contain at least one oocyte bead surrounded by granulosa beads forming a spatially contiguous cluster.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"follicle_count\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f7b48cb0965e03237ce4e52bc9e45ee0da0f37c2767ff217d0fb10f875ef5e67",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_follicle_count_immature.json",
+      "source_group": "",
+      "workflow": "spatial anatomical structures",
+      "skills": [
+        "clustering",
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Define physical adjacency and object separation; nearby beads are not independent structures."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-anatomical-structures"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "curio_ovary_oocyte_count_per_timepoint",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are analyzing a Curio Seeker spatial transcriptomics dataset of mouse ovary tissue collected across 8 developmental time points during superovulation (Immature, 0hr, 1hr, 4hr, 6hr, 8hr, 11hr, 12hr post-hCG).\n\nIdentify oocyte beads at each timepoint and report the count.\n\nBased on your oocyte counts, which of the following best describes the trend across the superovulation time course?\n\n1. Oocyte counts increase steadily across the time course as follicles mature and expand\n2. Oocyte counts remain roughly constant across all timepoints with no clear temporal pattern\n3. Oocyte counts are highest at the Immature timepoint and decline overall toward 12hr, consistent with oocyte release/loss following ovulation\n4. Oocyte counts are low at Immature, peak around 6-8hr post-hCG as follicles expand, then decline at 12hr\n5. Oocyte counts drop abruptly between 0hr and 1hr post-hCG and remain near zero for all subsequent timepoints\n6. Oocyte counts oscillate  -- high at Immature, low at 4hr, high again at 11hr  -- suggesting cyclical waves of oocyte maturation\n7. Oocyte counts decrease from Immature to 4hr, then rebound to near-Immature levels by 12hr as new oocytes are recruited\n8. All timepoints have fewer than 50 oocyte beads; oocytes are too rare to detect reliably in spatial transcriptomics\n9. Oocyte counts are highest at 12hr post-hCG, reflecting hCG-induced oocyte maturation and expansion of the cumulus-oocyte complex\n10. Oocyte counts decline monotonically at each successive timepoint with no exceptions\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"immature_oocyte_count\": <int>, \"0hr_oocyte_count\": <int>, \"1hr_oocyte_count\": <int>, \"4hr_oocyte_count\": <int>, \"6hr_oocyte_count\": <int>, \"8hr_oocyte_count\": <int>, \"11hr_oocyte_count\": <int>, \"12hr_oocyte_count\": <int>, \"trend_answer\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0243aeb2cf75e205ca633daa90dad6b32f7446255103803fefb205fbad04d1a2",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_oocyte_count_per_timepoint.json",
+      "source_group": "",
+      "workflow": "spatial cell timecourse",
+      "skills": [
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish capture counts from absolute cell abundance and specify normalization when comparing tissues."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-cell-timecourse"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "visium_bone_celltype_lineage_resolution_limit",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This Visium dataset profiles human femoral head bone and bone marrow tissue from an osteoarthritis patient. Characterize the full cellular landscape of this tissue.\n\nReport the detection rate of CD3D (percentage of spots with raw count > 0), the detection rate of ELANE, and the number of biologically distinct cell lineages you can confidently resolve from this data.\n\nWhich interpretation best describes the cellular resolution of this spatial dataset?\n\n1 = The major bone marrow cell lineages — osteoblastic, immune/plasma, adipocyte, T lymphocyte, granulocyte, endothelial, erythroid, and dendritic — are all resolvable because each has at least one canonical marker detected above the noise floor, and marker detection rates of one to five percent are sufficient for reliable population identification at Visium resolution when combined with spatial co-localization analysis\n2 = Only three major tissue programs can be reliably resolved — bone formation, immune/hematopoietic, and adipocyte — because these are the only lineages whose markers achieve sufficient detection rates and spatial coherence for independent identification; rare populations including T cells, granulocytes, endothelial cells, erythroid progenitors, and dendritic cells have lineage-restricted markers at or below one percent detection, which is indistinguishable from stochastic noise at the sparsity level of this dataset\n3 = Two tissue compartments are resolvable — bone formation and immune/hematopoietic — because the extreme sparsity of this bone Visium dataset limits resolution to the dominant transcriptional programs; adipocyte markers like FABP4 are present but at insufficient detection to form a statistically distinct third cluster, and all minor populations fall below the detection threshold for reliable identification\n4 = Computational deconvolution can recover all nine major bone marrow cell types by decomposing the mixed spot expression profiles into constituent cell-type proportions; the low individual marker detection rates are irrelevant because deconvolution algorithms leverage the entire transcriptome rather than single genes, and spot-level mixture modeling can estimate cell-type fractions even when individual markers are sparse, making the apparent resolution limit an artifact of naive marker-based approaches\n5 = The resolution limit is determined entirely by the Leiden clustering granularity — at resolution 0.2 two clusters are recovered, at resolution 0.5 approximately five, and at resolution 1.0 approximately ten; the appropriate number of lineages is whichever resolution produces the highest average silhouette score, and any population that appears as a distinct cluster at the optimal resolution can be considered reliably resolved\n6 = All populations with marker detection above five percent can be confidently identified, while those below five percent cannot; this five-percent threshold represents the minimum detection rate at which a population contributes meaningful signal above technical noise in Visium data, yielding approximately four to six resolvable lineages including bone formation, plasma cells, adipocytes, monocytes/macrophages, and possibly fibroblasts\n7 = The apparent low marker detection rates for rare populations are an artifact of naive thresholding on raw counts; applying expression imputation and denoising to the sparse matrix would recover T cell, granulocyte, and endothelial signatures by filling in dropouts, increasing the resolvable lineage count to seven or more without requiring additional sequencing depth\n8 = The detection rate of individual markers is irrelevant for determining resolvable lineages because module scoring with curated marker gene panels can identify any cell type present in the tissue regardless of whether individual genes cross the detection threshold; a five-gene module can achieve reliable detection even when each individual gene is at one percent because the combined signal accumulates linearly across the panel members\n9 = The cellular resolution is limited not by marker detection but by the multicellular nature of Visium spots; since each fifty-five micrometer spot contains five to twenty cells of potentially different types, no cell lineage can be resolved as a spatially discrete population; all Visium data inherently captures niche-level transcriptional programs rather than cell-type-level signals, and framing results in terms of individual lineages fundamentally misinterprets the spatial resolution of this assay\n10 = At least five lineages are resolvable because adaptive clustering with marker-guided resolution selection can identify bone formation, immune/plasma, adipocyte, stromal/fibroblast, and osteoclast populations as transcriptomically distinct groups; while rare populations like T cells and granulocytes are not independently clusterable, the five major lineages each contribute sufficient transcriptional signal for reliable separation at the optimal clustering resolution for this data\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"cd3d_detection_pct\": <float>, \"elane_detection_pct\": <float>, \"n_resolvable_lineages\": <int>, \"assessment\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "71cafda01b47e5d0d8fb406e714374a9061fdc9dd0999dcb919600c2f4fcf641",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/visium_bone_celltype_lineage_resolution_limit.json",
+      "source_group": "",
+      "workflow": "spatial detection resolution",
+      "skills": [
+        "clustering",
+        "prediction",
+        "cell-annotation",
+        "deconvolution",
+        "trajectory",
+        "spatial",
+        "network",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Cell-lineage certainty needs evidence and an explicit resolution criterion, not a single marker hit."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-detection-resolution"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "xenium_kidney_celltype_fib_immune_temporal",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This is Xenium mouse kidney ischemia-reperfusion injury dataset. Identify fibroblast-like and immune-like cell populations from expression and quantify how their abundance changes over time.\n\nReport the peak percentage of the inferred fibroblast-like population and the time point at which it occurs, as well as the peak percentage of the inferred immune-like population and its corresponding time point.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"fib_peak_pct\": <float>, \"fib_peak_time_index\": <int>, \"immune_peak_pct\": <float>, \"immune_peak_time_index\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "44ea53dcf9763f29d1276d54ffdaf498cddf37d318816ff29f8f7aeae6c72587",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/xenium_kidney_celltype_fib_immune_temporal.json",
+      "source_group": "",
+      "workflow": "spatial cell composition timecourse",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Denominators must use the same tissue compartment and sampling unit."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-cell-composition-timecourse"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "curio_ovary_batch_driven_clustering",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are analyzing a merged Curio Seeker spatial transcriptomics dataset of mouse ovary tissue with 8 developmental time points (Immature, 0hr, 1hr, 4hr, 6hr, 8hr, 11hr, 12hr post-hCG). The 8 samples were sequenced in separate runs and concatenated without integration.\n\nPerform clustering on the dataset. For each cluster, compute the fraction of beads that come from the single most-represented timepoint. Report the MAXIMUM of these fractions across all clusters.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"max_single_timepoint_fraction\": <float between 0-1>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f99cb4cfed25b3076b2b86fddd8f7177488ab84e927a8cfc7b0826ebba14dcf2",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/clustering/curio_ovary_batch_driven_clustering.json",
+      "source_group": "",
+      "workflow": "sample confounded clustering",
+      "skills": [
+        "clustering",
+        "integration",
+        "spatial",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Time and sequencing batch may be confounded; numerical integration cannot identify unmeasured biology.",
+        "Keep preprocessing and cluster evaluation tied to the same cell identities."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-sample-confounded-clustering"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "MOTIF04_neuronal_female_tf_family",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have a spatial ATAC-seq dataset from 8 human dorsal root ganglion donors (3 female, 5 male). The matrix contains 11,776 barcodes and 870 features. The data has pre-computed clusters (C1-C9).\n\nCluster C5 represents the neuronal population in this dorsal root ganglion tissue. Test all 870 features for sex differences within C5 and report how many show statistically significant (p < 0.05, two-sided) female-biased enrichment (higher in females than males).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_female_biased_significant\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "09a37e2c1ee9c78c703e8d6f4dd4489b0092d5e1f316bed95f2dbecd9431cb0b",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/MOTIF04_neuronal_female_tf_family.json",
+      "source_group": "",
+      "workflow": "donor aware feature comparison",
+      "skills": [
+        "enrichment",
+        "clustering",
+        "spatial",
+        "chromatin",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics",
+        "physiology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Inspect donor-level replication and distinguish raw from adjusted significance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-donor-aware-feature-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SPATIAL10_genome_wide_de_pct",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have a spatial ATAC-seq dataset (dBit-seq) from 8 human dorsal root ganglion donors (3 female, 5 male). The data contains 10,785 barcodes (4,271 female, 6,514 male) and 24,919 genes. \n\n\nTest all 24,919 genes for significant sex differences (p < 0.05, two-sided) between female and male. Report the percentage of genes that are significantly differentially expressed (0 to 100).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"pct_de\": <float>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "96ea2947f5b4d5db03d3352a817cf2e2086258209114b9ccb6a1188f13d911dc",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/SPATIAL10_genome_wide_de_pct.json",
+      "source_group": "",
+      "workflow": "donor aware genome wide comparison",
+      "skills": [
+        "differential-expression",
+        "spatial",
+        "chromatin",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not treat spatial barcodes as independent donors; distinguish gene activity from RNA expression."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-donor-aware-genome-wide-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "DR01_batch_confounded_clustering",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have a normalized AtlasXomics dBit-seq dataset (log-transformed gene activity scores) from 8 human dorsal root ganglion donors (3 female, 5 male). The data contains 10,785 barcodes and 24,919 genes.\n\nPerform dimensionality reduction (use 30 PCs) and clustering on this data. Then evaluate the clustering by counting how many clusters are dominated by a single donor sample -- specifically, count the number of clusters where the most-represented sample accounts for more than 50% of the barcodes in that cluster.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_hvgs\": <int>, \"n_dominated_clusters\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "20dbab41fdd469a708b0a57948e07857ba10efd6abc87f290f15d7a6627b0462",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/dimensionality_reduction/DR01_batch_confounded_clustering.json",
+      "source_group": "",
+      "workflow": "sample confounded clustering",
+      "skills": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "clustering",
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep preprocessing and cluster evaluation tied to the same cell identities.",
+        "Time and sequencing batch may be confounded; numerical integration cannot identify unmeasured biology."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-sample-confounded-clustering"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "NORM01_batch_correction",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have an AtlasXomics dBit-seq dataset from 8 human dorsal root ganglion donors (3 female, 5 male). The data contains 10,785 barcodes and 24,919 genes after quality control filtering.\n\nPrepare this data for clustering: normalize, select features, perform dimensionality reduction, and cluster the barcodes. Then evaluate the clustering by computing the following metric: for each cluster, calculate the fraction of barcodes belonging to the most-represented donor sample. Report the mean of this fraction across all clusters.\n\nThis metric measures whether clusters reflect biological cell types (low values, donors mixed within clusters) or technical batch effects (high values, clusters dominated by individual donors).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_hvgs\": <int>, \"mean_max_sample_fraction\": <float>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "31226e2959bac96e44bf72037b2948e63480972837d68f960004a8c1882ceb25",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/NORM01_batch_correction.json",
+      "source_group": "",
+      "workflow": "batch correction diagnostics",
+      "skills": [
+        "normalization",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "read-qc",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Assess whether batch and biology are identifiable; avoid erasing group effects to improve mixing."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-batch-correction-diagnostics"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "norm_01_opc_olig_maturation_foldchange",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset contains single-cell expression data for 374 genes across ~50,000 cells from the mouse frontal cortex and striatum.\n\nMbp (myelin basic protein) is a canonical marker of oligodendrocyte maturation. Compute the log2 fold change of Mbp expression between mature oligodendrocytes (cell_type_annot == 'Olig') and oligodendrocyte precursor cells (cell_type_annot == 'OPC') in aged (90wk) mice.\n\nNormalize the data appropriately before computing the fold change.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"log2fc_mbp_olig_vs_opc\": <float>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "96927dfcd7faca5f47bf4cbc7c60a60e0c1043287e1869d3d722ea366b7bc0f4",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_01_opc_olig_maturation_foldchange.json",
+      "source_group": "",
+      "workflow": "targeted panel cell contrast",
+      "skills": [
+        "normalization",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Targeted panels can violate whole-transcriptome normalization assumptions; declare effect units and pseudocounts."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-targeted-panel-cell-contrast"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "norm_02_myelin_gene_coexpression_normalization",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset contains single-cell expression data for 374 genes across ~50,000 cells from the mouse frontal cortex and striatum.\n\nMbp and Plp1 are both myelin structural genes co-expressed in mature oligodendrocytes. Compute the Spearman correlation between Mbp and Plp1 expression in corpus callosum oligodendrocytes (cell_type_annot == 'Olig', tissue == 'corpus callosum') in aged (90wk) mice.\n\nNormalize the data appropriately before computing the correlation.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"spearman_mbp_plp1\": <float>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f74615a976e84d0537af6d1c25e9175f7eac0cf7c01e9459af30f63ea78dc1b7",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_02_myelin_gene_coexpression_normalization.json",
+      "source_group": "",
+      "workflow": "targeted panel coexpression",
+      "skills": [
+        "normalization",
+        "association"
+      ],
+      "applications": [
+        "transcriptomics",
+        "molecular-structure"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Library-size normalization can induce associations; retain zero and tie conventions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-targeted-panel-coexpression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "qc_01_endothelial_doublet_assessment",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset contains single-cell spatial transcriptomics (MERFISH) data for 374 genes across ~50,000 cells from the mouse frontal cortex and striatum. \n\nA large fraction of endothelial cells co-express the pericyte marker Vtn. Estimate the percentage of endothelial cells that are genuine segmentation doublets with pericytes.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"pct_doublets\": <float (percentage, 0-100)>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "09eee27f28e4e713954e18d703c5a9360fe7d8cf6fac7d545b7687b847f90b82",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/qc/qc_01_endothelial_doublet_assessment.json",
+      "source_group": "",
+      "workflow": "spatial segmentation qc",
+      "skills": [
+        "spatial",
+        "image-analysis",
+        "statistics",
+        "cell-qc"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell",
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Marker coexpression alone does not identify true doublets; independent spatial/segmentation evidence is needed."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-segmentation-qc"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SPATIAL07_sex_housekeeping_de",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have a spatial ATAC-seq dataset (dBit-seq) from 8 human dorsal root ganglion donors (3 female, 5 male). The data contains 10,785 barcodes and 24,919 genes (gene activity scores). Sample identity is in obs['sample'].\n\nThe 3 female donors are the samples with the highest mean XIST gene activity (XIST is X-linked). The remaining 5 are male.\n\nTest whether the following 10 housekeeping genes show statistically significant differential expression (p < 0.05, two-sided) between female and male barcodes: ACTB, GAPDH, B2M, MALAT1, UBC, HPRT1, PPIA, RPL13A, TUBA1A, RPLP0.\n\nThese are housekeeping genes expected to be broadly and stably expressed regardless of sex. Report how many of the 10 show statistically significant differential expression between female and male barcodes.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_significant\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "737aea57dc4ee6f460f0d0df5bb3568cb1dc14158acea0c354c21e4523441883",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/SPATIAL07_sex_housekeeping_de.json",
+      "source_group": "",
+      "workflow": "donor aware control gene test",
+      "skills": [
+        "differential-expression",
+        "spatial",
+        "chromatin",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Avoid circular grouping and barcode pseudoreplication; control genes are not guaranteed invariant."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-donor-aware-control-gene-test"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "xenium_kidney_spatial_cn7_composition_day14",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In this Xenium mouse kidney dataset, spatial niches exhibit dynamic changes across time points.\n\nDetermine at which time point CN7 is most expanded. At that time point, characterize the cellular composition of CN7 and compare it to the overall tissue composition from the same condition. Use this comparison to quantify both the percentage of the most abundant cell type within CN7 and the relative enrichment of key injury-associated populations compared to their background frequencies.\n\nBased on these observations, which interpretation best explains the relationship between cell-type abundance and niche identity?\n\n1 = The most abundant cell type alone defines the niche identity, so relative enrichment is not informative\n2 = A cell type can define the niche through strong enrichment relative to background even if it is not the most abundant population\n3 = The most abundant cell type is also the most enriched, fully explaining the niche identity\n4 = All major cell types show similar enrichment, indicating no specific niche structure\n5 = Differences are driven by sampling variation rather than biological organization\n6 = Immune cells are the primary enriched population and define the niche identity\n7 = Enrichment comparisons are not meaningful in spatial transcriptomics datasets\n8 = Niche identity cannot be inferred without additional gene expression analysis\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\n  \"pct_top1_celltype\": <float>,\n  \"fr_pt_enrichment\": <float>,\n  \"fib_enrichment\": <float>,\n  \"assessment\": <int>\n}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "872013517ab75f40a434697b983578bc7b73717aa1f8559c8438a5dd719b1896",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_cn7_composition_day14.json",
+      "source_group": "",
+      "workflow": "niche versus tissue enrichment",
+      "skills": [
+        "enrichment",
+        "composition",
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The most abundant population and the most enriched population are different quantities."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-niche-versus-tissue-enrichment"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This Xenium mouse kidney ischemia-reperfusion injury dataset captures spatial organization across a time course of injury and repair. Identify fibroblast-like and immune-like cell populations from expression using panel-aware specific markers, then quantify how their spatial co-localization changes between the control condition and the repair phase.\n\nFor each cell at each time point, compute the fraction of its spatial neighbors (using kNN on spatial coordinates within each tissue section) that are fibroblast-like or immune-like. Report the mean of this co-localization score across all cells at Sham (baseline), the mean at Day14 (repair phase), the fold increase from Sham to Day14, and the time index at which the mean co-localization score is highest.\n\nUse the ordered time indices [Sham=0, Hour4=1, Hour12=2, Day2=3, Day14=4, Week6=5].\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"mean_coloc_sham\": <float>, \"mean_coloc_day14\": <float>, \"fold_increase\": <float>, \"peak_time_index\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5cfb299f22fe313e82182825b8f733bc7cc565c2d5a1ed4de2f4cac97ed70058",
+      "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2.json",
+      "source_group": "",
+      "workflow": "spatial cell colocalization",
+      "skills": [
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not connect different tissue sections; specify neighbor size, self-neighbor and tissue-edge policies."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-spatial-cell-colocalization"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

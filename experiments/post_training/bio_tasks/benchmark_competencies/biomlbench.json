@@ -1,14 +1,22 @@
 {
   "schema_version": 2,
-  "benchmark": "BixBench-Verified-50",
+  "benchmark": "BioML-bench",
   "status": "draft-for-review",
-  "source_revision": "c77fc8ea4611b546947b8a4710ed36ab72ee233c",
-  "inventory_sha256": "9f6775021bd66278e40c5c5f389dcaa6ac77cd4fc4137de1843c47b4ea04a866",
+  "source_revision": "673f3d8d3462fc6cdcbbd9695fba612b9332ca65",
+  "inventory_sha256": "186ef625bb8d6cce60260e01aff8b42f4da899b1d22a43193ff035d3e499a4a2",
   "method": "Rule-assisted draft from source question text and existing endpoint reviews, with explicit question-level overrides. Skill labels are provisional; source instructions and reframing contracts are exposed for review. No source answers or fixtures are published.",
   "eligibility_policy": "Include source tasks whose scientific purpose admits a clear executable framing, even when the original scorer is an LLM. Freeze missing conventions or scope narrative interpretation to computed evidence. Exclude a replacement objective, unavailable source instruction or unbounded subjective synthesis.",
   "counting": "Count each eligible question once per skill. Source questions, shared study/protocol groups, workflow proposals and validated authored tasks remain separate quantities. These counts do not measure model competence.",
   "task_files": [
-    "benchmark_competencies/bixbench-verified-50/questions-001.json"
+    "benchmark_competencies/biomlbench/questions-001.json",
+    "benchmark_competencies/biomlbench/questions-002.json",
+    "benchmark_competencies/biomlbench/questions-003.json",
+    "benchmark_competencies/biomlbench/questions-004.json",
+    "benchmark_competencies/biomlbench/questions-005.json",
+    "benchmark_competencies/biomlbench/questions-006.json",
+    "benchmark_competencies/biomlbench/questions-007.json",
+    "benchmark_competencies/biomlbench/questions-008.json",
+    "benchmark_competencies/biomlbench/questions-009.json"
   ],
-  "task_count": 50
+  "task_count": 406
 }

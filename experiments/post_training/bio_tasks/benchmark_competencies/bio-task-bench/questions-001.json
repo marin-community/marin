@@ -1,0 +1,1702 @@
+{
+  "tasks": [
+    {
+      "task_id": "chipseq-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with single-end H3K4me3 ChIP-seq data aligned to human genome hg38, restricted to chromosome 21. The data includes a treatment file (treatment.tagAlign.gz) and an input control file (control.tagAlign.gz) in tagAlign (BED6) format.\n\nCall peaks and report them as a BED file named peaks.bed with columns: chr, start, end, name, score (any significance metric).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2832b6765dc5944805f8bccb7aa387c182e7d75a260c0117a860afe969943640",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-001/task.json",
+      "source_group": "",
+      "workflow": "controlled peak calling",
+      "skills": [
+        "intervals",
+        "chromatin"
+      ],
+      "applications": [
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Control background and coordinate conventions must be explicit.",
+        "Control sequence composition and define motif equivalence.",
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-chipseq"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chipseq-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with FASTA sequences from a ChIP-seq experiment. The target transcription factor is not specified. Identify enriched DNA sequence motifs by running de novo motif discovery. Report the top 10 enriched motifs in a tab-separated file named motifs.tsv with columns: motif_id (any identifier), consensus (IUPAC consensus sequence of the discovered motif), p_value (enrichment p-value or E-value), pct_target (percentage of input sequences containing the motif).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "11de7e63f1abda41535f2bab3d3249e5ad744e3302a563d4a561122c29782916",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-002/task.json",
+      "source_group": "",
+      "workflow": "sequence motif enrichment",
+      "skills": [
+        "enrichment",
+        "sequence-query",
+        "chromatin",
+        "motifs",
+        "database-query",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Control sequence composition and define motif equivalence.",
+        "Control background and coordinate conventions must be explicit.",
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-chipseq"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chipseq-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with H3K4me3 ChIP-seq peaks from K562 cells (hg38, chr21 only) as a BED file, and gene annotations (GENCODE GTF format, chr21 protein-coding genes only).\n\nAnnotate each peak with its genomic context. Report results as a tab-separated file named annotations.tsv with columns: peak_id (from input BED column 4), chr, start, end, nearest_gene (HGNC gene symbol), distance_to_tss (signed distance in base pairs from peak center to nearest TSS; peak center = midpoint of peak interval; negative if upstream, positive if downstream, 0 if overlapping), feature (one of: promoter, exon, intron, intergenic). Define promoter as peak center within 2000bp of any transcription start site. When categories overlap, use priority: promoter > exon > intron > intergenic. Collapse sub-categories into these four (e.g., treat 5-prime UTR and 3-prime UTR as exon, treat downstream as intergenic).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bf6cfebe277d4dffe8f00367f787f8d4196540c9a40e028de107c0d0e9a4c8bf",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-003/task.json",
+      "source_group": "",
+      "workflow": "peak gene context",
+      "skills": [
+        "intervals",
+        "spatial",
+        "chromatin",
+        "database-query",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Control background and coordinate conventions must be explicit.",
+        "Control sequence composition and define motif equivalence.",
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-chipseq"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chipseq-004",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with a ChIP-seq read count matrix (counts.tsv) containing H3K27ac signal quantified at peak regions on hg38 chr21 across two conditions (treated vs control), each with 3 biological replicates. A regions file (regions.bed) defines the genomic coordinates of each peak.\n\nIdentify differentially bound regions between treated and control conditions. Report results for all peaks as a tab-separated file named differential.tsv with columns: peak_id, log2fc (log2 fold change; positive = higher in treated), pvalue (raw p-value), padj (Benjamini-Hochberg adjusted p-value), significant (TRUE or FALSE at padj < 0.05; use uppercase TRUE/FALSE).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5a4453042b3ec17a2d40529a0f9a6dc10b13685c375aa4e8a83e4e51585c2fcb",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-004/task.json",
+      "source_group": "",
+      "workflow": "replicated differential binding",
+      "skills": [
+        "multiple-testing",
+        "intervals",
+        "chromatin",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Control background and coordinate conventions must be explicit.",
+        "Control sequence composition and define motif equivalence.",
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-chipseq"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chipseq-005",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided replicate-level H3K27ac ChIP-seq data for a benchmark-treated versus benchmark-control condition on human hg19 chromosome 21 only. Files include two ChIP replicates per condition (control_rep1.tagAlign.gz, control_rep2.tagAlign.gz, treated_rep1.tagAlign.gz, treated_rep2.tagAlign.gz), one matched input control per condition (control_input.tagAlign.gz, treated_input.tagAlign.gz), a spike-in summary table (spikein_counts.tsv), gene annotations (genes.gtf.gz), ENCODE blacklist regions (blacklist.bed), and benchmark-provided CNV-confounded segments (cnv_segments.bed).\n\nIdentify treatment-associated distal H3K27ac gains consistent with enhancer activation. Build a reproducible consensus peak universe from the ChIP-seq replicates before quantification. Report only regions that remain interpretable after accounting for promoter proximity, blacklist artifacts, and CNV-confounded loci. For this benchmark, distal H3K27ac gain is the operational proxy for enhancer activation; nearest_gene is an annotation heuristic, not a validated enhancer-target claim.\n\nWrite a tab-separated file named enhancer_diff.tsv with columns: peak_id, chr, start, end, log2fc, pvalue, padj, significant, nearest_gene, distance_to_tss, treated_support, control_support, normalization_basis. log2fc is treated minus control. significant must be TRUE when padj < 0.05 and FALSE otherwise. Define distal as peak center more than 2000 bp from any transcription start site. treated_support and control_support should be integers 0-2 indicating how many ChIP replicates from that condition support the reported region after blacklist filtering. normalization_basis should briefly state the normalization basis used for the reported analysis (for example spikein, spikein+input, or similar).\n\nWrite a second tab-separated file named normalization.tsv with columns: sample_id, group, spikein_reads, scale_factor, normalization_basis. Report the final per-sample scale factor used for quantitative normalization.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "83e397a1f6d0702df4c46687632ceab0db41760e313f1585f994931e4cb7fc9f",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-005/task.json",
+      "source_group": "",
+      "workflow": "confounder aware enhancer comparison",
+      "skills": [
+        "normalization",
+        "intervals",
+        "spatial",
+        "chromatin",
+        "image-analysis",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions.",
+        "Control background and coordinate conventions must be explicit.",
+        "Control sequence composition and define motif equivalence.",
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Use biological replicates and raw counts; preserve effect direction and tested universe."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-chipseq"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "crispr-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided guide-level log2 fold changes (LFC) from a CRISPR knockout screen in guide_lfc.tsv (columns: guide_id, lfc). Summarize dropout statistics in a tab-separated file named guide_summary.tsv with columns: guide_count, mean_lfc, strong_dropout_pct. The file should have a header row and a single data row. Define strong_dropout_pct as percent of guides with lfc <= -1.0 (on a 0-100 scale).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "53cd538b596c686c0c5258f25ef8fb9a4e048ecc546daa1554d3efe9450dc70d",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-001/task.json",
+      "source_group": "",
+      "workflow": "guide effect summary",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference.",
+        "A ranking of supplied scores does not establish differential essentiality.",
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-crispr"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "crispr-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given gene-level CRISPR screen scores in gene_scores.tsv (columns: gene, score). More negative scores indicate stronger essentiality. Rank genes by essentiality and report the top 20 essential genes in a tab-separated file named essential_genes.tsv with columns: gene, score, rank.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e1b25cd0ed0c801022c651a61cf60276c418d0fc080b34368f8a6cb0bb773094",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-002/task.json",
+      "source_group": "",
+      "workflow": "essential gene ranking",
+      "skills": [
+        "evidence-ranking"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "A ranking of supplied scores does not establish differential essentiality.",
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference.",
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-crispr"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "crispr-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided guide-level raw read counts from a CRISPR knockout screen in guide_counts.tsv (columns: guide_id, ctrl_rep1, ctrl_rep2, ctrl_rep3, treat_rep1, treat_rep2, treat_rep3) and a guide-to-gene mapping in guide_library.tsv (columns: guide_id, gene). Compute per-guide log2 fold change as log2((mean_treat + 0.5) / (mean_ctrl + 0.5)). Aggregate to gene level by taking the median LFC across guides per gene. Perform a one-sided Mann-Whitney U test (treatment < control) per gene using guide-level count data and correct p-values with Benjamini-Hochberg FDR. Report all genes in a tab-separated file named gene_essentiality.tsv with columns: gene, median_lfc, pvalue, padj, essential (TRUE if padj < 0.05, otherwise FALSE; use uppercase TRUE/FALSE). Sort by median_lfc ascending.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3dae89f43bd631d1253307547821944ef37dc70d7e9b15171a53531daac7bd88",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-003/task.json",
+      "source_group": "",
+      "workflow": "guide to gene screen analysis",
+      "skills": [
+        "group-comparison",
+        "multiple-testing",
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference.",
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference.",
+        "A ranking of supplied scores does not establish differential essentiality."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-crispr"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "assembly-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided contig lengths from a draft assembly. Compute basic assembly continuity statistics and report a tab-separated file named assembly_stats.tsv with columns: assembly_id, contig_count, total_length, n50.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e7ff57cc8dd9a365ab4a3469c4fd70ef105920a4caec3e2025cdae7941ef6b78",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-001/task.json",
+      "source_group": "",
+      "workflow": "assembly contiguity summary",
+      "skills": [
+        "assembly",
+        "statistics"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Contiguity does not establish sequence accuracy or completeness.",
+        "Candidate scores do not establish that a join is biologically valid.",
+        "Declare the aligned-base denominator and unaligned sequence policy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-assembly"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "assembly-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided pairwise contig overlap candidates with overlap_length and identity. Compute join_score as overlap_length * identity, rank candidates descending by join_score, and report the top 15 candidate joins in a tab-separated file named joins.tsv with columns: join_id, left_contig, right_contig, overlap_length, identity, join_score. Preserve the original join_id from the input.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "38ceae9e4039f8b5627cec5d835c719219bd01df6b00fd6fb151834398ef8bc2",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-002/task.json",
+      "source_group": "",
+      "workflow": "assembly join ranking",
+      "skills": [
+        "data-management"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Candidate scores do not establish that a join is biologically valid.",
+        "Contiguity does not establish sequence accuracy or completeness.",
+        "Declare the aligned-base denominator and unaligned sequence policy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-assembly"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "assembly-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided per-contig alignment error summaries against a reference. Compute consensus error statistics and report one row per contig in a tab-separated file named errors.tsv with columns: contig_id, mismatches, aligned_bases, mismatch_rate, high_error. Mark high_error as TRUE when mismatch_rate >= 0.015.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "622c422877ed144b520ed2970b88bd1a85fd86a932a5355717a933985a4774ff",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-003/task.json",
+      "source_group": "",
+      "workflow": "assembly error summary",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Declare the aligned-base denominator and unaligned sequence policy.",
+        "Contiguity does not establish sequence accuracy or completeness.",
+        "Candidate scores do not establish that a join is biologically valid."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-assembly"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lrs-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given long-read lengths from a single sample (sample_A) sequencing run. Compute core run statistics and report a tab-separated file named read_stats.tsv with columns: sample_id, read_count, mean_read_length (rounded to nearest integer), n50.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4149fe89bf6429cbd6b41c00c3e854f8f79d4ec40ecbaaafb23e113ba2b2f900",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-001/task.json",
+      "source_group": "",
+      "workflow": "long read length qc",
+      "skills": [
+        "read-qc",
+        "assembly",
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [
+        "long-read"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Read N50 and mean use different weighting.",
+        "Keep event counts distinct from affected bases.",
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-lrs"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lrs-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided per-read alignment summaries including insertion and deletion counts. Compute per-read indel burden and report the top 25 highest-burden reads, sorted descending by indel_burden, in a tab-separated file named high_indel_reads.tsv with columns: read_id, insertion_count, deletion_count, indel_burden.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a69728eae76fc7b1968760dde399a1e3157ebca0ede963dadfce3225a6aeaf6a",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-002/task.json",
+      "source_group": "",
+      "workflow": "long read indel burden",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [
+        "long-read"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep event counts distinct from affected bases.",
+        "Read N50 and mean use different weighting.",
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-lrs"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lrs-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided long-read alignment records with extended CIGAR strings in read_alignments.tsv (columns: read_id, cigar, aligned_length). Parse each CIGAR string to extract sequence match (=), mismatch (X), insertion (I), deletion (D), and soft-clip (S) base counts. Compute per-read error_rate as (mismatch_bp + insertion_bp + deletion_bp) / (seq_match_bp + mismatch_bp + insertion_bp + deletion_bp). Soft-clipped bases are reported separately but excluded from the error rate since they represent clipped sequence ends, not base-level errors. Classify reads with error_rate >= 0.10 as high_error=TRUE, otherwise FALSE (use uppercase TRUE/FALSE). Report all reads in a tab-separated file named error_profile.tsv with columns: read_id, seq_match_bp, mismatch_bp, insertion_bp, deletion_bp, softclip_bp, error_rate, high_error. Sort by error_rate descending.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b0e33c25b73f62b1ce09796c72307a1b134e8ed8409ff6f425be4834aae6d454",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-003/task.json",
+      "source_group": "",
+      "workflow": "extended cigar error profile",
+      "skills": [
+        "read-qc",
+        "statistics"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [
+        "long-read"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches.",
+        "Read N50 and mean use different weighting.",
+        "Keep event counts distinct from affected bases."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-lrs"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "metab-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided metabolite feature intensities (feature_intensity.tsv) for a single sample (sample_A). Compute summary statistics and report a tab-separated file named feature_summary.tsv with columns: sample_id, feature_count, mean_log2_intensity, high_intensity_pct. Use 'sample_A' as the sample_id. Define high_intensity_pct as percent of features with log2_intensity >= 13 (on a 0-100 scale).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6aceba09f072809297fe0bbe7c24f2edaf3f37466a247825e9e0280ed2361278",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-001/task.json",
+      "source_group": "",
+      "workflow": "assay intensity summary",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Use observed assay values and explicit handling of missing or censored intensities.",
+        "Ranking supplied means does not establish statistical significance.",
+        "Preserve replicates and specify missingness, zeros and the statistical model."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-metab"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "metab-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given feature log2 intensities (differential_input.tsv) for two conditions (case and control). Rank features by absolute difference |case_mean - control_mean| and report the top 30 in a tab-separated file named top_diff_features.tsv with columns: feature_id, case_mean, control_mean, delta_log2. Define delta_log2 as the absolute difference |case_mean - control_mean|.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "641d9364104e6b112ebbcf8fbe7bda7b18b9beae62dc4e3d7513ebe034cd321e",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-002/task.json",
+      "source_group": "",
+      "workflow": "assay effect ranking",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Ranking supplied means does not establish statistical significance.",
+        "Use observed assay values and explicit handling of missing or censored intensities.",
+        "Preserve replicates and specify missingness, zeros and the statistical model."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-metab"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "metab-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided metabolite feature intensities in feature_intensities.tsv (rows are features, columns are samples S01-S10) and sample group assignments in sample_metadata.tsv (columns: sample_id, group). Identify features with significantly different abundance between case and control groups. Apply log2 transformation before statistical testing, then correct for multiple testing using Benjamini-Hochberg FDR. Report results for all features in a tab-separated file named differential_features.tsv with columns: feature_id, log2fc (case minus control mean of log2 values; positive = higher in case), pvalue, padj (BH-adjusted), significant (TRUE if padj < 0.05, otherwise FALSE; use uppercase TRUE/FALSE).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bfab8ffbf9540aff394d1d4bd1eaa2a65fd996846d37d9f7e8329b823773a500",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-003/task.json",
+      "source_group": "",
+      "workflow": "metabolomic differential abundance",
+      "skills": [
+        "transformation",
+        "multiple-testing",
+        "statistics"
+      ],
+      "applications": [
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve replicates and specify missingness, zeros and the statistical model.",
+        "Use observed assay values and explicit handling of missing or censored intensities.",
+        "Ranking supplied means does not establish statistical significance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-metab"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "meth-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided CpG methylation beta values for one sample. Compute overall methylation summary statistics and report a tab-separated file named methylation_summary.tsv with columns: sample_id, cpg_count, mean_beta, high_methylation_pct. Define high_methylation_pct as the percentage (0-100 scale) of CpGs with beta >= 0.8. Use any string for sample_id.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "722df9bbb0cfe2aa8273efa889e1302f3990b3b97d5f081ac684983709def78a",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-001/task.json",
+      "source_group": "",
+      "workflow": "methylation summary",
+      "skills": [
+        "methylation",
+        "statistics"
+      ],
+      "applications": [
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish site-weighted and coverage-weighted summaries.",
+        "A large shift alone does not establish differential methylation.",
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-meth"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "meth-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given CpG beta values for two conditions (case and control). Rank CpGs by absolute methylation difference |beta_case - beta_control| and report the top 30 in a tab-separated file named top_dmc.tsv with columns: cpg_id, beta_case, beta_control, delta_beta. The delta_beta column should contain the absolute value of the difference (always non-negative), sorted descending.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3b0dfdf1a4744384ea79a4cc77f6871e75c7a54e9cf4b5c0a3f045665249a005",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-002/task.json",
+      "source_group": "",
+      "workflow": "methylation effect ranking",
+      "skills": [
+        "methylation"
+      ],
+      "applications": [
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A large shift alone does not establish differential methylation.",
+        "Distinguish site-weighted and coverage-weighted summaries.",
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-meth"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "meth-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided per-CpG bisulfite sequencing count data in bisulfite_counts.tsv for 12 samples (6 case, 6 control). Each CpG has paired columns per sample: {sample}_meth (methylated read count) and {sample}_total (total read count). Compute beta values as meth/total per CpG per sample. Filter out CpGs where any sample has total coverage below 10. For remaining CpGs, test for differential methylation between case and control groups using a per-CpG Welch t-test on beta values, and correct p-values with Benjamini-Hochberg FDR. Report results for all CpGs passing the coverage filter in a tab-separated file named dmc.tsv (differentially methylated CpGs) with columns: cpg_id, mean_case_beta, mean_ctrl_beta, delta_beta (case minus control), pvalue, padj, significant (TRUE if padj < 0.05, otherwise FALSE; use uppercase TRUE/FALSE).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1bbe98d3601501acf787853f80f95556c2fbb9817f9ee6c6818fc074019d53bb",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-003/task.json",
+      "source_group": "",
+      "workflow": "coverage aware differential methylation",
+      "skills": [
+        "group-comparison",
+        "multiple-testing",
+        "methylation",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions.",
+        "Distinguish site-weighted and coverage-weighted summaries.",
+        "A large shift alone does not establish differential methylation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-meth"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "moi-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided paired expression and promoter methylation values per gene. Quantify cross-modal association and report a tab-separated file named association.tsv with columns: feature_pair, spearman_r, pvalue, direction. Set direction to INVERSE when correlation is negative and DIRECT when positive.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d267d3f0cb9bfbb46217182964548bd1dafb7dcc00d81b8471deab1a79df4cb5",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-001/task.json",
+      "source_group": "",
+      "workflow": "cross modal feature association",
+      "skills": [
+        "association",
+        "intervals",
+        "methylation"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Across-gene association is not a patient-level causal relationship.",
+        "A combined magnitude score can hide opposite effect directions.",
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-moi"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "moi-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given feature-level effect sizes from two modalities (transcriptome and proteome). Compute integrated_score as the mean of absolute effects: (|rna_effect| + |protein_effect|) / 2. Report the top 25 features in a tab-separated file named integrated_top.tsv with columns: feature_id, rna_effect, protein_effect, integrated_score.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bd08d7b71cb0a837120325b9f850a7795c0116e0b5fbba6d2a52a39d191f9338",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-002/task.json",
+      "source_group": "",
+      "workflow": "cross modal effect ranking",
+      "skills": [
+        "integration",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A combined magnitude score can hide opposite effect directions.",
+        "Across-gene association is not a patient-level causal relationship.",
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-moi"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "moi-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided pathway-level signals from two omics layers (rna_signal and protein_signal). Compute bottleneck_score as the minimum of the two signals: min(rna_signal, protein_signal). This captures the rate-limiting layer -- a pathway is only considered active if both omics layers show sufficient signal. Report a tab-separated file named pathway_concordance.tsv with columns: pathway_id, rna_signal, protein_signal, bottleneck_score, concordant. Set concordant=TRUE when bottleneck_score >= 1.0, otherwise FALSE (use uppercase TRUE/FALSE).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bfb56499aceb8d5f84bcad47cda209251ac6588ea7a3ffebd1d7a5198a8c75e1",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-003/task.json",
+      "source_group": "",
+      "workflow": "cross modal pathway concordance",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation.",
+        "Across-gene association is not a patient-level causal relationship.",
+        "A combined magnitude score can hide opposite effect directions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-moi"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "popgen-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided an allele-frequency table for two populations (popA and popB) with per-SNP allele frequencies and sample sizes (number of diploid individuals genotyped per population). Note that sample sizes differ between populations. Estimate pairwise population differentiation using per-SNP Fst and report summary results in a tab-separated file named fst.tsv with columns: population_1, population_2, mean_fst, high_fst_snp_count. Use the ratio-of-averages across loci for mean_fst. Set high_fst_snp_count to the number of SNPs with per-SNP fst >= 0.25.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "843a5c56612d1538f85ca602dc4555a1de72fce8953b65f49363c4f2fd67634c",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-001/task.json",
+      "source_group": "",
+      "workflow": "population differentiation",
+      "skills": [
+        "variant-analysis",
+        "population-genetics",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "Align reference/alternate alleles before comparing frequencies.",
+        "State exact versus asymptotic testing and rare-genotype handling.",
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-popgen"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "popgen-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided per-SNP allele frequencies in two populations. Rank SNPs by absolute allele-frequency difference |af_popA - af_popB| and report the top 20 differentiated SNPs in a tab-separated file named top_snps.tsv with columns: snp_id, af_popA, af_popB, delta_af. Sort rows descending by delta_af.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "31b3dc10736ce89de671055f7540dcadc7b9a91bde61f200a356083f1368e6b6",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-002/task.json",
+      "source_group": "",
+      "workflow": "population frequency ranking",
+      "skills": [
+        "population-genetics"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Align reference/alternate alleles before comparing frequencies.",
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "State exact versus asymptotic testing and rare-genotype handling.",
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-popgen"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "popgen-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given genotype counts for a diploid population (nAA, nAB, nBB per SNP). Perform a Hardy-Weinberg equilibrium (HWE) scan and report results in a tab-separated file named hwe.tsv with columns: snp_id, pvalue, significant. Mark significant as TRUE when pvalue < 0.01.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f3c7e81be46d118297a41d8a1b4dd8ed3c0cc8d861b4db43d762009e86725111",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-003/task.json",
+      "source_group": "",
+      "workflow": "genotype equilibrium test",
+      "skills": [
+        "variant-analysis",
+        "population-genetics",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "State exact versus asymptotic testing and rare-genotype handling.",
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "Align reference/alternate alleles before comparing frequencies.",
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-popgen"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "popgen-004",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided a sample-by-SNP genotype dosage matrix (0/1/2). Compute principal component 1 (PC1) across samples, z-score the PC1 values, and flag ancestry outliers. Write a tab-separated file named pca_outliers.tsv with columns: sample_id, pc1, pc1_z, abs_pc1_z, outlier. Mark outlier as TRUE when abs_pc1_z >= 2.0, else FALSE. Sort rows descending by abs_pc1_z.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "eaa60570465307c918511acb017d9649b86ab50ef285da574182eb54c6c77eb0",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-004/task.json",
+      "source_group": "",
+      "workflow": "genotype pca outliers",
+      "skills": [
+        "dimension-reduction",
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples.",
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "Align reference/alternate alleles before comparing frequencies.",
+        "State exact versus asymptotic testing and rare-genotype handling."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-popgen"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "prot-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided a protein intensity table for one sample. Compute summary statistics and report a tab-separated file named intensity_summary.tsv with columns: sample_id, protein_count, mean_log2_intensity, high_intensity_pct. Define high_intensity_pct as percent of proteins with log2_intensity >= 26.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3783c375046e66ab396fbb1e9cf14c6e972215d2c1b7c24956d27b8e8ada579b",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-001/task.json",
+      "source_group": "",
+      "workflow": "assay intensity summary",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Use observed assay values and explicit missing-intensity handling.",
+        "Ranking supplied means does not establish statistical significance.",
+        "Handle missingness and detection limits explicitly; preserve biological replicates."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-prot"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "prot-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given protein log2 intensities for two conditions (case and control). Rank proteins by absolute difference |case_mean - control_mean| and report the top 25 in a tab-separated file named top_diff_proteins.tsv with columns: protein_id, case_mean, control_mean, delta_log2 (the absolute value of case_mean minus control_mean). Sort descending by delta_log2.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b101ad290276e1d48a6746e0343bcd1b67199011e21790c2c5a6328b35600001",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-002/task.json",
+      "source_group": "",
+      "workflow": "assay effect ranking",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Ranking supplied means does not establish statistical significance.",
+        "Use observed assay values and explicit missing-intensity handling.",
+        "Handle missingness and detection limits explicitly; preserve biological replicates."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-prot"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "prot-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided raw protein intensity values in protein_intensities.tsv (rows are proteins, columns are samples S1-S8) and sample group assignments in sample_groups.tsv (columns: sample_id, group). Identify differentially abundant proteins between case and control groups. Apply log2 transformation and median normalization before testing. Report results for all proteins in a tab-separated file named de_proteins.tsv with columns: protein_id, log2fc (case minus control, positive = higher in case), pvalue, padj (Benjamini-Hochberg adjusted), significant (TRUE if padj < 0.05, otherwise FALSE; use uppercase TRUE/FALSE).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c80f2c756bd1e40789afb16c246947c830278558e093be3eb302f68f910567f6",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-003/task.json",
+      "source_group": "",
+      "workflow": "proteomic differential abundance",
+      "skills": [
+        "normalization",
+        "transformation",
+        "multiple-testing",
+        "statistics"
+      ],
+      "applications": [
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Handle missingness and detection limits explicitly; preserve biological replicates.",
+        "Use observed assay values and explicit missing-intensity handling.",
+        "Ranking supplied means does not establish statistical significance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-prot"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "stx-001",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given a spot-level table with x,y coordinates and expression values for a single marker gene (use 'GENE_X' as the gene identifier). Quantify whether expression follows an x-axis spatial gradient. Report results in a tab-separated file named gradient.tsv with columns: gene, spearman_r, pvalue, direction (UPRIGHT for positive gradient, DOWNRIGHT for negative).",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d6802a0a37025c9590db4b37ce865dbc6f43f51e049347a46830c689717d9122",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-001/task.json",
+      "source_group": "",
+      "workflow": "spatial expression gradient",
+      "skills": [
+        "association",
+        "cell-annotation",
+        "spatial",
+        "database-query",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "biological-knowledge"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters.",
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-stx"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "stx-002",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided spot coordinates and expression values for multiple genes. Identify genes with localized hotspot-like expression by measuring whether expression is concentrated near the spatial center of the dataset versus the periphery. For each gene, compute hotspot_score as the difference between mean expression in the inner third of spots (by distance to the dataset centroid) minus mean expression in the outer third. Report the top 10 genes by hotspot_score in a tab-separated file named hotspots.tsv with columns: gene, hotspot_score, rank.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c6e5159f9534256643313322c025fcef1f0abca7f017b2b23aa5282a33b5e950",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-002/task.json",
+      "source_group": "",
+      "workflow": "spatial expression localization",
+      "skills": [
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters.",
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-stx"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "stx-003",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given spot coordinates with a cluster label per spot and expression for one marker gene. Compute per-cluster marker expression summary and report one row per cluster in a tab-separated file named cluster_summary.tsv with columns: cluster, mean_x (mean x coordinate of spots in this cluster), mean_y (mean y coordinate of spots in this cluster), mean_marker_expression, enriched (TRUE/FALSE). Mark enriched as TRUE when mean_marker_expression >= 5.0.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "863510ea89a15c7b71648dc2282c90e2faa018c4edf9f70630e4566c20ce0c43",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-003/task.json",
+      "source_group": "",
+      "workflow": "spatial cluster summary",
+      "skills": [
+        "enrichment",
+        "clustering",
+        "cell-annotation",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters.",
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-stx"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "stx-004",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given spot coordinates and cell-type labels. Assign each spot to a spatial quadrant using coordinate signs (NE: x>=0,y>=0; NW: x<0,y>=0; SE: x>=0,y<0; SW: x<0,y<0). Compute per-quadrant immune enrichment and write a tab-separated file named niches.tsv with columns: niche, immune_fraction, spot_count, hotspot. hotspot must be TRUE when immune_fraction >= 0.55, otherwise FALSE. Sort rows by immune_fraction descending.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7e67baf293cdbafd5042e8382d4b1bf6151acc8dc3fc2145c52b2f3b4688df0b",
+      "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-004/task.json",
+      "source_group": "",
+      "workflow": "spatial composition",
+      "skills": [
+        "enrichment",
+        "spatial",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches.",
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "id": "portfolio-bio-task-bench-stx"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

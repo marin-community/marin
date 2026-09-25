@@ -1,0 +1,192 @@
+{
+  "tasks": [
+    {
+      "task_id": "kgcheck-test-201",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Please check the relationship in the knowledge graph from the node of type 'Protein' with id 'Q6P3S6' to the node of type 'Disease' with id 'DOID:0050686'. If a relationship exists, verify its existence. Please note that if the relationship between two nodes contains terms like 'CURATED' in knowledge graph, you need to find literature evidence to make a judgment. If no relationship exists, confirm that it indeed does not exist. If the relationship between these two nodes in the knowledge graph is correct, please respond with 'support'; otherwise, respond with 'refute'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6835500c8e53ecff7e70591d5a59f6391c46e7e1f1722018191fe2a85671c163",
+      "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "source_group": "",
+      "workflow": "directed relation evidence",
+      "skills": [
+        "database-query",
+        "evidence-extraction",
+        "network"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "A biomarker association does not establish causality, treatment benefit or pathogenicity. Freeze a relation-specific predicate and include unmeasured/unresolved states. Free-form literature-based truth judgments remain a full-endpoint gap, even when citation IDs can be checked."
+      ],
+      "scope_changes": [
+        "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biokgbench.json",
+          "id": "portfolio-biokgbench-protein-disease-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "kgcheck-test-202",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Please check the relationship in the knowledge graph from the node of type 'Protein' with id 'Q96RJ6' to the node of type 'Disease' with id 'DOID:7'. If a relationship exists, verify its existence. Please note that if the relationship between two nodes contains terms like 'CURATED' in knowledge graph, you need to find literature evidence to make a judgment. If no relationship exists, confirm that it indeed does not exist. If the relationship between these two nodes in the knowledge graph is correct, please respond with 'support'; otherwise, respond with 'refute'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "eebf8f0756861b87f4bdebb24508da0b0ed762e45708076a49b85123b94855fd",
+      "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "source_group": "",
+      "workflow": "directed relation evidence",
+      "skills": [
+        "database-query",
+        "evidence-extraction",
+        "network"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "A biomarker association does not establish causality, treatment benefit or pathogenicity. Freeze a relation-specific predicate and include unmeasured/unresolved states. Free-form literature-based truth judgments remain a full-endpoint gap, even when citation IDs can be checked."
+      ],
+      "scope_changes": [
+        "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biokgbench.json",
+          "id": "portfolio-biokgbench-protein-disease-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "kgcheck-test-203",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Please check the relationship in the knowledge graph from the node of type 'Protein' with id 'O43427' to the node of type 'Protein' with id 'P05230'. If a relationship exists, verify its existence. Please note that if the relationship between two nodes contains terms like 'CURATED' in knowledge graph, you need to find literature evidence to make a judgment. If no relationship exists, confirm that it indeed does not exist. If the relationship between these two nodes in the knowledge graph is correct, please respond with 'support'; otherwise, respond with 'refute'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e9d4a311f9f153947faeffe02cdaf62f02379251029468f344a72f66fc265f18",
+      "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "source_group": "",
+      "workflow": "directed relation evidence",
+      "skills": [
+        "database-query",
+        "evidence-extraction",
+        "network"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Define symmetric-pair normalization only for declared symmetric relations. Stored graph orientation is not causal direction. A STRING association or predicted interaction is not experimental direct binding. CURATED claims needing literature entailment remain unresolved unless a predeclared structured evidence predicate covers the claim."
+      ],
+      "scope_changes": [
+        "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biokgbench.json",
+          "id": "portfolio-biokgbench-protein-interaction-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "kgcheck-test-204",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Please check the relationship in the knowledge graph from the node of type 'Protein' with id 'A6ND36' to the node of type 'Cellular_component' with id 'GO:1902911'. If a relationship exists, verify its existence. Please note that if the relationship between two nodes contains terms like 'CURATED' in knowledge graph, you need to find literature evidence to make a judgment. If no relationship exists, confirm that it indeed does not exist. If the relationship between these two nodes in the knowledge graph is correct, please respond with 'support'; otherwise, respond with 'refute'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "15b39c66f0021c5cf13f9bb13cc3ca3a19743af21ee016926c0467a3bcead0ca",
+      "source_url": "https://huggingface.co/datasets/AutoLab-Westlake/BioKGBench-Dataset/blob/4d992e7e735d81cb84d02f86f6489c82479c290e/kgcheck/test.json",
+      "source_group": "",
+      "workflow": "directed relation evidence",
+      "skills": [
+        "database-query",
+        "evidence-extraction",
+        "network"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Freeze which ontology relations support propagation, and never propagate NOT as an ordinary positive annotation. A missing localization record is unresolved; a NOT qualifier is explicit negative annotation subject to its context. Cellular component is not interchangeable with biological process, molecular function or whole tissue."
+      ],
+      "scope_changes": [
+        "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biokgbench.json",
+          "id": "portfolio-biokgbench-protein-cellular-localization-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

@@ -1,0 +1,409 @@
+{
+  "tasks": [
+    {
+      "task_id": "cis_mr_bcaa",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your lab is investigating whether lowering plasma BCAA levels via inhibition of BCKDK kinase could reduce T2D risk.\n\nIn order to do so, you have obtained GWAS summary statistics on T2D risk, as well as circulating BCAA levels, all in European ancestry populations.\n\nAs the degree of genetic correlation between circulating metabolites and heterogeneity between variants suggests a high degree of horizontal pleiotropy and difficulty in interpretation, you wish to avoid these issues while modeling the predicted change in T2D risk per 1 SD increase in levels of circulating BCAA levels at 3 best selected loci.\n\nWhat is the highest change you observe and the lowest across the loci that you investigate? Does genetic evidence support the idea that BCKDK inhibition would be beneficial for reducing T2D risk (answer \"YES\" or \"NO\") in a list?\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"loci_gene_names\": [], \"highest_estimate\": \"\", \"lowest_estimate\": \"\", \"bckdk_inhibition_yn\": []}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1174a37507b8bdf2ae1968dc2d35000eb7ee0392f23749bf75d3b30549c00028",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/cis_mr_bcaa/eval.json",
+      "source_group": "",
+      "workflow": "cis mendelian randomization",
+      "skills": [
+        "association",
+        "variant-analysis",
+        "population-genetics",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "metabolomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not substitute genetic correlation or nearby-gene association for a causal intervention estimate; preserve uncertainty and non-identifiability when instruments are absent."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-cis-mendelian-randomization"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "fine_mapping_effector_gene_prioritization",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given three tables for a chr22 disease-associated locus: (1) the genes trans-regulated by the locus with their effect estimates; (2) the variants in the 95% credible set for the locus signal, each annotated with its functional consequence, the gene it falls in, and (where coding) SIFT and PolyPhen predictions; (3) the cis association of the gene physically spanning the credible set with its own expression across the surrounding region.\n\nNominate the causal (effector) gene at this locus and the variant class most likely to mediate its effect.\n\nReport the number of protein-altering variants in the credible set, and your interpretation.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_protein_altering_variants_in_credible_set\": <int>, \"answer\": \"<letter>\"}\n</EVAL_ANSWER>\n\nwhere <letter> is one of A, B, C, D, E, F:\nA. The effector is the gene spanning the credible set, acting through the intronic lead variant's regulation of that gene's own expression (a cis-expression mechanism).\nB. The effector is the gene spanning the credible set, acting through a protein-altering (missense) variant in the credible set, even though that variant is computationally predicted benign and the gene has no detectable cis-eQTL.\nC. The effector is whichever gene at the locus has the strongest cis-eQTL, following standard locus-to-gene expression prioritisation.\nD. No coding causal mechanism is supported, because protein-altering variants in the credible set are predicted benign, so the effector must act non-coding.\nE. The effector is the gene physically closest to the lead variant, by proximity.\nF. The effector is the most strongly trans-associated gene, since it carries the strongest association at the locus.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5d44edaf5d4bcd28101b3cbd68da8854c77d43ab4287c4fe056bfe7a3cb6ae80",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/fine_mapping_effector_gene_prioritization/eval.json",
+      "source_group": "",
+      "workflow": "credible set mechanistic evidence",
+      "skills": [
+        "variant-analysis",
+        "variant-consequence",
+        "spatial",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Computational benignness predictions and absent cis association cannot alone exclude coding effects; distinguish prioritization from proof of causality."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-credible-set-mechanistic-evidence"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chry_father_son_concordance_11",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This dataset is a joint-called family quartet whole-exome sequencing VCF (Illumina, GRCh37) with proband `SAMPLE_A` and his father `SAMPLE_B` among the four samples. Report the number of biallelic PASS SNV positions on non-PAR chromosome Y where father and son most likely have discordant genotypes.\n\nReport:\n\n  - `n_chry_father_son_discordant`: integer count.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_chry_father_son_discordant\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2cb935d8b44b63edc58e21a50fe7a0fc4509ece9a13ab6d098aec2962a13bb27",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/chry_father_son_concordance_11/eval.json",
+      "source_group": "",
+      "workflow": "sex chromosome family concordance",
+      "skills": [
+        "variant-analysis",
+        "evidence-ranking",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish measured discordance from an inheritance-based expectation; declare mapping, genotype-quality and missingness rules before grading."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-sex-chromosome-family-concordance"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "ont_rfc1_repeat_expansion_pathogenicity",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This is a long-read (Oxford Nanopore) whole-genome sequencing dataset from a single human individual, aligned to the GRCh38 reference genome, provided as read alignments over tandem repeat regions together with a tandem-repeat region catalog.\n\nBased on this individual's genotype at the RFC1 locus (chr4:39,348,424, intron 2 of RFC1), determine whether they are affected by, or a carrier for, the RFC1-associated neurological disorder (CANVAS / RFC1-spectrum disease).\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_pathogenic_expansion_alleles\": <int>, \"expanded_allele_g_fraction\": <float>}\n</EVAL_ANSWER>\n\nwhere n_pathogenic_expansion_alleles is the number of RFC1 alleles in this individual that carry a pathogenic (disease-causing) repeat expansion, and expanded_allele_g_fraction is the fraction of guanine (G) bases in the repeat tract of the expanded (longer) RFC1 allele.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "9a19c4b2cc436bc7b5849249d8dd4a2711024006e7d96b296fd1f909754c405a",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/ont_rfc1_repeat_expansion_pathogenicity/eval.json",
+      "source_group": "",
+      "workflow": "long read repeat genotyping",
+      "skills": [
+        "variant-analysis",
+        "variant-consequence",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "context_tags": [
+        "long-read"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Repeat length alone is insufficient for motif-dependent interpretation; retain read support, sequencing uncertainty and explicitly frozen interpretation rules."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-long-read-repeat-genotyping"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "small_variant_calling_mnv_codon_consequence",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given a germline small-variant callset for a human individual from short-read Illumina exome sequencing, the aligned reads, and the reference sequence.\n\nSome coding variants fall close enough to a neighbouring coding variant that both changes land in the same codon; there the amino-acid consequence of the pair is not the sum of the two scored separately. Restrict this to loci where establishing the combined consequence genuinely requires resolving phase between the neighbouring variants -- loci where it is not already fixed which changes sit together on one haplotype. Report:\n- n_codon_shared_consequence_changes: the number of coding variants whose predicted amino-acid consequence changes once these phase-dependent same-codon neighbours are interpreted jointly, relative to annotating each variant independently.\n\nWork from the provided files; do not perform new alignment or assembly. You may draw on a standard gene model / transcript annotation resource to predict consequences, but do not otherwise consult external variant databases.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_codon_shared_consequence_changes\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3741f79e36f3bd5e30c1bbf485b8ddffc4201438505e736ebfdebe12a4f92a05",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/small_variant_calling_mnv_codon_consequence/eval.json",
+      "source_group": "",
+      "workflow": "read phased codon consequences",
+      "skills": [
+        "sequence-alignment",
+        "sequence-query",
+        "variant-analysis",
+        "variant-consequence",
+        "population-genetics",
+        "database-query",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "Preserve transcript choice, alleles and phase uncertainty; independent SNV annotations do not establish the combined consequence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-read-phased-codon-consequences"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "sv_chromosome_end_signal",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "I'm going to performing some downstream analysis on a structural variant (SV) callset for a seven-member family (samples `LG005`–`LG011`). Please note that originally, there were 10 samples but only 7 consented to our downstream analysis; thus, I expect the callset to contain some inconsequential artifacts in that regard.\n\nThe callset is aligned to GRCh38 and was built by merging SV calls across sequencing technologies and callers. We use standard INFO fields and per-sample genotypes. A colleague of mine built it a long time ago so we're not sure exactly how he did it.\n\nCan you help me to QC this callset? I want to understand whether I can use it for downstream analysis of structural variants. On hand I have the callset and the GRCh38 reference index. Please indicate whether the dataset is overall usable or not (\"YES\" or \"NO\"). If the entire dataset isn't usable, are there any chromosomes that DO seem to be usable? Indicate which ones these might be in the form `chrN`. If the dataset is valid, simply put the single entry \"VALID\".\n\nReturn EXACTLY in this form (a single JSON object):\n\n<EVAL_ANSWER>\n{\"no_issue_chromosomes_if_any\": [\"chrN\", ...], \"valid_yes_or_no\": [\"YES\", ...]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c551d88cfd1c7a264416ff77746fd766afc60dd58b07156e3902be896f7ee33a",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/sv_chromosome_end_signal/eval.json",
+      "source_group": "",
+      "workflow": "structural variant distribution qc",
+      "skills": [
+        "read-qc",
+        "variant-analysis"
+      ],
+      "applications": [
+        "genome-variation",
+        "molecular-structure"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Chromosome-end enrichment is study and callability dependent; define an independently justified baseline rather than treating a hidden modified distribution as universal biology."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-variantbench-structural-variant-distribution-qc"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given the raw somatic variant callsets from a paired tumor / matched-normal whole-exome sequencing experiment of a human tumor (hg38): short somatic variant calls, structural-variant calls, and copy-number segment calls for the tumor. These callsets are UNFILTERED — no call-quality selection has been applied to them — and it is your responsibility to decide on and apply whatever variant filtering and selection you judge appropriate before drawing any conclusions. Starting from these callsets, determine the tumor's final set of predicted neoantigens and report the gene hosting each predicted neoepitope.\n\nReference data (genome, gene annotation / VEP cache, HLA typing, and neoantigen-prediction resources) and tumor bulk RNA-seq expression estimates for the same tumor (RSEM gene- and isoform-level quantification, keyed by Ensembl IDs) are provided alongside the callsets; any or all of them may be needed.\n\nDo not access the internet, other than to install packages or through API requests from installed bioinformatics libraries. You should make your own judgements based on the data provided; internet data is unreliable for this clinical case.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"neoantigen_genes\": [\"GENE1\", \"GENE2\", ...]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0bc66ba4e6a21083f8a3ce5945b61d4654e6dd5a381b5e899186c0c854f7fc59",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall/eval.json",
+      "source_group": "",
+      "workflow": "somatic calls to expressed epitope candidates",
+      "skills": [
+        "prediction",
+        "variant-analysis",
+        "image-analysis",
+        "database-query",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "molecular-structure",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Preserve matched-normal evidence, expression, transcript phase and peptide-level outputs; gene-list recall alone permits large false-positive sets.",
+        "Use fixed expression and binding criteria and check every peptide-level artifact; an unrestricted list of annotated genes must fail."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-somatic-calls-expression-peptides"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "eval_stage4_annotated_vcf",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given functionally annotated somatic variant calls for a human Illumina whole-exome sequencing (WES) tumor / matched-normal pair, aligned to GRCh38. The calls are provided as-is, with no curation or prioritization applied. Tumor bulk RNA-seq expression estimates for the same tumor (RSEM gene- and isoform-level quantification, keyed by Ensembl IDs) are provided alongside the calls. Determine this tumor's final neoantigen set and report the gene that hosts each predicted neoepitope. Decide and apply whatever variant selection and prioritization are appropriate on your own.\n\nDo not access the internet, other than to install packages or through API requests from installed bioinformatics libraries. You should make your own judgements based on the data provided; internet data is unreliable for this clinical case.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"neoantigen_genes\": [\"GENE1\", \"GENE2\", ...]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c17dbe3107d3e240e19fdf26d4a935b11e472e537e83705135d09f8587a9657d",
+      "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/eval_stage4_annotated_vcf/eval.json",
+      "source_group": "",
+      "workflow": "annotated somatic variants to epitope candidates",
+      "skills": [
+        "variant-analysis",
+        "database-query",
+        "evidence-ranking",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Use fixed expression and binding criteria and check every peptide-level artifact; an unrestricted list of annotated genes must fail.",
+        "Preserve matched-normal evidence, expression, transcript phase and peptide-level outputs; gene-list recall alone permits large false-positive sets."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-somatic-calls-expression-peptides"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

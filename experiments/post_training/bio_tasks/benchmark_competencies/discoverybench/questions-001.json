@@ -1,0 +1,1240 @@
+{
+  "tasks": [
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Over which time period has gardening surpassed agriculture as the main contributor to the non-native flora?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7b6271ce58f6fd5badeaa8fe3aba3fba09c4979f990e6e33e6ad77ea20e5187a",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_group": "",
+      "workflow": "temporal introduction pathways",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-temporal-introduction-pathways"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What activity has replaced agriculture as the main contributor to the non-native flora over the past millennium?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "384e71208fbec9069e4990319febe901e4fca0e756e102cc025f65bd1d8d9d18",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_group": "",
+      "workflow": "temporal introduction pathways",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-temporal-introduction-pathways"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In what way has gardening impacted agriculture as a contributor to non-native flora over the past millennium?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "36d50f857007d1ef06a49e534d7e2e34c1a05f4247c37c72951ed9d74bd05958",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_group": "",
+      "workflow": "temporal introduction pathways",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-temporal-introduction-pathways"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What are the variables between which a positive relationship is quantified by a coefficient of 0.22?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "cfe2bb2bf70617948669cf1d8c41d1905b4970958c191d3d09a4c4508f745303",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
+      "source_group": "",
+      "workflow": "land use introduction association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-land-use-introduction-association"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the nature of the relationship between the degree of urban land use and the proportion of gardening-introduced non-native plants?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "05f84f10628386378f79c074bfcdf73b54613deae2e0ee7b6c7ab5e70893b571",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
+      "source_group": "",
+      "workflow": "land use introduction association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-land-use-introduction-association"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How does the prevalence of non-native plants introduced via gardening vary based on habitat type?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6edcd4435e0aca8bfbfc2d9feb22da36a06f595c401f536cfea1fc8082194461",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
+      "source_group": "",
+      "workflow": "habitat introduction comparison",
+      "skills": [
+        "group-comparison"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-habitat-introduction-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In what context does the gardening pathway for introducing non-native plants show different prevalence styles across habitat types?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "107e29e8b3442b8d62c849c3745a0d6ea7cec0d5dbc1eb4d3b59b736b653dbcb",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
+      "source_group": "",
+      "workflow": "habitat introduction comparison",
+      "skills": [
+        "group-comparison"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-habitat-introduction-comparison"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What factors interact significantly to affect the proportion of gardening-introduced non-native plants?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "25d65abcaa8d3fe9294ea2805112d51b597ea0b3c755161a14bd7c48ce8de3c3",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_group": "",
+      "workflow": "environmental interaction model",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-environmental-interaction-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is interacting significantly to affect the proportion of non-native plants introduced through gardening?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6b798859418463bd4628281d82241fdc35b280196b18962d7741dc5e56c89727",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_group": "",
+      "workflow": "environmental interaction model",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-environmental-interaction-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How do urban land use and elevation interact in relation to the proportion of non-native plants introduced through gardening?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f07147660561a657c438f21b112e8ced5af6600ca79062cc0848f83e708b9e01",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_group": "",
+      "workflow": "environmental interaction model",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-environmental-interaction-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How do introduction pathways interact with minimum residence time in affecting the success of non-native plant species in Catalonia?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "705e98395a75d1748ea02468e7c0a877f521f6cae06af2cc5bdeb41c09acad6c",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_group": "",
+      "workflow": "residence time invasion model",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-residence-time-invasion-model"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which factors influence the success of unintentionally introduced plants compared to intentionally introduced ones over time in Catalonia?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "677fc45db986a70612908100d8f8e60862b2950853b46610dcce12678ae47daa",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_group": "",
+      "workflow": "residence time invasion model",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-residence-time-invasion-model"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the relationship between introduction pathways and the success of non-native plants over time in Catalonia?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "efdad90b06ed991897de7a153a2866ea6e3904150ce7332af2dd40aa619e7a0d",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_group": "",
+      "workflow": "residence time invasion model",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-residence-time-invasion-model"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In what scenario did urban land use promote a specific type of plant invasion?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "10b17e5336cb2f81d967514d1e0d0080d556afae507b657a4ed4523e042bdb05",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_group": "",
+      "workflow": "spatially adjusted invasion model",
+      "skills": [
+        "spatial"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-spatially-adjusted-invasion-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What types of plant introductions were influenced by urban land use?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "61fbc4c0bd0c75594214f9ea15361b8dc60627adcbd7b847e5ce2ec632db5a24",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_group": "",
+      "workflow": "spatially adjusted invasion model",
+      "skills": [
+        "spatial"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-spatially-adjusted-invasion-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How did urban land use affect the invasion of different types of introduced plants?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d2c7722ab9fdf154b60ccaac1229bd76c6172f7305722fd3657ee3272503748d",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_group": "",
+      "workflow": "spatially adjusted invasion model",
+      "skills": [
+        "spatial"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-spatially-adjusted-invasion-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Is the maximum body length evolution the most impactful factor in explaining the speciation rates?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "823d2af90b54f45f23ec6fe44ebce1dac08ce7a96148c91eab79180988489bd8",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What explained the spatial variation in speciation rates, where the rate of maximum body length evolution was identified as the most influential factor with a positive relationship coefficient of 0.82?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "37e753dc447fc134eaf76a02785885f3777f8ab969626aecb8cba02705574aef",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "spatial"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the linear coefficient that describes the positive relationship between the rate of maximum body length evolution and spatial variation in speciation rates, where the former emerges as the most influential factor?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "677ec8d6cddf5e70f74ed1514bac63eb311097a2f5bb7199a1fd689868fa3be0",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "spatial",
+        "data-management"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which evolutionary traits exhibit a negative relationship with speciation rates, with respective coefficients of -4.6 and -4.9?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3da3b1ee94d82f827d0c9b429a1b444555d6fdf497eba260b679ad618c6fcedc",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which factors exhibit a negative relationship with speciation rates?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "84c192a5191a08abff4651bd422eb878d0ec596e9ea58c5f43beda2b455ed1ad",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What relationship did the evolutionary rates of oral gape position and relative maxillary length have with speciation rates, and what were their coefficients?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "499e598ac6f994ddf005d13945630f93c021b9637dce8b3b7c572af6910becc9",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "phylogeny"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Failure to reject is not evidence of equivalence or a zero biological effect."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which two aspects of evolutionary biology have been found to have no significant association?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e98316d697aa3ebeba2a995a02adee69280740908ae7c8a7827924510ceff195",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the nature of the relationship between the rate of body elongation evolution and speciation rates?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "667e96906a176e473d8fe6de61249bfa9bd5107f78c34c6036a0209a04f3a384",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
+      "source_group": "",
+      "workflow": "comparative trait speciation regression",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence.",
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-comparative-trait-speciation-regression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q0",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What entities show a weak but significant, positive relationship with a coefficient of 0.00003018?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2d7bb89e3305d0f684de88f2307db98213bf1b6e25f6eef37125b18d8f312394",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
+      "source_group": "",
+      "workflow": "diversity speciation association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-diversity-speciation-association"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What type of relationship exists between speciation rates and species diversity?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "772f544c6f5eb333eb690de24f390395f720e192e9584b69db50f7a19f1109a2",
+      "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
+      "source_group": "",
+      "workflow": "diversity speciation association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "ecology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-discoverybench-diversity-speciation-association"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

@@ -1,0 +1,1309 @@
+{
+  "tasks": [
+    {
+      "task_id": "5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Use the DKPES dataset to develop a Random Forest classifier predicting signal inhibition of chemicals while choosing appropriate threshold to assign binary labels based on signal inhibition values. Save the test set predictions, including the index and predicted signal inhibition, in \"pred_results/dkpes_test_pred.csv\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b0df809195d085dbb5fb773905269dd38da2682d40c8cdf943798cbf0f4f5153",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "assay activity classification",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Choose the response threshold using the declared assay contract; preserve compound identity and prevent held-out-label leakage."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-assay-activity-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Given the DKPES dataset, visualize the distribution of signal inhibition values and also visualize their relationship with the tanimoto similarity score. Save the figure as \"pred_results/dkpes_molecular_analysis_pred.png\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f773e4a49c8df629ea75aab2ac70e17945034dfe5736b311c33d4ffd3720e77b",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "assay distribution and similarity",
+      "skills": [
+        "visualization"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "A plot can be checked through its underlying numerical summaries; structural similarity does not establish mechanism."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-assay-distribution-and-similarity"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "7",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Visualize the distribution of functional groups for the 10 most and 10 least active molecules in the DKPES dataset. Save the figure as \"pred_results/dkpes_molecular_activity_analysis_pred.png\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "116e0826889656cd559fde0b9b50555d3d36474984c000841ba39c44044b24ec",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "activity stratified functional groups",
+      "skills": [
+        "visualization"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Specify group selection and tied activities; descriptive feature prevalence is not a significance test."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-activity-stratified-functional-groups"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "8",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Perform backward feature selection using logistic regression to identify the most relevant chemical features for predicting signal inhibition from the DKPES dataset. Binarize the signal inhibition values using appropriate threshold. Visualize the accuracy as a function of the number of selected features. Save the plot as \"pred_results/dkpes_feature_selection_analysis_pred.png\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b46c0b47679e4e77c5460332677d60f40385a178b7a6f11022e90cb89e1a02cf",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "nested molecular feature selection",
+      "skills": [
+        "feature-selection",
+        "regression",
+        "model-evaluation",
+        "visualization"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Feature selection and threshold tuning must stay inside cross-validation to avoid optimistic accuracy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-nested-molecular-feature-selection"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "11",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a cell counting model on the BBBC002 datasets containing Drosophila KC167 cells. Save the test set predictions as a single column \"count\" to \"pred_results/cell-count_pred.csv\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "82a676c64cf15089a14daa6911101a60b0870a53cbd7f0578ca375922e1ce995",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "microscopy cell count prediction",
+      "skills": [
+        "model-evaluation",
+        "statistics"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve independent image or experiment groups across splits; declare annotator aggregation and image scale."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-microscopy-cell-count-prediction"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "12",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a drug-target interaction model using the DAVIS dataset to determine the binding affinity between several drugs and targets. Then use the trained model to predict the binding affinities between antiviral drugs and COVID-19 target. Rank the antiviral drugs based on their predicted affinities and save the ordered list of drugs to \"pred_results/davis_dti_repurposing.txt\", with one drug name per line.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7a5cc9c024d128ac317bdf80bfe746e9ec70babcf64f151fbba7254ab6f7eb86",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "drug target affinity transfer",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Keep affinity units and score direction explicit; predictions do not establish clinical efficacy."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-drug-target-affinity-transfer"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "13",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a property prediction model using the HIV dataset to predict the activity of drugs against HIV. Save the SMILES strings and their corresponding predictions to \"pred_results/hiv_test_pred.csv,\" using the same column names as in the given dataset.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "88be1700e5bb33da1d3eff1d5a5b6312b0730377fca5da6b858dd9dbc61273f8",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "compound antiviral activity prediction",
+      "skills": [
+        "prediction",
+        "molecular-descriptors"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Preserve scaffold/group separation and class imbalance; assay activity is distinct from patient benefit."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-compound-antiviral-activity-prediction"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "15",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a model on the ames dataset to predict a drug's toxicity. Save the test set predictions, including the SMILES representaion of drugs and the probability of being positive, to \"pred_results/aai_preds.csv\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b8217c5fae69bdfb9120e47d3c9c8cfb0b7395496e86bde5f516c5fa5f4f68c8",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "compound mutagenicity prediction",
+      "skills": [
+        "model-evaluation",
+        "molecular-descriptors"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
+      "outputs": [
+        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
+        "selection.tsv: candidate eligibility, scores, ranks and ties"
+      ],
+      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
+      "decisions": [
+        "State the positive class and evaluation population; a model score is not an experimental toxicity result."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
+        "Keep measured assay comparisons separate from geometry-only predictions."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-compound-mutagenicity-prediction"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "18",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a Random Forest classifier to predict whether a given chemical structure (in SMILES format) poses a Drug-Induced Liver Injury (DILI) concern. The dataset's vDILIConcern column classifies 'vMost-DILI-Concern' and 'vLess-DILI-Concern' as positive, and 'vNo-DILI-Concern' and 'sider_inactive' as negative. The training dataset is split into different sets: MC (1–173), LC (174–433), NC (434–660), and sider (661–923). Use these splits to create three task configurations: MCNC (classifying MC vs NC drugs), MCLCNC (classifying MC/LC vs NC drugs), and all (classifying MC/LC vs NC/sider-inactive drugs). For each task configuration, use the training examples to perform 5-fold cross-validation and hyperparameter search. Use the model trained on the best hyperparameter and save the prediction results to \"pred_results/{data_conf}_RF.csv\" where data_conf is the name of different data configurations (i.e., MCNC, MCLCNC, and all). Put the chemical smiles name and predicted label (’DILI’ or ’NoDILI’)  in the ’standardised_smiles’ and ’label’ column respectively.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "654ce851a30fee8e65c6c76ec561bf4aa9abf71c7fbda6ef2fa2ad5c6c2a8500",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "structure based toxicity classification",
+      "skills": [
+        "classification",
+        "model-evaluation",
+        "molecular-descriptors",
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Maintain the distinct label/cohort configurations and identical compound IDs; avoid mixing the held-out compounds into feature selection.",
+        "Scaling and hyperparameter selection must use training folds; retain class direction and the distinct cohort definitions."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-structure-based-toxicity-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "19",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a support vector machine (SVM) classifier to predict whether a given chemical structure (in SMILES format) poses a Drug-Induced Liver Injury (DILI) concern. The dataset's vDILIConcern column classifies 'vMost-DILI-Concern' and 'vLess-DILI-Concern' as positive, and 'vNo-DILI-Concern' and 'sider_inactive' as negative. The training dataset is split into different sets: MC (1–173), LC (174–433), NC (434–660), and sider (661–923). Use these splits to create three task configurations: MCNC (classifying MC vs NC drugs), MCLCNC (classifying MC/LC vs NC drugs), and all (classifying MC/LC vs NC/sider-inactive drugs). For each task configuration, use the training examples to perform cross-validation and hyperparameter search. Use the model trained on the best hyperparameter and save the prediction results to \"pred_results/{data_conf}_SVM.csv\", where data_conf is the name of different data configurations (i.e., MCNC, MCLCNC, and all). Put the chemical smiles name and predicted label (’DILI’ or ’NoDILI’)  in the ’standardised_smiles’ and ’label’ column respectively.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "076db20fca13268e19eab7221cd39da774130a782e930f2d3763a0e37bccdf5e",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "structure based toxicity classification",
+      "skills": [
+        "classification",
+        "model-evaluation",
+        "molecular-descriptors",
+        "statistics"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Scaling and hyperparameter selection must use training folds; retain class direction and the distinct cohort definitions.",
+        "Maintain the distinct label/cohort configurations and identical compound IDs; avoid mixing the held-out compounds into feature selection."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-structure-based-toxicity-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "20",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Visualize the R² results comparing single-task and multi-task performance for different datasets in TDC ADMET. Save the visualization as 'pred_results/tdc_results_visualization.png.'",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a0b153489dc9e151b5f8f7a95f98a19fe4272ece907c72d8e68ccd05bbc93d07",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "paired model metric comparison",
+      "skills": [
+        "model-evaluation",
+        "visualization"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Distinguish variance across seeds from uncertainty across independent datasets; do not average incompatible metrics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-paired-model-metric-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "27",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Use the given compound pairwise similarities in dili_visualization/tanimoto_similarities.txt and also the test split indices in dili_visualization/mcnc_ttsplits_te.pkl to plot the distribution of similarities of the test and train examples. For each test example, the similarity should be computed by the average of the similarities of the 5-nearest-neighbors within the corresponding training examples. Save the results to \"pred_results/similarity_plot.png\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0d774ece9b0ba23dbbd561ad44657022df9ad5a9971f4a14671c48ab7d645669",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "split aware chemical neighborhoods",
+      "skills": [
+        "visualization"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Exclude held-out and self-neighbors; preserve split-specific index mapping and neighbor ties."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-split-aware-chemical-neighborhoods"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "40",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a random forest model to predict whether a given chemical structure has Drug-Induced Liver Injury (DILI) concerns, based on the given features. Use the training examples to perform hyperparameter search and model training, and save the prediction results to \"pred_results/MD_{data_split}_RF.csv\" where data_split is the name of different training splits ('MCNC', 'MCLCNC', and 'all'). Add a ’label’ column and put the predicted labels (’DILI’ or ’NoDILI’) in the column.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "160b622994b65ea34aca581e93f157f45c7d9533222973954cd32cca5a8aef0f",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "descriptor based toxicity classification",
+      "skills": [
+        "classification"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Descriptor rows and labels require an identity join; related molecular structures should remain grouped when assessing transfer.",
+        "Distance-based models require an explicit scaling policy; held-out data cannot determine preprocessing or model selection."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-descriptor-based-toxicity-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "41",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a K-nearest neighbor model to predict whether a given chemical structure has Drug-Induced Liver Injury (DILI) concerns, based on the given features. Use the training examples to perform hyperparameter search and model training, and save the prediction results to \"pred_results/MD_{data_split}_KNN.csv\" where data_split is the name of different training splits ('MCNC', 'MCLCNC', and 'all'). Add a ’label’ column and put the predicted labels (’DILI’ or ’NoDILI’) in the column.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a6fdd6d9c56fa3cf5a277c9b6dd792a9d651ed1ad26fd2cfa066618165b63072",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "descriptor based toxicity classification",
+      "skills": [
+        "classification"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Distance-based models require an explicit scaling policy; held-out data cannot determine preprocessing or model selection.",
+        "Descriptor rows and labels require an identity join; related molecular structures should remain grouped when assessing transfer."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-descriptor-based-toxicity-classification"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "69",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For cell samples in the heart cell atlas dataset, filter out lowly expressed genes and plot UMAP results using the top 30 PCA components on the expression data. Save the UMAP visualization as 'pred_results/hca_cell_type_pca.png', with color representing the cell type.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "de728bfc0eae308b68e47007ab1c3f3a55cb00ff0d82c91fed0acfa9d28fe062",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "single cell qc to embedding",
+      "skills": [
+        "dimension-reduction",
+        "data-management",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "70",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a VAE model on the given data and perform a 1-vs-all differential expression test for each cell type. Extract top markers for each cell type using the results. Visualize them as a dotplot with the cell types organized using a dendrogram. Save the figure to pred_results/hca_cell_type_de.png.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "97e2039ed095639ffac1ef7aad0e77b6ef254ad95ca0f2268305baa7af7b4ad6",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "latent single cell marker analysis",
+      "skills": [
+        "differential-expression",
+        "clustering",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Cell-level model evidence does not replace donor-level replication; distinguish model-specific DE probabilities from frequentist adjusted probabilities."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-latent-single-cell-marker-analysis"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "75",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train an amortized Latent Dirichlet Allocation (LDA) model with 10 topics on the PBMC 10K dataset. After training, compute topic proportions for each cell and visualize the topic proportions using UMAP. Save the plot as 'pred_results/topic_modeling_pred.png'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "887aa1f9fd55a3ab93dc2139f9e607435a1179393dd4c40d4a44dc81a4080c80",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "single cell topic model",
+      "skills": [
+        "dimension-reduction",
+        "composition",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Topic indices are exchangeable; verify normalization and biological summaries without requiring a particular topic permutation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-single-cell-topic-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "78",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Train a neural network model using the pucci dataset to predict the melting temperature (deltaTm) of proteins caused due to the point mutation of one amino acid at chain A. The dataset also contains the PDB files which need to be processed to retrieve the original (wild-type) amino acid sequence and then to create the mutated sequences. Save the predictions for the test set as a single column dataframe \"deltaTm\" to the file \"pred_results/pucci-proteins_test_pred.csv\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e68fa1b92479df620ba3b376778aeccc4477479b38357fa132a3e84c0676f174",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "structure indexed mutation effects",
+      "skills": [
+        "model-evaluation",
+        "network",
+        "protein-structure"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-structure"
+      ],
+      "context_tags": [],
+      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
+      "outputs": [
+        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
+        "selection.tsv: candidate eligibility, scores, ranks and ties"
+      ],
+      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
+      "decisions": [
+        "Account for missing residues and insertion codes; preserve the sign and units of measured stability change and group related proteins across splits."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
+        "Keep measured assay comparisons separate from geometry-only predictions."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-structure-indexed-mutation-effects"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "79",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the data provided, compute for each cell the number of genes found in the cell's expression counts. Plot the distribution of this computation using a violin plot. Overlay the violin plot with a strip plot showing the same data. Store the result to 'pred_results/violin.png'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a97a2fe72cf17f66125545ea85c76f9ccb2a7cbf120177f6cd0bccd853c79185",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "single cell detection qc",
+      "skills": [
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "80",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For the data in provided, plot a scatter plot where the x-axis is the total number of counts per cell and the y-axis is number of genes found in the cell's expression counts. Color each point by the percentage of counts in that cell that are for mitochondrial genes. Store the result to 'pred_results/genes_scatter.png'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6b04be79c3cefe2fd21c933ed8b288c9c95145a076b74c396d859d211e8bb884",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "mitochondrial single cell qc",
+      "skills": [
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "81",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For the given gene expression dataset, perform a scatter plot in UMAP basis to visualize groups of cells that express popular marker genes across various cell types: T-cell, B-cell, plasma, monocytes and dendritic. Also add plots for number of UMI counts per cell and bulk labels per cell. Save all the plots as one figure to 'pred_results/umap.png'.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "99c4ff85ed707608185d34fd56247cf9cd7117fd4a14769a77dae7b1cc26bc5c",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "marker and embedding join",
+      "skills": [
+        "dimension-reduction",
+        "cell-annotation",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "82",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For the given data in 'pbmc_umap/pbmc.h5ad', visualize the dendrogram of the 'bulk_labels' variable. Save the results to 'pred_results/dendrogram.png'",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b6006b198e282466a10add06ee173409365e7160b06b8326797636bfda6c38d5",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "cell group dendrogram",
+      "skills": [
+        "clustering",
+        "visualization"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
+      "outputs": [
+        "plot_data.tsv: observations and derived values actually plotted",
+        "figure_spec.json: variables, groups, scales, labels and required graphical elements",
+        "figure.svg or another inspectable native figure"
+      ],
+      "verification": "Recompute plotted values, inspect figure structure and required marks/labels, and verify scales against the specification. Aesthetic quality and unrestricted explanatory prose are outside the reward.",
+      "decisions": [
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Retain the scientific comparison and requested plot type.",
+        "If the source objective is mainly visual interpretation, a numeric companion alone is insufficient."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "85",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze the given saliva data and compute features that represent sample statistics or distribution (e.g., mean, location of max/min value, skewness) for each subject. Save the computed features along with subject condition as a dictionary of dictionaries into a json file \"pred_results/saliva_pred.json\".",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "946ed53790fd1e03b52103f899d0dee4262e73e2493b05ad3fd61b219cea9951",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "longitudinal saliva features",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Retain time units and subject identity; extrema positions are not interchangeable with extrema values."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-longitudinal-saliva-features"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "96",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze the preprocessed PBMC dataset with precomputed UMAP components for 700 cells and 765 highly variable genes. Compute clusters using the Leiden method and visualize the clustering results with UMAP. Save the figure to \"pred_results/scatter_pred.png\". ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6747256b3d175a90cea8bbf4905f69ba5b4b5e0a71d12a6c6b76917729e77931",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "single cell neighbor clustering",
+      "skills": [
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics.",
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-single-cell-qc-and-population-representation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "98",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Compute chain quality control information for this single-cell TCR/RNA-seq data collected from resected tumors, histologically normally adjacent tissues (NAT), and peripheral blood. Then, draw a stacked bar chart of the number of cells in each chain pairing, coloring each portion of the stack by the source (tumor, NAT, or blood).  The figure should be saved as pred_results/3k_pred.png.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3446e5ae96c07262ab3fb7fcf850904ddc9a63a06237188d77bfbf0cb41469d9",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "paired receptor chain qc",
+      "skills": [
+        "read-qc",
+        "image-analysis",
+        "repertoire",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology",
+        "bioimaging"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Use native MuData/AIRR identities, not row order; distinguish no receptor, orphan chains, multichain cells and valid pairs."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-scienceagentbench-paired-receptor-chain-qc"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "99",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You should draw three UMAP figures of the data colored by total_counts, n_genes_by_counts, and clusters, respectively. You should put the three figures in one picture, and save it to pred_results/spatial_pred.png.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1b121f7fd514d8c7b086b93d1ec5e438cfc289050ca6b9947e4ee3455330281e",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "spatial expression embedding qc",
+      "skills": [
+        "dimension-reduction",
+        "clustering",
+        "spatial",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Expression-space coordinates and physical tissue coordinates answer different questions; preserve the coordinate system and spot IDs.",
+        "Preserve axis orientation, tissue section and spot identity; a rendered plot alone is insufficient numerical evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatial-assay-coordinate-qc"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "100",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You should visualize the data in spatial coordinates in three figures colored by total_counts, n_genes_by_counts, and clusters, respectively. You should put the three figures in one picture, and save it to pred_results/spatial_2_pred.png.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6cad3408cb9a4255f48a36da416fb2abf73caadae7775a2878f5659276dc4f22",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_group": "",
+      "workflow": "tissue coordinate qc",
+      "skills": [
+        "clustering",
+        "spatial",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve axis orientation, tissue section and spot identity; a rendered plot alone is insufficient numerical evidence.",
+        "Expression-space coordinates and physical tissue coordinates answer different questions; preserve the coordinate system and spot IDs."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatial-assay-coordinate-qc"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

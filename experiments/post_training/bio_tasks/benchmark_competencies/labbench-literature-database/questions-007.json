@@ -1,0 +1,3297 @@
+{
+  "tasks": [
+    {
+      "task_id": "SuppQA:58c7753e-549d-4fea-86b2-54fbdbf7ada9",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "During the Second Sort and PCR Indexing step, which temperature and duration are required for the incubation to denature transposase for LAND ONLY samples?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "8a9201d8768b63ef9d35425e2be6d6b087234b5f895b558ca6f1e886f10ece0e",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "This is an audit of reported observations, with no protocol recommendation, optimization or reconstruction of restricted source contexts."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-reported-conditions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:7faf65d7-55c9-4586-9e1e-9d4e39e93601",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For cryo-electron microscopy data collection, how many ligands were present?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "b627f3b7571a8b70f78300bf3d6ee89aaf6324c47e4038b573b9390149530dc5",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The reference must preserve the meaning of the reported ligand count; a generic count of non-protein residues is insufficient."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-structure-ligands"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:70be3149-5beb-443f-bfe8-cf14da0dd59c",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For training Gene-SGAN, what value did the authors set for lambda?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "0ce827da65fe91a201b6a32013369b2d72d65ac425b4b5d5d2b23c5554d03035",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-computational-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:b5dbe6b5-95e5-4c1a-810f-8877c6d46c72",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For what purpose was oligonucleotide sequence  GGGACAACTTTGTATAGAAAAGTTGTCTCATTCCACGATTTCTCGC used for?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "a08e6b70179e8126f7552ed4503e7c1d23fcded81a3e8269f2ad43db9b8fcb00",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:ea25f382-3885-4294-875e-10fccf6f4b3c",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How can the datasets be accessed?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "77e0fef135a833cc4d063c8b0a858299b9f5a9479f707a3f36f4515681b65a92",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-computational-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:2af1880c-a4dc-4da2-b4d5-131ef96c6350",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How did the authors determine the number of samples to use in experiments?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "64f4682aed629cb3406c769d6fe849181a6424ce24d52d47bc4cb9e97583b6c7",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:2a34cefb-d28e-426e-a925-829bda3435d8",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many animals were involved in the recordings for the extraction quality characterizations?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c282fc09ce8b3b011ffe362e73df20935b2feb5dbad0679013c21a18979eb34c",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:72434cfd-5cda-48e3-942f-12c99104b8a1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many citations that can be used for training models were not retrievable from the Sphere corpus?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "49920213d55faa73f89ea4802e8ed14418b36a7b732e47c73afd0c921749e66c",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:a140f0c0-8b5c-4670-8716-22c93ad45c06",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many data files for breast cancer RNA-seq from TCGA were used to assembly mRNA contigs?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "3b800d8f7550791965b887afad74ba361280d1228b8bb30e1688e9d1ca584bd3",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not equate a file count with biological replication or a read count with a read-pair count."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-sequencing-qc"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:823bc7ee-a275-46a2-8143-7aaf057fe331",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many different chemicals are mentioned in the general procedure for chemical synthesis?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c835f2ca371814ac57e87c9cd27dfb95b83f67880d4957a11a1fdeac66ce150a",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:05e60207-57a7-4b6b-b294-354893a3d246",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many features were used to train the final Lasso model?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "0a4d8fddd7bfe12851af335f469344a2317e7b24202b3cf70321d31b04005fdb",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Keep reported AUC/accuracy distinct from recomputed metrics; do not conflate a classifier with a feature-selection method or compare incompatible evaluation splits."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-predictive-performance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:37730e76-f5dc-42be-91c1-3f69147b465a",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many males were in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "125987985e0842b094ebba805cf81a072f841ad75d7ee9b5bf176cec23c0661b",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:3041bea7-5161-44e8-abcd-ebfb404a1553",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many never smokers were there in total across the datasets?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "b4f3b0acb21eaf507936fc497be43b4e3a89ca4b9ff4c25f8bb17934a7def535",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:d454257b-b65f-4ed8-9873-07d0d685fb40",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many sequence reads were obtained from Mate-Pair Sequencing?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "de45a78ae203aca43866a2e38c2454cc87d3e94dd28e40f519ba99e04ff20112",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not equate a file count with biological replication or a read count with a read-pair count."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-sequencing-qc"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:de9956c2-4b42-4529-8926-48848c8237f6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How many synapses were used to analyze Cav2.1 in the first cortical layer in mouse B?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "bb66cc8345c2c32c8d1c962eafd97d011769426dd0f5f9bc6980a09db6bc41fb",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:311df379-df7a-4410-a32a-8bbb79376304",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In how many mass spec rounds was the Kdm1a protein detected?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "9777a4668a620dd2f59b8fa3ae9de8d64ef6ff1f66ea8365c601e34ea3ead734",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Observed association, computational annotation and direct physical interaction must remain separate; no causal or direct-binding claim follows from a shared table row."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-proteomic-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:5a974da2-cca9-49e1-a421-e6d3ad9c17ee",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In the ABIDE cohort, how many more controls were there than AD patients?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c8cdfadcc1578bcc4cbc94515393cbee1a996909c319d21f0ff7ee545fe4f4f7",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:b3d8ddd1-4829-405c-b72b-f5dcf114636f",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "In which situation is it not recommended to use Jeffreys prior?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "8debc1df69846e1739849fed7c0c7812268c00a335c31116fdaaa5faabacae74",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:74884486-15bc-45de-9174-2efe35a2c8fc",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What AUC do the authors report when they performed a hyperparameter optimization for protein-RNA binding site prediction using a Layers hyperparameter value of 8?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "29370ec9c89aaf69a5357ac40d057887c496cc8860e48afdee6743189e843c82",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "molecular-structure"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Keep reported AUC/accuracy distinct from recomputed metrics; do not conflate a classifier with a feature-selection method or compare incompatible evaluation splits."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-predictive-performance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:27685d85-ec01-4ba0-a690-35a89b609105",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What animal was the primary antibody used in immunostaining from?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "351dac913ff2e8dc9006d268bd3abd462653589da73fe77e79ccd63d9b315f4e",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:0348e600-f5cc-4fa8-89eb-d2cb3ae18752",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What antibody concentration (mg/ml) was used against Gephyrin?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "eeda577b8ad84d4fce901e4b89693d11f61cd5cb42588e83e7327fdbe703bdb2",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-staining-reagents"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:e77c9e8d-087c-4be1-90b5-987f36cbc27a",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What assumption was made about the different forms of growth modulation on cell mass variation?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "97d2805aa38f6b6e4dc7a5f73403c2ab63e222a0fbc6477bbe971c92b55ada96",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:aa904a36-3656-45a8-a0d2-912c04dd2558",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What cell types had greater expression of the ASD signature?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "5f53fdee5f4cd634f9114af16f7f79ec002a3ce326f6f2df50e0b718cab1823d",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Gene-set expression, differential expression and signature enrichment are distinct endpoints; the shared task is conditional on an independent study providing the required evidence."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-expression-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:966e60e1-6b15-4105-b2a4-b1859e1963fc",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What exposure time was used to image the Drosophila larva sample?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "8e04ccf5d488d9d85f376082f236643e2ba83d548c367f60c03295af74962092",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Sample-specific exposure and excitation are not interchangeable with frame rate or emission wavelength; geometric coverage does not establish capture efficiency."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-imaging-metadata"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:c81b515b-c24d-4937-b972-67d89fc7a09f",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the G6' target site sequence used to test sgRNAs for activation of gene III expression in PACE?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "01c8b41ff906cd5c3d0f6c10cdef5c60bc1af896df350401aa1413223a6c493c",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:0284e566-0c84-4333-a44d-12bd6c4c9a9c",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the expected difference between the probability of detection between a maternal mRNA or paternal mRNA?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c833fff163edc512839b7e62b3b6a03c8127a793466a14681dbba0114a4ae866",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:11c0a95f-70e6-4e5b-9ace-0cf6b97ad83b",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the expression fold change of PARP9 between HEK293T cells transfected with sesRNACtrl and sesRNAEEF1A1?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "52c9c35ce9e837157d7515b46a2d88fac22988ac7af5e1ba0cebb23c1896b2c2",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Gene-set expression, differential expression and signature enrichment are distinct endpoints; the shared task is conditional on an independent study providing the required evidence."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-expression-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:8ba7a888-70c6-404e-949d-60e4145b8eb6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the forward primer sequence used for Real-time quantitative RT-PCR to amplify Sox2 gene?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "cc6424d2ece17b71cc4f76d6d64bf79ea551faee67effc78559c7c9204ee20ae",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:d540a38e-6247-4a19-8752-873b792ff3d4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the guanidinium hydrochloride concentration (M) at which mClover3 was 50% denatured?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "66710180c0753506f315a052c6d76b2753c07b29e6c50fbcbddb03c347f31182",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The source asks for the reported concentration; a fresh fit is a cross-check and cannot silently replace it."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-denaturation-curve"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:38217b58-50a4-4376-b35a-78b8c5c1a980",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the length of the cosa-1-4A mutant genotyping PCR amplicon?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "f8d52dc355e518a7232edc2dbe6d44ed2ae590c3478bc89a253d050112d692d1",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:3bee1e75-3b9c-4270-bb9e-e65b1a941b48",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the mean fluorescent intensity of staining with PE PSGL-1 of the clone 3?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "b256ef576761fdcdb83179e10b5bdc084b665a1604c739684b6a166e237adc8f",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not treat an arbitrary fluorescence unit as an absolute molecule count or substitute a median for a reported mean."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cytometry-intensity"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:02af18a7-aa18-4f4a-bc40-a8e81b4258dc",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the most acidic pH possible of the solutions?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "9b63e4d4b5227a2c55c8fcdfc28f52b2892a81272059fcd8a13c8c88bedcb1c6",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:d57031ac-e7d7-4274-876b-36449ecdd640",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the purple DNA sequence in Supplementary Note 3?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "cba389e2dec6c8b6eba699f98468f60e9dbf41730556991322065f823b8ee1d6",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:5dd6b784-487d-48bd-ac36-9653fc11c0ad",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the radius of curvature (in mm) of the rectangular bump used from the profilometer images?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "00429aba0335cd715155c11ff9654c4d503eb0d54d49bf250a26339037168816",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:9379deb7-21f2-4263-86f8-2d15d1a82160",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the sequence of the forward primer used to target POLR2B for RT-qPCR detection? ",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "b10255e9764fa4d02ca3afb19371aae0eb0595988110d6e386112efde1102a1f",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:41478c97-f6f8-47f5-818b-1db407be9075",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the sequence of the primer used for vioC-out?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "8501ad6c89f9c0836085e99aab7dd77e9cc568ef44a1c67196f3fa33a047a0a3",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:a5eff44a-ec71-44a8-bdb6-173fd9ea92ce",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the sequence of the reverse primer used for Rab3GAPLCM?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "17a83a7e68bb57cec175cfc9585741ce106b83786fc8ad02f05de8022ae50b36",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:e3857371-2a36-4019-b23e-177b4b5a4be5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What is the soret band maximum (nm) observed for H64V/L86Y mutant in the oxidized form?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "edc365e9ad195ea6d8b801173f53c4a870bf448facf5886e3fc1df47d3f6ea26",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Oxidation state and peak designation are part of the query; do not select the global maximum from an unrelated spectral band."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-spectral-peak"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:6b6dda99-3651-4bce-86c9-4fc2032479db",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What percentage of patients are former smokers?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c5bd7d82f587c54bd0588e2e46ff48e33acbfcb029808eec8bfdc08da88fbeda",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:3417bcfa-c37a-4e25-8a0c-1fd963741eea",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What percentage of the array area was covered by features using Slide-seqV2?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c907cc4eb4aa023a30cd38d8f744dc4d0f2ae6b37826ca9d24a75ab63cb5382f",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Sample-specific exposure and excitation are not interchangeable with frame rate or emission wavelength; geometric coverage does not establish capture efficiency."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-imaging-metadata"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:f13fbc77-553f-4a4c-b29b-ca178262eeef",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What programming language was used to analyse the clinical records of the cohort?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "cee66ec6c869a9b1598e411c4fa5eca853955b2572dfd5549d6f89e0c3bb68b8",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-computational-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:93566dc3-5f5c-491e-b723-60712cca625d",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What protein does TRAF1 associate with?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "edf672b64bfd3ef61be36733be646e0e810e5258fb2f619b5c9cedb30c4ae1ca",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Observed association, computational annotation and direct physical interaction must remain separate; no causal or direct-binding claim follows from a shared table row."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-proteomic-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:e5ed958b-1cc9-4848-8e37-a895beb835e2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What protein had the lowest negative z score in relation to KCMF1?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "6516eebdb804c6ae5fb9a5bf947a697b0732841016404f7ccb6da163234e15d5",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Observed association, computational annotation and direct physical interaction must remain separate; no causal or direct-binding claim follows from a shared table row."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-proteomic-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:ebb6a0ef-5421-4392-8717-f574c9600842",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What reverse primer sequence was used to obtain an AGO1 amplicon of 140 bp?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "fd348ceb9dd4e58054fd411ec4004c3d43e540fb9a733b1beac1c39a7a18c3ee",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:59bf5188-9844-459c-94cf-89ed8cd3287f",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What temperature were the muscle tissues polymerised at?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "56b21cc3ed109142c6a9c3b57967c7fbb0302444f4d041f553cfbf87ba86e9ff",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "This is an audit of reported observations, with no protocol recommendation, optimization or reconstruction of restricted source contexts."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-reported-conditions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:c8e4f3d2-2fb3-428f-bb02-8593513efc54",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What versions of R is RAPToR compatible with, according to this extract?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "f5ac9793e8c4fcbc5320cffa6232d4b9d099b9d226ff9427f87e11e999830204",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-computational-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:ceeac89d-59c1-48a7-93db-46b045391906",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the concentration of THE?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "4c5cf72a8949fa79971db0ef02959741aa0b094f3f5f8da391c6392360c0d958",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "This is an audit of reported observations, with no protocol recommendation, optimization or reconstruction of restricted source contexts."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-reported-conditions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:8c2e99ce-7af0-4e73-a058-151135647076",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the dilution of Tubulin β3 in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "76d777149652ca8cfa43a2ccb3f7c069c68cd4e96bf86d46b9cc0089dcad18f6",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-staining-reagents"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:1026513d-a087-427b-ab16-8a7c199e039e",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the duration of the corona discharge treatment?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "a3eae55e8d8535b488047a498dd611a8c3fed11e49e4a2ffb26614626921f43f",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:a8b1cd02-4bd9-43ad-927e-c2c4eb7c528b",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the forward primer for SALK_135698C used in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "3e61b71844c9ad72d836d54ff8068881b01338adf1ae023f1e15a88bd77305c3",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:97e98c7d-105b-4af5-99be-6e1fe4a2cce6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the forward primer used for SORBS3",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "28914dbe5cafd650bd6f2338520d65b3111a5542bda50b56bedbeeb6d829ef90",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:19b4836a-0635-4aad-9817-8934cbb7ca73",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the forward sequence of gRNAsite5 used in this study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "8d6e2b39ec916ad03e362219ded70b39a670fe3c4175a91e3a3816ebac13f0f1",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:9b972351-d2f8-4491-8a7c-3fb5a3e429a9",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the maximum level of oxygen and moisture allowed in the glovebox atmosphere?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "cf2dd7ca8c7d2a0393f0bd6f5ceb5045b409be6bc9a0745222519cbe841d7d81",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:dce3628e-905d-4b90-a6d0-877a2ccbbc33",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the maximum number of transcripts for a gene after filtering and QC was complete?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "dd8df07a2c2e72766a1adbc5ee75128191dc316ff00e554902251323c0db7b77",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not equate a file count with biological replication or a read count with a read-pair count."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-sequencing-qc"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:befeb56e-6f04-4be7-9304-4ede1bdd25bc",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the name of the mice endogenous control?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "18199909bcd05de85b027cb9256f42feb614f6fcc1fe25ec79db90b009a2c087",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:bd08e5ba-e26b-4258-b3a2-543c842d028a",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the sequence of the Overlap Reverse primer used for Plasmid Construction?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "ab7446e1c8ac72fa4113638b4f7cc80525dc5a08d5652a42902c352bcc74b3ef",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:c04cc31d-9aee-46bf-9628-e153c72a44e3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the sequence of the TDH3 forward primer used in the paper?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "f7683497cccf9885607889f0e9562a2033f391e5057aff702db0ad9bd6367f85",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-oligo-catalog"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:4f3bd821-52d6-4875-b8ec-d92ca0fe644f",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the sequence used for BC12-ugi12_primer?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "715b4266b636f429438c8af7c401bd9736234dc9194ba1309b97cd9d32b70dd0",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:8719a6b8-76e9-44ae-b26b-65821de0ac99",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the total time, in minutes, for which the cells were pulsed?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "87422d99c28131f4d1a3d65e4e5778d8b633bac96d5e563b945ff3eadd4a6289",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "This is an audit of reported observations, with no protocol recommendation, optimization or reconstruction of restricted source contexts."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-reported-conditions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:93099819-56be-40bf-b54d-427b663a2381",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was the typical error for the strain measurement technique?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "c9da5e9f6b128735c92133f8147684b1e580097b324a60baca0b7457a34c2469",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A numerical match with a different uncertainty definition fails; raw residual recomputation is only comparable under the same definition."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-mechanical-uncertainty"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:df1365b0-4731-4f40-8dd7-64f4793a1729",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What was used to induce ARG expression in Salmonella typhimurium?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "46c981b79d821429357b87b20f6db6e24cada98381a8944d31af28a52ae751dd",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:bbc4ff4f-89f6-4f27-99e1-f03482feeffb",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What wavelength was used for the excitation of the fluorescently tagged iLOV gene?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "a050863e56c362f9c5c1c89f9ae46f85b225c25b562e71717294fdad84c85a1f",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Sample-specific exposure and excitation are not interchangeable with frame rate or emission wavelength; geometric coverage does not establish capture efficiency."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-imaging-metadata"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:459ee10b-aa46-47ad-af55-8c0e5a0015ef",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What were the reasons for exchanging CDM for E6 medium?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "896c99b632632798c63deeb2443968ada024059140ce504034648a534befb17c",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:03f5a91c-f167-475e-8ccb-4c7561c767a9",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Where was the DAPI sourced for in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "9b96b4326cc40f1b27a107ed16bf57fc7ddd6c0697acbf76a79e70489d98e6f0",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-staining-reagents"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:4b3bbf7d-e352-4ff9-b79a-65d15566de13",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Where was the training database drawn from for this model?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "813d2d636ad1f3706ad2e5220630eb1cf520d35e2826c5f691a921ee2861d9bf",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-computational-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:cdab2021-feed-497f-992a-a8f73df33957",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which analysis had the highest resolution in the paper?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "99b9ece061711e3d2ef9f530b918aaed7439338ca3571dc7817c5bb68594e0bd",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:bc806521-164f-4f66-90e7-9d28f5fc319e",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which buffer solution was used to track free virus particles?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "3060352122ffbc86798049f0438d7533eb28b4e95808b6dd3ef957ee1b6fb30a",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:404f6ac4-0605-406b-b32e-0fc14d1600f4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which chemical component had the highest density?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "cbcb1feb5c8cb218adc92a3c89278bb25aa447af2196dae6700311210047fc7b",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:cf4608f5-2241-4c3b-a85a-7d2cda3733ee",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which country does Dasypyrum villosum accession 01I144 come from?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "ec006951f9ce52ec7ac5132a50849db2e5dae3da23dbe9a5b12852404aedff67",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:20c5295d-7cce-4a70-b950-640ea6e69806",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which country sent the most samples in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "21b8d41a379deed4917c74a5d383f18381e7635b9c935d385da01d18d425e0b8",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-cohort-accounting"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:181019ef-1151-4668-9178-13641d24bd85",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which method was used to purify the residue during the synthesis of MARS2209?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "f60faad9e13783b0aec305120f6b08d67b5f0e19f0ee19356e1745015ecfac39",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:9dbf4365-801d-42f9-80a9-357b4d93c793",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which of the following antibiotics was used for the viability experiments?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "bc0a7bf69d835cedeee140e7f78c5309473c6777996c3f73440d0749df25a4fa",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:ed0ad27f-c1ed-4796-a8f6-dd49c66b2515",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which of the following had the highest Year multiplied by Warming?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "e3444bc950a83fe22da7b1206ae7167ea60475f54b45bc3b775b7b37d37be70d",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:a1cf5586-4afc-48e6-a0d2-9554f9413983",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which of the following plasmids had a fluorescent label?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "e1454416a4e2b1768a43530b63a1e7182d79bd76832bae2665a88992b2f1c0f6",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A ranked organization count requires a full inventory and explicit counting unit; absence from a partial table is not a negative."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-construct-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:b226af16-8f63-4e2d-bf3c-c94a1cc2e32e",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which of the following proteins is involved in photosynthesis in the antenna?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "88edaf0bf5818a1da3b54b6c9a47fd71fb3474ef40f8ecaabc91721eb8d5fee2",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Observed association, computational annotation and direct physical interaction must remain separate; no causal or direct-binding claim follows from a shared table row."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-proteomic-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:30fce0db-9bb8-4a89-ae5c-78f665da41f6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which organisation provided the second most frequent amount of colenterazine analogues?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "5eba8893aaa7ff7a2b0d404970c4589b3e829ffd7894d0c32e5a35db6fb22685",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A ranked organization count requires a full inventory and explicit counting unit; absence from a partial table is not a negative."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-construct-provenance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:5d457a9d-4f9b-4ad9-aac3-dd15e60f00cd",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which protein region did a-Centrin target in the study?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "507d6ae2ffbf373882e8ac8d17004608b116995e94573259c0991eb54d393044",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-staining-reagents"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:10512e71-a619-42ab-8e1a-3b5b4decda5d",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which secondary antibody was used to detect centromeres?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "a8c3f7ad7b8e56e81e6cece4d46df393a0527fc29cfffa1281f9cbcb7238fbef",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-staining-reagents"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "SuppQA:bbb9143b-6f7c-4960-bd44-ab8972a1da27",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "With feature reduction, how much better was the accuracy for the  MLP compared with the EN in the random forest model for the glucose condition?",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "52376cdccd0bb566a01f70e8971ce49aab59f340d4fce25517be3cc159820983",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "supplement specific evidence",
+      "skills": [
+        "evidence-extraction"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [],
+      "scope_changes": [
+        "Keep reported AUC/accuracy distinct from recomputed metrics; do not conflate a classifier with a feature-selection method or compare incompatible evaluation splits."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "id": "labbench-supp-predictive-performance"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

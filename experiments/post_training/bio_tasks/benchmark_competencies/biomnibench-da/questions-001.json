@@ -1,0 +1,2401 @@
+{
+  "tasks": [
+    {
+      "task_id": "da-1-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Characterize the distribution of cell subsets in tumor tissue, adjacent normal tissue, and peripheral blood. Identify which cell types are specifically and highly enriched only in the tumor microenvironment.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "72c76065803f65bb0a660e9f41a1ac43e9a5233eddb812e9a23433ae9887c5cc",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cell composition",
+      "skills": [
+        "composition"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Cell QC, tissue pairing, cell-type eligibility, denominator, enrichment test, multiple-testing universe and high-enrichment threshold.",
+        "Require both comparison tissues and a donor-aware design. A zero observed count is distinct from an unsampled tissue or ineligible donor."
+      ],
+      "scope_changes": [
+        "Do not certify universal tumor exclusivity from finite sampling. Open biological interpretation is inspectable but ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-01-tumor-cell-enrichment"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-1-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For each patient, calculate the correlation between the tumor regression ratio and the baseline proportion of cell subtypes. Is the correlation positive or negative? What does this imply?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "59ec346f621fcd71d9133e19cbd0459e3602fa65f5201aa0db8e5efd04927277",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "clinical association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Response ratio/scale, baseline window, fraction denominator, Pearson/Spearman or regression model, covariates and multiplicity.",
+        "The prompt wording for each patient does not provide repeated response/fraction pairs for within-patient correlations. Declare the across-patient estimand and baseline tissue/time window."
+      ],
+      "scope_changes": [
+        "Association does not establish a treatment mechanism or predictive validation. Free-form implications are ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-02-baseline-fraction-response"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-10-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the provided self-assembling, partner-dependent, non-phase-separating protein sets (SaPS, PdPS, and NoPS) and the human proteome (hSaPS, hPdPS, hNoPS), compare amino-acid composition differences between PS-Self and PS-Part proteins, and evaluate the performance of four phase-separation predictors (PScore, PLAAC, catGRANULE, and FuzDrop) in distinguishing each PS type from non-PS proteins.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1e12d4df7f0d06ea39d1c2af52a10195ffe7b2c3fa7c0f4a4a46a51ff992be9a",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "protein predictor evaluation",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Protein deduplication, positive/negative class universe, amino-acid metric, score direction, ties, bootstrap unit and split.",
+        "Keep PScore, PLAAC, catGRANULE and FuzDrop availability explicit. Missing required scores cannot be replaced by a different predictor; preserve class labels, sequence identity and independent evaluation membership."
+      ],
+      "scope_changes": [
+        "Known class annotations and predictor discrimination do not establish new experimental phase-separation behavior."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-03-protein-class-predictors"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-10-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the provided dataframe containing (i) multiple dataset membership indicator columns (0/1) for MLO participant sets and membrane-bound organelle control sets, (ii) a fixed non-PS negative/background set (e.g., hNoPS-test), and (iii) multiple predictor score columns (e.g., PLAAC, PScore, catGRANULE, SaPS-8fea/10fea, PdPS-8fea/10fea), evaluate and compare screening performance across datasets. Determine whether predictors perform consistently better on MLO participant datasets than on membrane-bound organelle controls.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "845f52c1fe363979c5e776420b74de224f45a186f301b311559f05bf1043307a",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "protein predictor evaluation",
+      "skills": [
+        "model-evaluation"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Fixed negative universe, overlap policy, score orientation, metric, tie handling and aggregation across datasets.",
+        "Freeze positive/negative overlap removal, training-protein exclusion, score orientation, metric and uncertainty unit. Shared proteins/backgrounds make dataset metrics dependent."
+      ],
+      "scope_changes": [
+        "Consistently better needs an explicit comparison rule; an informal visual impression is not scored."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-04-protein-participant-screening"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-11-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze the single-cell RNA-seq data from the inflamed tissues of celiac disease (CeD) patients to infer cell-cell communication networks, specifically focusing on ligand-receptor interactions between KIR+CD8+ T cells and pathogenic gliadin-specific CD4+ T cells. Identify the top signaling pathways, beyond the established MHC-I interaction, that are predicted to mediate the suppressive function and cytotoxic targeting observed in the in vitro assays.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "49a04f319ede5878c59a37ea8a33ca6ebb867845eb1369c7315fdb5024a29e01",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cell communication",
+      "skills": [
+        "communication"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Cell gates, expression threshold, ligand/receptor direction, database release, donor aggregation, pathway mapping and exclusion of a known reference pathway.",
+        "Pin gates, expression layer, ligand/receptor complexes, database and donor aggregation. Rank a specified inference method, retaining complete eligible pair/pathway tables."
+      ],
+      "scope_changes": [
+        "Retain communication inference as a numerical workflow. Defer claims that inferred pathways actually cause suppression or cytotoxic targeting without independent functional assays."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-05-cell-communication"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-12-2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Is the G2M checkpoint (p < 0.05) enriched among the differentially expressed genes (DEGs) that are shared between both overexpression and knockdown in-vitro experiments?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d0ee9fbf2af1ef3590a639e4d8fa9892dd92c16a26e04ab3e608ec6e1c709153",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "perturbation enrichment",
+      "skills": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "applications": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "DE model, call FDR/effect threshold, shared-gene direction requirement, enrichment test, universe and raw versus adjusted p threshold.",
+        "Freeze whether shared means intersection regardless of effect direction or a concordant-direction intersection. Preserve the source p<0.05 request separately from any additional multiple-testing report."
+      ],
+      "scope_changes": [
+        "A shared enrichment result does not show that gain and loss perturbations act by the same mechanism."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-06-shared-perturbation-enrichment"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-12-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "From lung cancer patients with matched tumor-sample microbiome and RNA-seq data, is Kocuria significantly associated with poor prognosis? (In NAR_Q3 folder in the Uploads, perform a univariate Cox Proportional Hazards analysis to each microbiome with poor prognosis (defined as a Hazard Ratio > 1 and p-value < 0.05). Then investigate if kocuria showed significantly associated with poor prognosis.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a022422f38640b24b5c69c750611220529b1602b825062c0d37f81c76e93161a",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "survival association",
+      "skills": [
+        "survival"
+      ],
+      "applications": [
+        "transcriptomics",
+        "microbiology",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Abundance transform/zero handling, time origin, censoring, one-feature univariate model (covariate-adjusted models are a separately specified endpoint), HR>1 decision, p<0.05 rule and multiplicity reporting. Freeze tied-event handling (Efron/Breslow/exact), coefficient convergence and whether each p-value is Wald, score or likelihood-ratio; prescribe nonconvergent and non-estimable outputs.",
+        "Preserve the requested HR>1 and raw p<0.05 rule. An adjusted model or FDR-only selection is a separately labeled analysis; absence of the focal taxon cannot become a negative result."
+      ],
+      "scope_changes": [
+        "Computable prognostic association remains eligible. Treatment recommendations and causal microbial mechanisms are outside scoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-07-microbe-survival"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-clinical-adjusted-cox"
+      ]
+    },
+    {
+      "task_id": "da-13-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which plasma proteins are significantly altered after 6 months of feminizing GAHT and do the changes differ between CPA and SPIRO antiandrogen regimens?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "eab5c2a5a87ea218b16afa8ddd4e0aba3ec072e2a824cdc3e678b2fec58ceb65",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "longitudinal proteomics",
+      "skills": [
+        "abundance",
+        "regression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "proteomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Visit windows, participant pairing, protein missingness, within-regimen effect, interaction model, body-change definition and multiplicity.",
+        "Use the specified follow-up window, align signs of body changes and separate within-regimen effects from the direct regimen difference. Repeated visits are not independent patients."
+      ],
+      "scope_changes": [
+        "Observational regimen differences do not establish comparative treatment efficacy; that interpretation is ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-08-longitudinal-protein-body"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-clinical-paired-visits"
+      ]
+    },
+    {
+      "task_id": "da-13-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which proteins correlate with changes in body composition (fat percentage and breast volume) following feminizing GAHT?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7c4165f833776e5ebd0681ddfc7e68d51315718da4a30c3eb147bd6b05b4fc0e",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "clinical association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Visit windows, participant pairing, protein missingness, within-regimen effect, interaction model, body-change definition and multiplicity.",
+        "Use the specified follow-up window, align signs of body changes and separate within-regimen effects from the direct regimen difference. Repeated visits are not independent patients."
+      ],
+      "scope_changes": [
+        "Observational regimen differences do not establish comparative treatment efficacy; that interpretation is ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-08-longitudinal-protein-body"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-clinical-paired-visits"
+      ]
+    },
+    {
+      "task_id": "da-13-5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Do feminizing GAHT-associated proteins overlap with sex-associated proteins identified in the general population?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3bc2aa91c10c4171fc98750e89ee46b93f8fd5ca3ce767c584ddc518d1269a62",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "multi study concordance",
+      "skills": [
+        "association",
+        "data-management"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Protein universe, FDR thresholds, sex/treatment effect orientation, overlap statistic and treatment sample pairing.",
+        "Freeze protein/isoform mapping, eligible assay intersection and the direction of the external sex contrast before counting concordance."
+      ],
+      "scope_changes": [
+        "Unmeasured proteins cannot be treated as null associations. Shared proteins do not establish that the biological processes are equivalent."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-09-gaht-external-sex-concordance"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-13-6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Are GAHT-induced protein changes consistent with those observed during menopause or menopausal hormone therapy?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "67d8c34c9503a5f373fd1bb1eaf5245b30a7e090fe1de5f42eeb63641bdb3e6f",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "multi study concordance",
+      "skills": [
+        "association",
+        "data-management"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep menopause and exogenous hormone contrasts separate; freeze effect scale, protein mapping, missingness and concordance metric.",
+        "Both external comparators are required. Preserve their contrast direction, exposure timing and effect scale rather than pooling menopause and administered hormones."
+      ],
+      "scope_changes": [
+        "Missing one comparator leaves a partial workflow; narrative biological similarity cannot replace the missing evidence."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-10-gaht-menopause-concordance"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-14-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which sepsis endotyping signatures cluster together based on their score correlations across patients?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e389f5bf51e58d310cbaabe06ff30d65d7736c01727cf81dfd6c7054bfd7198c",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "signature clustering",
+      "skills": [
+        "association",
+        "clustering"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Correlate signatures across patients, not patients across signatures; freeze missingness, correlation, distance, linkage and cut height.",
+        "Specify missingness and signature scaling. Accept equivalent branch ordering and cluster-label permutations; do not demand identical dendrogram pixels."
+      ],
+      "scope_changes": [
+        "A cluster is a result of the stated scoring/clustering procedure, not proof that signatures measure the same mechanism."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-11-signature-clustering"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-14-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What proportion of critically ill patients fall into each immune dysregulation subgroup?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "95fe2a829f198bcee6aa420ade40b4d249b35dcdeb18599f2a9c8382659e6156",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cell composition",
+      "skills": [
+        "composition"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Eligible denominator, one patient per row, exclusive versus overlapping subgroup semantics and missing assignment handling.",
+        "Supply fixed subgroup definitions or attributed assignments. State whether memberships are exclusive; repeated admissions and overlapping groups must not silently change denominators."
+      ],
+      "scope_changes": [
+        "If subgroup identity itself requires unsupported expert judgment, defer that assignment stage; count calculation alone is component coverage."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-12-immune-subgroup-proportions"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-14-8",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Are the myeloid detrimental genes and lymphoid protective genes correlated within each gene set?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5560a9a436a009bf68fdd87e625269cd1f76046834d0eb1518e7aaa5d8fda338",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "gene correlation",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "functional-genomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Patient universe, normalization, duplicate gene mapping, all unordered non-self pairs, correlation type and set aggregate.",
+        "Use patient samples as observations. Keep missing/constant-gene exclusions and do not use the many dependent gene pairs as independent patient replicates."
+      ],
+      "scope_changes": [
+        "Correlation does not establish regulation or causal protection/harm."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-13-within-gene-set-correlation"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-15-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify molecular drivers of ALS pathology, which genes are differentially expressed between ALS patients and controls in the cervical spinal cord?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d19d567c3d697c1ce28e34ed94104dc65a6ff734862dae396dc9941463a6ad4a",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "bulk differential expression",
+      "skills": [
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Disease contrast covariates, count filtering, duration definition, within-case association model, FDR universes and top-gene ranking.",
+        "Retain the two separate contrasts, covariate sets and rank rules. Duration is measured within cases; a control must not receive a fabricated zero disease duration."
+      ],
+      "scope_changes": [
+        "Cross-sectional duration association does not validate prospective progression prediction or identify molecular drivers."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-14-als-expression-duration"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-rnaseq-library-qc",
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast",
+        "real-rnaseq-differential-expression"
+      ]
+    },
+    {
+      "task_id": "da-15-2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify coordinated gene programs dysregulated in ALS, can weighted gene co-expression network analysis (WGCNA) identify modules of co-expressed genes in ALS spinal cord?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "fffb48c8ff9da045f0241f0779525100ad53172c2bc05fbdad1b4b506dc069f0",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "coexpression network",
+      "skills": [
+        "network"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Outlier rule, gene count, soft-threshold power, adjacency/TOM, module cut/merge and trait test.",
+        "Pin network type, correlation, power rule, cut/merge settings and gene selection before trait inspection. Score memberships up to label equivalence and eigengenes up to the declared sign convention."
+      ],
+      "scope_changes": [
+        "Numerical modules are eligible; interpreting their biological importance or proving regulation is not judged."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-15-als-wgcna"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-15-7",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify biomarkers predictive of ALS progression rate, which individual genes show the strongest correlation with disease duration?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "690f5be507e1d05f9cba9b2e64dd65b8029806d573b58014e35714272c71269c",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "clinical association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Disease contrast covariates, count filtering, duration definition, within-case association model, FDR universes and top-gene ranking.",
+        "Retain the two separate contrasts, covariate sets and rank rules. Duration is measured within cases; a control must not receive a fabricated zero disease duration."
+      ],
+      "scope_changes": [
+        "Cross-sectional duration association does not validate prospective progression prediction or identify molecular drivers."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-14-als-expression-duration"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-15-8",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To prioritize non-invasive CSF biomarkers for ALS clinical trials, which genes show concordant dysregulation across all three levels: spinal cord transcriptome, spinal cord proteome, and CSF proteome?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "91ac1f33d25159f7e9231ab662d6f3db9096d7a888d7227bdf1601908e04168f",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "multi omics concordance",
+      "skills": [
+        "data-management",
+        "association"
+      ],
+      "applications": [
+        "transcriptomics",
+        "proteomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Within-layer disease designs, measured-feature intersection, ID ambiguity, sign convention and all-three significance rule.",
+        "Require tissue RNA, tissue protein and biofluid protein with explicit feature mapping and measurement eligibility. Do not infer a missing layer from another layer."
+      ],
+      "scope_changes": [
+        "Concordance is prioritization evidence, not validation of a noninvasive clinical biomarker."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-16-three-layer-als-concordance"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-16-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify molecular subtypes of NAFLD (non-alcoholic fatty liver disease) for clinical-trial enrichment, can unsupervised clustering of hepatic transcriptomes stratify patients by disease severity? Perform hierarchical clustering and/or PCA on appropriately normalized gene expression. Assess whether the resulting clusters differ by fibrosis stage, NAS score, NASH stage, or early/moderate disease grouping. Report the distribution of clinical features across clusters with appropriate statistical tests.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "ab96fa100374884aaad6b7a7169cf64b73737b44c6776b98c4f4d879dfa7e7aa",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "unsupervised clinical subtyping",
+      "skills": [
+        "normalization",
+        "dimension-reduction",
+        "clustering",
+        "group-comparison"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Choose PCA/hierarchical workflow, distance/linkage, cluster count without outcomes, pathology encoding and multiplicity.",
+        "Choose the clustering pipeline and rank/count rule without pathology outcomes; keep clinical covariates out of expression clustering and score partitions up to label permutation."
+      ],
+      "scope_changes": [
+        "Clinical-trial enrichment suitability is deferred; a retrospective pathology association does not prove deployment utility."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-17-expression-subtyping"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-17-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify potential cellular biomarkers for SLE diagnosis, which circulating immune cell populations show significantly altered frequencies in SLE patients compared to healthy controls?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2c83b895ff4008ea9376d1c11e3f787ee35c2d34d206d7052818adaeba40ec23",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cell composition",
+      "skills": [
+        "composition"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Population gates, patient denominator, ancestry categories, compositional model, disease-by-ancestry interaction and FDR.",
+        "Comparing significance in one ancestry with nonsignificance in another is not an interaction test. Freeze denominators, confounders and the direct contrast."
+      ],
+      "scope_changes": [
+        "Population associations do not establish ancestry-specific treatment effects."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-18-sle-cell-composition"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-17-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To understand the molecular drivers of monocyte dysfunction in SLE and identify potential therapeutic targets, which genes are differentially expressed in classical monocytes from SLE patients?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e3c733f6e57b730c067f6692d9abb25c0a612b3a15949ecbae6bfa26025df53f",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "celltype differential expression",
+      "skills": [
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Monocyte gate, minimum cells per donor, count filter, donor-level design and FDR universe.",
+        "Gate cells using declared evidence, preserve biological donors, and distinguish a missing donor/cell stratum from a measured zero gene count."
+      ],
+      "scope_changes": [
+        "A significant gene is an expression association; therapeutic-target validity is ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-19-sle-monocyte-pseudobulk"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-17-5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To inform population-specific treatment strategies, do SLE-associated immune cell changes differ between patients of Asian versus European ancestry?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "da453c95235b5db2b9e84edb9bcab9b4f78e9c143d22f857ef3d2fe2da201632",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "composition interaction",
+      "skills": [
+        "composition",
+        "regression"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Population gates, patient denominator, ancestry categories, compositional model, disease-by-ancestry interaction and FDR.",
+        "Comparing significance in one ancestry with nonsignificance in another is not an interaction test. Freeze denominators, confounders and the direct contrast."
+      ],
+      "scope_changes": [
+        "Population associations do not establish ancestry-specific treatment effects."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-18-sle-cell-composition"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-18-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Clinical breast cancer subtypes guide therapy selection, but mutational profiling can reveal actionable subcohorts within these groups. How does the genomic landscape differ across receptor subtypes (HR+HER2-, HR+HER2+, HR-HER2+, TNBC)?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "9debec0891e91c15d6eef2718ea94aae54cb2e0d2201f941279ffa13edc8b955",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cohort mutation landscape",
+      "skills": [
+        "variant-analysis",
+        "group-comparison"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Four receptor groups, qualifying alteration mask, patient/sample collapse, missing subtype policy and tested-gene universe.",
+        "Resolve multiple tumor samples per patient and assay coverage. Missing receptor status or an unassayed gene cannot be recoded as a negative observation."
+      ],
+      "scope_changes": [
+        "Clinical actionability of a subgroup is outside deterministic frequency scoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-20-breast-subtype-mutation-landscape"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-18-5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To evaluate MAPK pathway activation as an endocrine resistance mechanism, what is the cumulative frequency of MAPK pathway alterations in post-hormonal therapy HR+HER2- tumors?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "32d2bedfc3c8c89cc886771989abc93b1cca10c5fc3fa6abf9517d8a47a6e052",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "pathway mutation burden",
+      "skills": [
+        "variant-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Post-therapy eligibility, pathway genes, alteration mask, patient union, 2x2 test/sidedness and multiple samples.",
+        "Freeze therapy timing, receptor eligibility, pathway membership and alteration classes. Count each patient once in a pathway union even with multiple events."
+      ],
+      "scope_changes": [
+        "Alteration prevalence and cooccurrence do not establish pathway activation or an endocrine-resistance mechanism."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-21-endocrine-resistance-events"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-18-7",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify genomic mechanisms driving endocrine resistance, are ESR1 mutations and MAPK pathway alterations mutually exclusive or co-occurring in post-hormonal therapy HR+HER2- tumors?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f60578de329e3d6f41350eb47b8cc0e070ab0b2c9aa290abedec8bb79c4d614b",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "mutation cooccurrence",
+      "skills": [
+        "variant-analysis",
+        "association"
+      ],
+      "applications": [
+        "genome-variation",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Post-therapy eligibility, pathway genes, alteration mask, patient union, 2x2 test/sidedness and multiple samples.",
+        "Freeze therapy timing, receptor eligibility, pathway membership and alteration classes. Count each patient once in a pathway union even with multiple events."
+      ],
+      "scope_changes": [
+        "Alteration prevalence and cooccurrence do not establish pathway activation or an endocrine-resistance mechanism."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-21-endocrine-resistance-events"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-19-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify therapeutic targets downstream of CBFβ-SMMHC inhibition in inv(16) AML, which genes are most significantly downregulated upon AI-10-49 treatment?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a0f027d02462fa7c1e6598d504a1c5eb06bc894d6218bf26aadeb2c30d845af3",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "bulk differential expression",
+      "skills": [
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Treatment/vehicle design, replicate pairing, count filter, FDR, downregulation sign and ranking.",
+        "Match dose, time, model context and biological replicates; freeze effect orientation and rank statistic rather than using an unspecified most-significant list."
+      ],
+      "scope_changes": [
+        "Downregulation alone does not identify a therapeutic target or establish direct regulation."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-22-aml-treatment-rna"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-rnaseq-library-qc",
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast",
+        "real-rnaseq-differential-expression"
+      ]
+    },
+    {
+      "task_id": "da-19-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To map RUNX1 genomic targets that mediate AI-10-49 therapeutic effects, how does RUNX1 chromatin occupancy change upon CBFβ-SMMHC inhibition?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6eadfffcecee3f6ebafc96fd2ce4986b26b25e446c904d3126f0def2bcc09dcf",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "chromatin differential binding",
+      "skills": [
+        "chromatin"
+      ],
+      "applications": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Genome assembly, alignment QC, consensus peaks, background/control correction, normalization and differential model.",
+        "Require the actual TF assay, appropriate controls and assembly-consistent regions. ATAC accessibility is not a substitute for TF occupancy."
+      ],
+      "scope_changes": [
+        "Occupancy changes do not prove which targets mediate a therapeutic effect."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-23-aml-transcription-factor-occupancy"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-19-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To identify enhancers that drive leukemia maintenance and could be targeted therapeutically, which genomic regions show reduced H3K27ac signal upon AI-10-49 treatment?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2d4b1336db08e02fae17e7f90f7f4e6adaab68d5215794e5417d0c3413e51b37",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "chromatin differential binding",
+      "skills": [
+        "chromatin"
+      ],
+      "applications": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Enhancer definition, overlap, signal/control correction, normalization, differential design and decreasing rank.",
+        "Freeze enhancer annotation and signal/control normalization. Promoter exclusion or enhancer attribution must be explicit rather than guessed from nearby genes."
+      ],
+      "scope_changes": [
+        "Acetylation changes do not establish enhancer necessity or leukemia-maintenance causality."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-24-aml-enhancer-acetylation"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-19-6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To understand how CBFβ-SMMHC inhibition affects chromatin landscape in inv(16) AML, does AI-10-49 treatment lead to global changes in chromatin accessibility?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "10bf6d0cff1302d305b6fd2c9f75806216d9e33447116c7348dac7a40f3cca31",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "chromatin accessibility",
+      "skills": [
+        "chromatin"
+      ],
+      "applications": [
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Global-shift estimand, reference/spike-in, quantile/statistical test, peak universe and normalization; relative counts alone cannot establish absolute global change.",
+        "An absolute-shift claim requires a suitable measured anchor. Without it, author a relative-distribution task and label the endpoint change rather than inventing an anchor."
+      ],
+      "scope_changes": [
+        "Defer absolute global-accessibility conclusions when only relative library-normalized counts exist. This is an evidence limitation, not an LLM-scoring problem."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-25-aml-atac-global-shift"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-20-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To validate our primary cell screening platform before compound profiling, do the four primary cell types show distinct or overlapping baseline transcriptional signatures, and which cell types are most similar to each other?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "76ccbbef39bede02e13c02304bd7426f6e0e8ba7052b4eaec0c2fc613f5879ca",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "transcriptome similarity",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Baseline-only eligibility, gene universe, normalization, batch/donor adjustment, sample versus centroid similarity and PCA interpretation.",
+        "Keep exposed samples out of baseline estimation; distinguish donor/sample distances from cell-type centroid distances and declare batch adjustment."
+      ],
+      "scope_changes": [
+        "Baseline separation does not by itself validate an entire screening platform."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-26-primary-cell-baseline-similarity"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-20-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To confirm BFA's mechanism of action as a secretory pathway disruptor, which MSigDB Hallmark pathways are suppressed by BFA treatment across cell types?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "905cf665141f9418963b94e22679a90346794e452920d2a986ecd8657883aa19",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "perturbation enrichment",
+      "skills": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Matched vehicle, treatment dose/time, DE fit, signed ranked enrichment versus ORA, set universe and cross-type rule.",
+        "Preserve matched vehicle, dose/time and observed cell types. Fix ranked enrichment versus overrepresentation and the gene-set universe before scoring."
+      ],
+      "scope_changes": [
+        "Pathway expression evidence can be consistent with a mechanism but does not experimentally confirm it."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-27-primary-cell-pathway-response"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-20-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To inform tissue-specific safety and efficacy assessments, does dabrafenib show consistent or divergent transcriptional responses across the four primary cell types?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "be8d4c6c7417e1dbc1c7f21ab3f3ac1243f77859eb9f7337f2e3947c86b1e2c1",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "factorial differential expression",
+      "skills": [
+        "differential-expression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Full-rank factorial design, within-type contrasts, interaction/divergence statistic, tested-gene universe and dose/time matching.",
+        "Freeze the full-rank factorial model and divergence rule. Opposite significance calls alone do not prove different effects."
+      ],
+      "scope_changes": [
+        "Expression divergence does not establish tissue-specific safety or efficacy."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-28-primary-cell-compound-divergence"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-rnaseq-population-interaction"
+      ]
+    },
+    {
+      "task_id": "da-24-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Use the gwas summary to find share genetic factors among different metabolites.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4f267ecefffc4531a98de73059c7280efd5f6b0f10aae4ec5ee2fb2e9e7a644d",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cross trait genetics",
+      "skills": [
+        "population-genetics",
+        "association"
+      ],
+      "applications": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Choose exactly one endpoint before authoring: genome-wide genetic correlation, locus-overlap enrichment or locus colocalization; freeze trait pair, LD, overlap and significance rule.",
+        "Defer this card from implementation selection until traits, statistic and required allele/LD metadata define one coherent question. Existing named alternatives remain research leads only."
+      ],
+      "scope_changes": [
+        "Do not assign an arbitrary deterministic statistic and count it as full coverage of the unspecified source question."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-29-cross-trait-gwas-alternatives"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-25-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For TCGA dataset, if we want to focus on only Pathogenic/Oncogenic alterations, what are the top mutated genes? Is there any way to visualize the results? At genomics level, is there any gene associates with clinical T stage?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b9a89af511477cbbd9382f3c778e020dff950169a060169516f294f8634a4509",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "mutation clinical association",
+      "skills": [
+        "variant-analysis",
+        "association"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Classification cutoff, multi-sample collapse, top-N rule, stage ordinal/categorical model, covariates and FDR.",
+        "Pin the classification source/date and keep pathogenicity distinct from molecular consequence. Clinical T stage needs explicit ordinal/categorical encoding."
+      ],
+      "scope_changes": [
+        "Plots may be inspected without grading aesthetics. If a specific visual output becomes mandatory, record its ungraded scope rather than adding a judge."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-30-tumor-variant-stage"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-26-2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using CCLE cancer cell line gene expression, and depmap scores in cell lines and patients. Analyze and identify which biomarkers are statistically significant in BRCA when predicting TCGA patient-level DepMap scores, specifically focusing on those that are present in patient data but do not manifest in cell line models",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "ac544713a097b57d539221de482a69f4a2e2d394599095e8e6795206fe8535e8",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "dependency association",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "transcriptomics",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Patient score inference/provenance, feature matching, BRCA eligibility, train/test split, cohort-specific association and direct effect heterogeneity.",
+        "Retain model lineage and training/evaluation separation. Patient significance plus cell-line nonsignificance is not sufficient evidence of different effects."
+      ],
+      "scope_changes": [
+        "Patient dependency predictions are not observed patient knockout outcomes. No such measured truth or clinical validation is claimed."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-31-patient-cell-line-dependency"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-26-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Based on the provided multi-omics data and patient-level dependency scores, predict synthetic-lethal partners for loss-of-function events in BRCA. Combine statistical evidence from lasso regression linking molecular features to dependency, with mutual-exclusivity testing against the mutation matrix, and with paralog and protein-protein interaction priors. Rank candidates by translational relevance.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bade8bd365c8a09121ff71f82d5e1b0a3c5db637203ab493e0d382c420026b34",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "synthetic lethality prioritization",
+      "skills": [
+        "regression",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "genome-variation",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Loss-of-function mask, nested-CV lasso and hyperparameter selection, held-out metric, exclusivity test, prior versions and transparent ranking weights.",
+        "Freeze folds, loss-of-function eligibility, models and hypothesis families. A prespecified numerical ranking can be graded as an authored prioritization rule, with its weights exposed."
+      ],
+      "scope_changes": [
+        "Defer free-form ranking by translational relevance and claims of validated synthetic lethality. Arbitrary weights cannot replace that judgment or earn full source-endpoint coverage."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-32-synthetic-lethality-ranking"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-3-4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze whether tumor mutational load is associated with patient response. Perform statistical testing (specify which test was used) and report correlation or association metrics.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d6646e41a209b982d8d79c0fabd9d2b583db6bd22fb180d55fd220e56fd1ca29",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "clinical association",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Callable-territory adjustment, burden model, sparse variant eligibility, mutation-negative controls, statistical test and multiplicity.",
+        "Keep callable territory, patient denominator and mutation-negative controls explicit. The per-variant task requires variant identities, not only gene-level burden."
+      ],
+      "scope_changes": [
+        "Associations with response do not prove treatment sensitivity mechanisms."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-33-mutation-burden-response"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-3-5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using Supplementary Table 1D, identify which specific mutations are significantly enriched in responders or non-responders. Report statistical significance.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "1b54052756f43c9bdc7b13a98f440d62293e807c8f2aa0efb43b835ebc05d79a",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "mutation cooccurrence",
+      "skills": [
+        "variant-analysis",
+        "association"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Callable-territory adjustment, burden model, sparse variant eligibility, mutation-negative controls, statistical test and multiplicity.",
+        "Keep callable territory, patient denominator and mutation-negative controls explicit. The per-variant task requires variant identities, not only gene-level burden."
+      ],
+      "scope_changes": [
+        "Associations with response do not prove treatment sensitivity mechanisms."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-33-mutation-burden-response"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-4-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Can you perform Non-Negative Matrix Factorization (NMF) to identify the optimal patient classification based on tumor immune microenvironment composition?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b5ab3639ee0c5630baf085f30ff2145bdc2fd2cdf4f1f11a92d5e5f1acdba9fc",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "matrix factorization subtyping",
+      "skills": [
+        "dimension-reduction",
+        "clustering"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Nonnegative scaling, missing values, rank search, restart seeds, stability criterion and subtype labeling invariant.",
+        "Define optimal within a fixed candidate grid using an outcome-independent criterion and tie rule. Preserve factor-label/scale nonidentifiability in verification."
+      ],
+      "scope_changes": [
+        "Defer claims that one partition is the uniquely correct biological patient classification."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-34-immune-composition-nmf"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-4-6",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "What proportion of non-MPR patients have high Texp cell levels that predict favorable recurrence-free survival despite lack of pathological response?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c15f6d1578f2e144cc87e8dc7ac2790a87d178bdd0a92f0ecb30142a8ff609ac",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "survival stratification",
+      "skills": [
+        "survival"
+      ],
+      "applications": [
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "High-score cutoff before outcomes, nonresponse cohort, recurrence time origin, censoring and favorable-survival criterion. Clarify whether the requested proportion concerns high-score nonresponders or the intersection with a fixed-time survival endpoint; these denominators differ and the public wording alone does not settle it.",
+        "Specify whether the fraction means high-score/nonresponder membership or an intersection with a fixed-time survival outcome. Report its numerator and denominator; censoring does not mean survival or death."
+      ],
+      "scope_changes": [
+        "Until this proportion is defined, the exact endpoint remains unresolved. A retrospective survival association does not validate prediction."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-35-cell-score-survival"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-clinical-kaplan-meier"
+      ]
+    },
+    {
+      "task_id": "da-4-7",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which expanded Tex-relevant TCR clonotypes are shared across multiple patients and could serve as candidates for TCR-T cell therapy development?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3c6b8bda734ff17cfec8cba10b3e5d3b7883b46a50e430d890ca0644dae05674",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "repertoire sharing",
+      "skills": [
+        "repertoire"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Clonotype identity, paired-chain requirement, expansion threshold, cell-state gate and distinct-patient sharing threshold.",
+        "Freeze clonotype equivalence, expansion thresholds and cell-state evidence. Repeated cells and chains must not become extra patients."
+      ],
+      "scope_changes": [
+        "Defer therapeutic TCR suitability and antigen-specific function without relevant independent measurements. Shared expansion alone is component evidence for that conclusion."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-36-shared-expanded-tcr"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-5-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To prioritize druggable targets for pancreatic cancer (PDAC), which proteins are promising as drug targets by considering both significant overexpression in tumors compared to normal tissue AND dependency in cancer cell lines based on CRISPR knockout screens?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0f8be1b1ead03df3195ad3ded4810c4c6fbc35cfbe98f2f8ba05e417aa483af2",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "multi omics target prioritization",
+      "skills": [
+        "abundance",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Tumor contrast, dependency threshold and cell-line relevance, ID ambiguity, druggability criterion and ranking.",
+        "Freeze assay mappings, cell-line eligibility, effect/dependency thresholds and the evidence-combination rule. Missing dependency evidence is not a negative screen."
+      ],
+      "scope_changes": [
+        "Retain target prioritization under declared rules; clinical promise, drug efficacy and safety are ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-37-tumor-protein-dependency-targets"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-5-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Which activating phosphosites on druggable proteins are significantly elevated in tumors and supported by CRISPR dependency of the host gene in matched cancer cell lines?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "48535bc348ac83d4d88751aff5d42d67ec0273551cf792d84f5f30adeb22cef3",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "phosphoproteomics target prioritization",
+      "skills": [
+        "abundance",
+        "evidence-ranking"
+      ],
+      "applications": [
+        "proteomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Site localization/activation definition, tumor contrast, total-protein confounding adjustment, dependency threshold and rank.",
+        "Preserve residue/isoform identity, localization confidence and total-protein adjustment where required. Increased abundance cannot itself define an activating site."
+      ],
+      "scope_changes": [
+        "Unannotated activation or therapeutic benefit is unresolved; a host-gene effect does not validate the individual phosphosite."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-38-activating-phosphosite-targets"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-6-2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "How does gene expression in vastus lateralis skeletal muscle (SKM-VL) dynamically change over the 8-week training course in males and females, and what are the predominant sex-specific or shared temporal expression patterns?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b15e788a5b6276849a554d2d30ce59a11a9851b25b1148104775a5f8f4b7b0fe",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "longitudinal expression",
+      "skills": [
+        "differential-expression",
+        "clustering"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Time coding, participant random/fixed effects, missing visits, sex-by-time test, trajectory distance/cluster count and FDR. A participant fixed intercept absorbs time-invariant sex main effects; use estimable time and sex-by-time contrasts or a justified random-intercept model, and require a full-rank design.",
+        "Keep participant identity and missing visits. A participant fixed intercept absorbs the sex main effect; do not demand a nonidentifiable coefficient."
+      ],
+      "scope_changes": [
+        "Temporal expression patterns are measured associations, not proof of sex-specific causal training mechanisms."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-39-muscle-sex-timecourse"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-6-5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To what extent does endurance training elicit coordinated molecular responses across different organs, and which tissues exhibit the most similar changes?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f6df076241c574a9dc77f477466e78e1a3d84c331b3127451fdaffa5b0635a89",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cross tissue response",
+      "skills": [
+        "association",
+        "differential-expression"
+      ],
+      "applications": [
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Within-organ response model, paired versus independent design, shared feature universe, effect scale and similarity metric.",
+        "Compare response effects rather than baseline tissue expression. Distinguish repeated organ measurements within an animal from independent organ cohorts."
+      ],
+      "scope_changes": [
+        "Coordinated molecular changes do not establish cross-organ causal signaling."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-40-multi-organ-training-response"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-8-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the multi-omics profiling data, which specific hypertension-associated metabolites show a statistically significant positive correlation with systolic blood pressure specifically within the 'Bread-spiker' phenotypic group after adjusting for age and BMI? Classify bread-spikers as subjects whose per-subject mean bread-meal peak glucose rise (peak post-meal glucose minus pre-meal baseline, averaged across replicates, excluding any meal where a mitigator/preload was consumed) is above the cohort median. Use linear regression with age and BMI as covariates to test each metabolite, and list the top 10 metabolites passing the significance and direction criteria.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "f470e6624712b81fbc1ccbd24e4456f3306aca6e827a4c5b6f490763719247ab",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "adjusted cohort association",
+      "skills": [
+        "association",
+        "regression"
+      ],
+      "applications": [
+        "metabolomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Glucose window, exclude preload meals, replicate weighting, median ties, positive beta, age/BMI adjustment, significance/FDR and top-10 ordering.",
+        "Exclude preload meals before averaging, use strictly above the cohort median, and freeze peak window, significance and rank rules. If fewer than ten metabolites qualify, return fewer rather than filling with nonsignificant ones."
+      ],
+      "scope_changes": [
+        "The subgroup and associations are computable; hypertension causation or clinical utility is ungraded."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-41-bread-spiker-metabolites"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-8-2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Calculate the interaction effect size between baseline insulin resistance status and the magnitude of peak glucose reduction observed in the protein-preloaded rice experiments compared to the fiber-preloaded experiments using the mitigator challenge data?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "47e78bc1f1167e556c6c834c72ae30bc21365e39ccea272a065fff20b2b5d65d",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "crossover interaction",
+      "skills": [
+        "regression"
+      ],
+      "applications": [
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Peak-reduction baseline, paired challenge eligibility, status cutoff, order/carryover terms, interaction scale and missing challenge policy.",
+        "Define the unpreloaded comparison, glucose window, status cutoff, treatment order and missing paired-challenge policy. Declare whether the estimand is peak reduction or a difference in reductions."
+      ],
+      "scope_changes": [
+        "A measured interaction does not establish a treatment recommendation."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-42-crossover-preload-interaction"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-8-3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the metabolomics quantification data and the participant phenotypic classifications, identify the top 10 differentially abundant metabolites between the 'potato-spiker' and 'grape-spiker' groups, and determine which specific lipid species among these top 10 statistically mediate the observed differences in insulin resistance and beta-cell function.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "61ede88367ecc2857df04f672480af34f92981a9a74221e0cf5c18d2f783a7ca",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "metabolomics mediation",
+      "skills": [
+        "abundance",
+        "causal-inference"
+      ],
+      "applications": [
+        "transcriptomics",
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Phenotype construction, abundance normalization, top-10 rule, lipid membership, mediator/outcome models, covariates and uncertainty.",
+        "Declare phenotype overlap, technical-replicate handling, covariates and mediator/outcome timing. Selection and mediation on the same samples require explicit exploratory interpretation or a designed evaluation protocol."
+      ],
+      "scope_changes": [
+        "Retain model-estimated indirect effects as statistics. Defer causal mediation claims when temporal ordering/confounding assumptions are unsupported; significance cannot verify those assumptions."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-43-metabolite-mediation"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "da-9-1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "For patients receiving nivo/chemo (anti-PD-1 + chemotherapy), what circulating T cell populations at baseline could serve as associative biomarkers for 1-year overall survival?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2b14fcdea310d72c3e9283fccb7ae5edfbdbfe6c310652dfc74a2981ee6c098d",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "survival association",
+      "skills": [
+        "survival"
+      ],
+      "applications": [
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "One-year estimand with censoring, biomarker scale/cutoff, cohort eligibility, covariates and multiple-testing universe.",
+        "Choose a one-year risk estimand or a hazard association over a specified follow-up window; they are different. Do not classify patients censored before one year as known one-year survivors."
+      ],
+      "scope_changes": [
+        "Association can be graded without a judge; prospective biomarker utility requires separate validation."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-44-baseline-tcell-survival"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "component-only",
+      "recipes": [
+        "real-clinical-kaplan-meier",
+        "real-clinical-adjusted-cox"
+      ]
+    },
+    {
+      "task_id": "da-9-7",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "To support biomarker validation, do circulating immune-cell frequencies correlate with serum protein levels on-treatment at C2D1?",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "bed4a95c44a1b80025cc0dd228e57fa21c9891b08dcc3b0222b446e2f6f85f1d",
+      "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "source_group": "",
+      "workflow": "cross omics correlation",
+      "skills": [
+        "association"
+      ],
+      "applications": [
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Same-visit window, patient eligibility, cell/protein QC, correlation metric, zero/missing policy and full pairwise FDR.",
+        "Use cell-population frequencies rather than epitope median signal intensities. Match the declared on-treatment visit and preserve one observation per patient/pair."
+      ],
+      "scope_changes": [
+        "Cross-modal correlation supplies association evidence; it does not by itself validate a biomarker or establish a longitudinal treatment effect."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "id": "biomni-design-45-on-treatment-immune-protein"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

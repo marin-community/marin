@@ -1,0 +1,206 @@
+{
+  "tasks": [
+    {
+      "task_id": "opticnerve_merfish_spatial_colocalization_enrichment",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Mouse optic nerve sections profiled by single-cell spatial transcriptomics. Three distinct experimental conditions are present in `obs.condition`, identified ONLY as `condition_A`, `condition_B`, and `condition_C`. These three labels correspond to {adult, aged, aged_intervention} in some unknown order; the mapping is intentionally hidden and you do NOT need to identify it.\n\nThe h5ad provides a raw cell × gene count matrix, 2D spatial coordinates per cell, and a small set of `obs` columns (`section`, `condition`, `fov`, `volume`). `vocabulary.json` provides the controlled label sets you must select from.\n\nIdentify which cell-type pairs show the strongest spatial co-localization (enriched beyond chance) and which pair shows the strongest spatial avoidance (depleted below chance) in this tissue.\n\nReport:\n(1) The top 3 heterotypic (cross-cell-type) pairs with the strongest spatial co-localization, ordered from highest to lowest, each with its enrichment magnitude category.\n(2) The single heterotypic pair with the strongest spatial avoidance, with its enrichment magnitude category.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"top_3_colocalized_pairs\": [{\"cell_type_A\": \"<type>\", \"cell_type_B\": \"<type>\", \"enrichment_category\": \"<category>\"}, {\"cell_type_A\": \"<type>\", \"cell_type_B\": \"<type>\", \"enrichment_category\": \"<category>\"}, {\"cell_type_A\": \"<type>\", \"cell_type_B\": \"<type>\", \"enrichment_category\": \"<category>\"}], \"most_depleted_pair\": {\"cell_type_A\": \"<type>\", \"cell_type_B\": \"<type>\", \"enrichment_category\": \"<category>\"}}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "49cbcf9939de8ceb572bebeaad8a9f586f6b067528baf25c9576ce15418b20fb",
+      "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/opticnerve_merfish_spatial_colocalization_enrichment/eval.json",
+      "source_group": "",
+      "workflow": "section aware spatial neighborhood enrichment",
+      "skills": [
+        "cell-annotation",
+        "spatial"
+      ],
+      "applications": [
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "single-cell",
+        "spatial"
+      ],
+      "reframed_question": "Annotate cells under a frozen reference, compute heterotypic spatial pair enrichment against a declared section-aware null, and return the top three enriched pairs and strongest depleted pair with numerical scores and predefined magnitude bins.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Specify distance units, neighborhood scale, section boundaries and null strata; hidden condition names need not be decoded."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-long-section-aware-spatial-neighborhood-enrichment"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "visium_perineural_proximity",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Experimental context. These samples are 39 untreated primary PDAC tumors profiled by Visium spatial transcriptomics across 108 H&E sections (transcriptome-wide, ~18 cells per spot, FFPE) with co-registered Masson trichrome on serial slices. Peripheral-nerve niches occur as small focal clusters scattered through cancer-associated stroma. Define cohort baselines: tumor_baseline / np_baseline = cohort-aggregated median spatial distance from a tumor / normal-parenchyma compartment spot to its nearest peripheral-nerve niche; tumor_collagen_baseline / niche_collagen = cohort-aggregated median per-spot trichrome-collagen content for tumor / nerve-niche spots. Smaller distance = closer to nerve.\n\nTask. Provide a 4-facet characterization of peripheral-nerve-niche biology on this cohort: (1) order tumor_baseline vs np_baseline by median nerve-distance; (2) order niche_collagen vs tumor_collagen_baseline by median collagen content; (3) return the unordered top-2 paper-anchored PDAC tumor states whose distinctive cohort-level per-state nerve-distance signal is null-indistinguishable from a tumor-state-shuffle within-tumor permutation null (section-mix artifact, not biology); (4) return the unordered top-2 paper-anchored PDAC tumor states whose median nerve-distance is clearly closer to nerve than tumor_baseline AND survives the tumor-state-shuffle null.\n\nUse compartment_polarity_pattern_vocabulary for facet (1), niche_collagen_pattern_vocabulary for facet (2), and tumor_state_vocabulary for facets (3) and (4) — all provided in vocabulary.json (data node).\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"compartment_polarity\": \"<pattern_string>\", \"niche_collagen_vs_tumor\": \"<pattern_string>\", \"section_mix_artifact_states\": [\"<state_string>\", \"<state_string>\"], \"perineural_closer_states\": [\"<state_string>\", \"<state_string>\"]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d2fe08d058d2f85e41f73e1774841b3297865ab897590fbca268bfa646e738a5",
+      "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/visium_perineural_proximity/eval.json",
+      "source_group": "",
+      "workflow": "spatial image and compartment proximity",
+      "skills": [
+        "spatial",
+        "image-analysis",
+        "group-comparison"
+      ],
+      "applications": [
+        "transcriptomics",
+        "bioimaging"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Calculate the source-defined compartment distances and collagen summaries; apply a frozen within-tumor state-shuffle null and section aggregation policy. Return each requested ordering and state set with complete measured and null statistics.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve registration uncertainty and pixel-to-distance scaling; pooling spots can create section-mix artifacts and pseudoreplication."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-long-spatial-image-and-compartment-proximity"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "lineage_metastasis_multilayer_niche_mapping",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Experimental context. These data come from a spatial transcriptomics + Cas9 lineage-tracing study of a Cre-inducible Kras;p53-driven mouse model of lung adenocarcinoma. One metastasis-bearing primary lung tumor and distant metastatic arrays from the same animal are included. Tissue and sample labels have been anonymized.\n\nTask. Identify expression-program changes in the primary pro-metastatic niche: regions of the primary tumor that are most lineage-similar to the distant metastases. Compare these met-like primary-tumor regions against non-met-like regions of the same primary tumor. For each reported program, state whether it is enriched or depleted in the met-like primary niche.\n\nUse labels from `vocabulary.json` (provided as a data node).\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"metastatic_niche_program_calls\": [{\"program\": \"<program>\", \"direction\": \"<enriched_or_depleted>\"}], \"rejected_or_ambiguous_programs\": [\"<program>\", \"...\"], \"diagnostics\": {\"notes\": \"<brief text>\"}}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "74d6e6d2f766f78ebb3a0305a5e41bc78140ca44e540abcb3a33e0e471c2fc02",
+      "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/lineage_metastasis_multilayer_niche_mapping/eval.json",
+      "source_group": "",
+      "workflow": "lineage to spatial expression programs",
+      "skills": [
+        "phylogeny",
+        "spatial",
+        "differential-expression",
+        "enrichment"
+      ],
+      "applications": [
+        "genome-variation",
+        "transcriptomics"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Define lineage similarity to metastases from the observed tracing data, identify primary-tumor regions under a frozen cutoff, and compare prespecified expression programs against the remaining primary regions with uncertainty and ambiguous-result rules.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "One animal supports within-sample analysis, not population-level metastasis claims; keep lineage-based region selection independent of expression endpoints."
+      ],
+      "scope_changes": [
+        "One animal supports a within-sample association; the reward does not assert a population-level causal driver of metastasis."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-long-lineage-to-spatial-expression-programs"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "xenium_organoid_spatial_niche_disruption",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Experimental context. These samples are 1-month human brain organoids derived from hPSCs. WT organoids are compared to two CRISPR-engineered glioblastoma brain organoid models: PRO engineered glioblastoma organoids carrying proneural-like GBM-associated mutations, and MES engineered glioblastoma organoids carrying mesenchymal-like GBM-associated mutations. The data include matched whole-transcriptome scRNA-seq and Xenium spatial transcriptomics from the same organoid system.\n\nTask. Return the top 3 biologically most important niche changes explaining architectural disruption across WT, PRO, and MES, and for each, order the abundance of the niche across these conditions.\n\nUse niche names and abundance-ordering patterns from vocabulary.json (provided as a data node).\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"top_3_niche_changes\": [{\"niche\": \"<niche_string>\", \"abundance_ordering\": \"<ordering_string>\"}, {\"niche\": \"<niche_string>\", \"abundance_ordering\": \"<ordering_string>\"}, {\"niche\": \"<niche_string>\", \"abundance_ordering\": \"<ordering_string>\"}]}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "751a2c61141dd4de728bd7f1952d254820841724f9b32ad6c0705b3292277f1a",
+      "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/xenium_organoid_spatial_niche_disruption/eval.json",
+      "source_group": "",
+      "workflow": "reference to spatial niche comparison",
+      "skills": [
+        "integration",
+        "cell-annotation",
+        "spatial",
+        "composition"
+      ],
+      "applications": [
+        "transcriptomics",
+        "bioimaging"
+      ],
+      "context_tags": [
+        "single-cell",
+        "spatial"
+      ],
+      "reframed_question": "Use a pinned niche definition and rank condition-associated niche changes by a declared effect-size and uncertainty criterion. Return the top three niches with WT/PRO/MES abundance orders and the complete ranking evidence.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Freeze the definition and ranking of niche changes; apparent architecture differences can reflect segmentation, cell density or annotation uncertainty."
+      ],
+      "scope_changes": [
+        "Replaces biologically most important with an explicit effect ranking. Niche abundance differences do not by themselves explain architectural causality."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-spatialbench-long-reference-to-spatial-niche-comparison"
+        }
+      ],
+      "annotation_basis": "question-specific review",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

@@ -1,0 +1,295 @@
+{
+  "tasks": [
+    {
+      "task_id": "mlabaffinity_s7_antibody_display_sorting_0066",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are given two tables and the code that turns them into model inputs, from a heavy-chain CDR engineering campaign for a therapeutic antibody. `training_library_binding.csv` has 4,000 heavy-chain variants from a sorted display library, each with a measured antigen-binding class label and a measured off-target (ovalbumin) binding class label -- the data used to fit two linear discriminant (LDA) models, one per property, on a one-hot encoding of the full heavy-chain variable-domain sequence. `onehot_gen.py` is the actual encoding function those models were built on. `igg_binding.csv` is a 96-variant held-out soluble-IgG panel that includes the unmutated background sequence, several already-engineered leads, and a `Blosum62` flag marking the subset the researchers specifically built to test whether the fitted models say anything useful about CDR positions the 4,000-variant library never touched.\n\nThe researchers' own write-up describes these one-hot models as \"insensitive to variation at novel sites in the CDRs ... because they are defined based on the sequences of the antibody mutants in the library.\"\n\nWithin the `Blosum62`-flagged rows of the held-out panel, some variants carry an added mutation at a CDR position genuinely outside the eight positions the library was built to vary; others differ from the unmutated background only by a new combination of residues at those same eight positions. Nothing in the table names which is which -- that has to come from comparing each sequence against the panel's own unmutated background entry.\n\nFor every flagged variant that does carry a mutation at a position genuinely outside those eight, determine which ones the fitted antigen-binding model can be trusted to say anything real about, versus which should be treated as no more informative than the unmutated background's own prediction when deciding whether to advance them. Then, restricted to that same full group of flagged variants carrying a mutation outside those eight positions, determine whether the model's population-level correlation with measured antigen binding is statistically real, and separately whether its correlation with measured off-target binding is statistically real. Report the exact set of variants that population draws from.\n\nSeparately, report how many of the 4,000 library sequences carry a residue substitution at a position outside the eight the library was designed to vary.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"informative_candidates\": [\"<Sample id>\", \"...\"], \"correlation_population\": [\"<Sample id>\", \"...\"], \"affinity_significant\": <true|false>, \"specificity_significant\": <true|false>, \"n_incidental_training_clones\": <integer>}\n</EVAL_ANSWER>\n\n- informative_candidates: the `Sample` values (exactly as they appear in `igg_binding.csv`) of the genuinely-novel-site variants whose antigen-binding model score you would treat as real evidence.\n- correlation_population: the `Sample` values (exactly as they appear in `igg_binding.csv`) of every genuinely-novel-site variant you actually included when computing both correlations below.\n- affinity_significant / specificity_significant: whether the model's correlation with measured antigen binding, and separately with measured off-target binding, restricted to that same genuinely-novel-site group, clears ordinary statistical significance.\n- n_incidental_training_clones: how many of the 4,000 training-library sequences carry a substitution at a position outside the eight the library was designed to vary.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "6cfeccfa912f6ca5c876a1f9d22216f3b4e85b04ba2847fce01f4046d1514289",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/mlabaffinity_s7_antibody_display_sorting_0066/eval.json",
+      "source_group": "",
+      "workflow": "Audit representation coverage and predictive evidence at previously unvaried sequence positions",
+      "skills": [
+        "association",
+        "model-evaluation",
+        "variant-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Novel amino-acid positions and novel combinations at known positions are distinct shifts. Preserve the exact evaluation population; define significance tests and encoding behavior without using held-out labels for fitting."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-sequence-model-domain-shift"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "tcellengagerengineering_s6_imaging_flow_cytometry_0100",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A synapse-classification model was trained entirely on images from one T-cell-triggering stimulus, then applied to score synapse images collected under a second, mechanistically different T-cell-triggering stimulus. The only check on record for whether the model's calls still mean the same thing under the new stimulus is one additional expert's review of images from each of two antibody conditions, scored against the model's own predictions: macro-F1 = 0.86 on the first condition (396 images) and 0.85 on the second (227 images). Those figures are reported as confirming that the model generalizes across the switch in stimulus, and are being used to support treating the classifier's synapse-class frequency output as mode-of-action evidence ahead of a program decision on a candidate antibody.\n\nAttached is data from two separate re-annotation exercises the modeling team ran on its own original training-condition benchmark images (the stimulus the model was actually trained and tested on, not either antibody condition): a held-out panel independently re-annotated by four raters, for which the model's own per-image label and prediction are also available (first_round.csv, inter-rater-first-round.csv), and a second, non-overlapping panel independently re-annotated by five raters together with its own original consensus label (inter-rater-second-round.csv) -- no model predictions exist for this second panel.\n\nHow much weight should the reported 0.85/0.86 concordance carry as evidence that the classifier's calls still mean the same thing under the new stimulus?\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"validity_assessment\": \"<sufficient_confirms_generalization|insufficient_confirmed_mechanism_driven_degradation|insufficient_underpowered_single_rater_check>\", \"same_mechanism_baseline_sources\": [\"<first identifier>\", \"<second identifier>\"]}\n</EVAL_ANSWER>\n\nvalidity_assessment is your overall judgment of whether the reported concordance is adequate support for the mode-of-action use case, and if not, which of the two ways it falls short.\n\nsame_mechanism_baseline_sources is exactly two identifiers, chosen from the closed list below and copied exactly as written, naming which real, paper-reported artifacts constitute an adequate comparator for that judgment:\n\n- class_frequency_source_data_fig2ef\n- supplementary_annotation_crosscheck_dataset\n- appendix_scoring_verification_series\n- half_manual_annotation_time_reduction_experiment\n- cd19tcb_manual_check_figure\n- teplizumab_scoring_summary_entry\n- leave_one_donor_out_generalization_check\n- shap_feature_importance_comparison",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "fe8c256065c48d4207c59ce631e98da67195ec14d39c6446631f171c0689c27d",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/tcellengagerengineering_s6_imaging_flow_cytometry_0100/eval.json",
+      "source_group": "",
+      "workflow": "Compare classifier agreement and multi-rater reliability across distinct annotation panels",
+      "skills": [
+        "model-evaluation",
+        "image-analysis",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "visualization"
+      ],
+      "applications": [
+        "genome-sequence",
+        "immunology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The second panel has no model predictions, and same-condition reliability cannot directly quantify a new-stimulus performance drop. Keep images, raters and biological conditions distinct."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-classifier-annotation-reliability"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "cd98hccrossspeciesengineering_s8_pk_0035",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A CNS-shuttle programme profiled three independently engineered, species-cross-reactive bispecific antibody candidates (Shuttle-1, Shuttle-2, Shuttle-3) alongside a non-targeting IgG control in a single-dose wild-type mouse study (20 nmol/kg, intravenous). Protein was labelled with 125I by a direct, Pierce-type electrophilic (chloramine-T-style) iodination on tyrosine residues before dosing. Tissue was sampled by gamma counting at 1 hour, 1 day and 7 days post-dose across seven organs (Lung, Liver, Kidney, Heart, Spleen, Brain, Blood), with 3-4 replicate animals per (arm, organ, timepoint) combination, reported as percent injected dose per gram (%ID/g). The three shuttles' shared target, CD98hc, is expressed on brain endothelium as well as on peripheral tissue that includes kidney and spleen.\n\nThe programme's translational lead must choose a single shuttle candidate to advance into further development on brain-durability grounds, and decide whether this dataset supports committing to a once-weekly (or less frequent) dosing interval for what would be a brain-resident biologic.\n\nFrom the delivered biodistribution data alone, determine which shuttle (if any) is defensibly supported as the advancement pick on brain-durability grounds, what dosing-interval commitment (if any) the dataset supports for that pick, and, if the package falls short of a clean recommendation, what specifically limits the conclusion.\n\nYou must show the specific per-shuttle readouts your recommendation rests on. Report each shuttle's own observed mean 7-day Brain %ID/g value exactly as computed from the delivered biodistribution data -- this is a direct data readout, required regardless of which recommendation you reach, not a value you can derive from the study description alone.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"recommendation\": {\"recommended_shuttle\": \"<Shuttle-1|Shuttle-2|Shuttle-3|INDETERMINATE>\", \"dosing_interval_supported\": \"<WEEKLY|LONGER_THAN_WEEKLY|NOT_SUPPORTED>\"}, \"limiting_factor\": \"<NON_RESIDUALIZING_LABEL_BIAS|SMALL_SAMPLE_SIZE_AND_BIOLOGICAL_VARIABILITY|NONE_IDENTIFIED>\", \"brain_7d_shuttle1_pct_id_g\": <observed mean 7-day Brain %ID/g for Shuttle-1>, \"brain_7d_shuttle2_pct_id_g\": <observed mean 7-day Brain %ID/g for Shuttle-2>, \"brain_7d_shuttle3_pct_id_g\": <observed mean 7-day Brain %ID/g for Shuttle-3>}\n</EVAL_ANSWER>\n\n`recommended_shuttle` is your pick among the three named shuttles, or INDETERMINATE if the data does not support choosing one. `dosing_interval_supported` states the longest defensible dosing interval this package supports for the shuttle you name, or NOT_SUPPORTED if no interval commitment is defensible. `limiting_factor` names the single best-supported reason the package falls short of full support for a clean recommendation -- NON_RESIDUALIZING_LABEL_BIAS if the radiolabelling chemistry itself is what limits the conclusion, SMALL_SAMPLE_SIZE_AND_BIOLOGICAL_VARIABILITY if ordinary replicate/animal variability is the limiting concern instead, or NONE_IDENTIFIED if you judge the package fully sufficient for a clean pick. `brain_7d_shuttle1_pct_id_g`, `brain_7d_shuttle2_pct_id_g` and `brain_7d_shuttle3_pct_id_g` are the three shuttles' own observed mean 7-day Brain %ID/g values, read directly off the delivered data -- report the real numbers for all three regardless of which shuttle (if any) you recommend.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2b30d686f5a9efef8fe037f61b48a88416a93f546b5bafd4fded8e13243970f2",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hccrossspeciesengineering_s8_pk_0035/eval.json",
+      "source_group": "",
+      "workflow": "Summarize organ exposure while assessing what a radiolabel can establish about persistence",
+      "skills": [
+        "sequence-query",
+        "intervals",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "Radiolabel signal and intact biologic concentration are different quantities. Replicate variation and label retention bias are separate limits; these descriptive data do not independently validate a dosing interval."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-biodistribution-label-validity"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "A blood-brain-barrier (BBB) delivery program is comparing two non-targeted, bispecific IgG shuttle candidates head-to-head. Both candidates carry the identical non-targeted antibody payload; they differ only in which cerebrovascular target they engage to cross the BBB -- one engages CD98hc, the other engages the transferrin receptor (TfR-1). The attached data file reports three independent brain-delivery readouts collected for the two candidates in wild-type mice: whole-brain antibody concentration over time (by two quantification methods), a brain-fractionation assay separating vascular (capillary) from parenchymal tissue at an early timepoint, and fluorescence microscopy of brain sections at several timepoints after injection.\n\nDecide which candidate this delivery program should carry forward, and name the single readout your recommendation actually rests on. State explicitly why the other two readouts do not settle the question on their own, and why the readout you name does.\n\nAlso report a proof-of-work number: the fold-change in whole-brain antibody concentration between the two candidates, using the primary quantification readout at the final timepoint reported, expressed as the higher candidate's value divided by the lower candidate's value.\n\nReturn EXACTLY:\n<EVAL_ANSWER>{\"construct\": \"<CD98hc_shuttle|TfR1_shuttle>\", \"governing_readout\": \"<whole_brain_signal|capillary_depletion|microscopy>\", \"brain_concentration_fold_change\": <number>}</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "77b042d99a5d45f6db45b31683dddd27ebd6eda7bdf8e27d8d04b0be7898c81c",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084/eval.json",
+      "source_group": "",
+      "workflow": "Reconcile concentration, tissue fractionation and microscopy for delivery assessment",
+      "skills": [
+        "image-analysis",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "immunology",
+        "bioimaging"
+      ],
+      "context_tags": [],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "Whole-organ signal does not establish delivery to the desired compartment. Validate fractionation purity and imaging localization; scalar concentration ratios alone do not check the decision workflow."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-compartment-delivery-evidence"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "adc_doxlinker_nuclear_signal_nocall",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "This is an antibody-drug conjugate (ADC) linker-selection decision; the payload is a DNA-intercalating agent acting on genomic DNA. For five coded linkers (DL-1..DL-5) on two coded carriers (Carrier-X, Carrier-Y), nothing is precomputed: you have per-cell payload intensity in a nuclear and a cytoplasmic region plus each carrier's internalization movie. One linker gives by far the strongest signal. Decide whether to advance it, whether its delivery tracks carrier uptake, and how delivery should be judged.\n\n# Return schema\nlead_call_class: 1 advance it; 2 do not; 3 advance a different linker; 4 highest per carrier; 5 insufficient.\nuptake_delivery_relationship_class: 1 delivery increases with carrier uptake; 2 delivery does not track carrier uptake; 3 cannot be determined.\nbasis_class: 1 total payload per cell; 2 nuclear fraction; 3 delivery vs each carrier's internalization.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\"lead_call_class\": <int>, \"uptake_delivery_relationship_class\": <int>, \"basis_class\": <int>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "5fa0b6f5c6259902d25b5a6f222b4795fab2551603232a1beba7c6cde54cbdfb",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/adc_doxlinker_nuclear_signal_nocall/eval.json",
+      "source_group": "",
+      "workflow": "Compare payload localization with carrier uptake before interpreting delivery",
+      "skills": [
+        "statistics"
+      ],
+      "applications": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Total fluorescence, nuclear fraction and uptake correlation are different endpoints. Use matched units and explicit image-analysis/decision contracts; intensity alone does not establish effective delivery."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-subcellular-delivery-validation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "denton2022_s6_dose_selection_readout_choice",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are supporting a dose-finding stage of an oncostatin M neutralising antibody programme, which has to commit in advance to the readout or readouts its dose decision will be read on. The readouts available to it are the ones already collected in the completed repeat-dose study supplied here.\n\nWork from the supplied material. Decide which of the readouts reported there could carry a dose-selection decision, name the readout you would place last for that purpose, and state the rule you would apply. Report, for the readout you place last, what it reads in the higher antibody arm at the final scheduled post-dose visit and at how many post-dose visits it reads the same in both antibody arms. State separately the visits at which you would read the dose decision, the efficacy signal, and the top of the dose range. Report also, as the fitted model has it, how many times longer the slower of the two blood cell lineages this antibody perturbs takes to settle to a new level than the faster one does.\n\nSupplied:\n- clinical_study_posted_results.json: the posted results record of the completed repeat-dose study, reported arm by arm and visit by visit.\n- haematopoiesis_population_model.mod: a fitted population model control stream covering antibody disposition, ligand turnover and blood cell production.\n\nReport a single flat JSON object.\n\n<EVAL_ANSWER>\n{\n  \"dose_selection_readouts\": [\"<label>\"],\n  \"least_fit_readout\": \"<label>\",\n  \"least_fit_readout_final_visit_value\": <number>,\n  \"least_fit_readout_visits_reading_alike_in_both_antibody_arms\": <integer>,\n  \"decision_rule\": \"<one or two sentences>\",\n  \"dose_selection_visit_day\": <integer>,\n  \"efficacy_visit_day\": <integer>,\n  \"dose_ceiling_visit_day\": <integer>,\n  \"slower_lineage_settling_time_multiple\": <number>\n}\n</EVAL_ANSWER>\n\nFields:\n- dose_selection_readouts: one to three distinct labels, the readouts you would select doses on at the visit you nominate below.\n- least_fit_readout: one label, the readout that is least fit to carry a dose-selection decision at any post-dose visit.\n- least_fit_readout_final_visit_value: what that readout reports for the higher antibody arm at the last scheduled post-dose visit, in the unit the record reports it in.\n- least_fit_readout_visits_reading_alike_in_both_antibody_arms: the number of post-dose visits at which that readout reports the same value for both antibody arms.\n- decision_rule: the rule you would apply to the readouts you nominated.\n- dose_selection_visit_day: the study day of the visit at which you would read the dose decision.\n- efficacy_visit_day: the study day at which you would read the efficacy signal.\n- dose_ceiling_visit_day: the study day by which the top of the dose range could be claimed to have been characterised.\n- slower_lineage_settling_time_multiple: how many times longer the slower of the two blood cell lineages this antibody perturbs takes to settle to a new level than the faster one does, as the fitted model has it.\n\nEvery label must be copied exactly from this list, and no label may be repeated:\n  clinical_composite_disease_activity, swollen_joint_count, tender_joint_count, patient_global_assessment\n  physician_global_assessment, crp, esr, haq_di\n  fatigue_index, acr20_response, eular_response, modified_rodnan_skin_score\n  forced_vital_capacity, dlco, skin_biopsy_transcript_module, free_ligand_serum\n  total_ligand_serum, ligand_antibody_complex, free_ligand_skin_blister, drug_plasma_concentration\n  drug_trough_concentration, platelet_count, haemoglobin, red_cell_count\n  reticulocytes, reticulocyte_production_index, total_neutrophils, white_cell_count\n  lymphocytes, monocytes, erythropoietin, thrombopoietin\n  anti_drug_antibody_titre, colon_histopathology_score, colon_inflammatory_module, faecal_ligand\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e1268cb7d5233f448c453f99e6b51c57bf07fc9fff4ee426f8d5a10c6b2af25d",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/denton2022_s6_dose_selection_readout_choice/eval.json",
+      "source_group": "",
+      "workflow": "Reconcile posted longitudinal outcomes with a fitted population model to assess readout timing",
+      "skills": [
+        "trajectory",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "chemical-biology",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The released prompt requests free-text reasoning and several decisions without exposing the scorer. Keep observed readouts distinct from model-implied dynamics; predefined criteria are needed for a judge-free adaptation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-txbench-ab-longitudinal-readout-validity"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

@@ -1,0 +1,1927 @@
+{
+  "tasks": [
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:601",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sum score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUDT21},{NUP93},{OGFOD1},{PLLP},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "10ef80330e11797dc5e604fe3c18b83afdf1190a6f6084d97f2155b6269ea010",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:95",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ATP6V1B2},{CSGALNACT1},{INTS10},{LPL},{LZTS1},{SLC18A1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4c2ef9a3bcf3591a81db86fc3170c8a0a031fe08c3f3530ee262e162a24985af",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:240",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Platelet side fluorescence distribution width\nGenes in locus: {ENSG00000239395},{GCSAML},{NLRP3},{OR11L1},{OR13G1},{OR14A16},{OR14A2},{OR14C36},{OR14K1},{OR14L1P},{OR1C1},{OR2AJ1},{OR2AK2},{OR2B11},{OR2C3},{OR2G2},{OR2G3},{OR2L13},{OR2L2},{OR2L3},{OR2L5},{OR2L8},{OR2M2},{OR2M3},{OR2M4},{OR2M5},{OR2M7},{OR2T12},{OR2T33},{OR2T8},{OR2W3},{OR6F1},{OR9H1P},{TRIM58}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d38fd42d0f07382690c637949b704801a3f791ef37bc92dced58871fa0d9b8f1",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:460",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {AMFR},{ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUDT21},{NUP93},{OGFOD1},{PLLP},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "407dfb44ccfeaa53f1ec8a041dce388f964e3483176ba64f17ff4b0911cccbd2",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:557",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {CITED4},{CTPS1},{EXO5},{FOXO6},{KCNQ4},{NFYC},{RIMS3},{SCMH1},{SLFNL1},{SMAP2},{ZFP69},{ZFP69B},{ZNF684}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "12ebaddce93f330bf2dd54b1f40184a8700d3beab23280efe94c527827f3147f",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:206",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Central nucleus volume\nGenes in locus: {BANK1},{MANBA},{NFKB1},{SLC39A8},{UBE2D3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "0acffa2996488b1f471088f4d9b37d5c96fde1b2b2c4e52e6b3652a1d52df6c0",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:392",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{DOK4},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "13b32c98c5b2e1a53d12ebbb6a828b4c84c088718c24a6b4df064f29e4a5ce64",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:397",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{OGFOD1},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "360ff025670f377507880eb25d2f3cbd76f9fa3ac92bbee2dc6f2561fcea1c0d",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:536",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sum score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{OGFOD1},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "ea7fbe2954c6a1cc5b1e95ccbf949d0b71c1fdd2fa9198f952ae801019102880",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:217",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Smoking initiation (MTAG)\nGenes in locus: {BDNF},{CCDC34},{KIF18A},{LGR4},{LIN7C},{METTL15}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e4b24b11b90e01e436b170ca79719d1c1df9e74d15e064e7ec28115fdb293432",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:4",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Anterior amygdaloid area volume\nGenes in locus: {BANK1},{CISD2},{MANBA},{NFKB1},{SLC39A8},{SLC9B1},{UBE2D3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d93e43300ed58f4e77cd7022afd3ddb916bd970641d10267336d3bb0e37ef9c7",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:568",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {AMFR},{ARL2BP},{BBS2},{CCL22},{CETP},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUDT21},{NUP93},{OGFOD1},{PLLP},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "815a55e8aaaf56a3c0350dcd7041ce346f7d738ccde95a6f90db07bd60dc2111",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:98",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Metabolite levels (propyl 4-hydroxybenzoate sulfate)\nGenes in locus: {APOBR},{ATP2A1},{ATXN2L},{CD19},{CLN3},{EIF3C},{EIF3CL},{ENSG00000261832},{GSG1L},{IL27},{LAT},{NFATC2IP},{NPIPB6},{NPIPB7},{NPIPB8},{NPIPB9},{NUPR1},{RABEP2},{SBK1},{SGF29},{SH2B1},{SPNS1},{SULT1A1},{SULT1A2},{TUFM},{XPO6}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "fc19f3c5d05db2474f97f96cd7f0e963eb60d028625d21b03f44f6d8f0666f51",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:406",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Triglyceride to HDL cholesterol ratio\nGenes in locus: {BACE1},{CEP164},{DSCAML1},{FXYD2},{FXYD6},{FXYD6-FXYD2},{IL10RA},{PAFAH1B2},{PCSK7},{RNF214},{SIDT2},{SIK3},{SMIM35},{TAGLN},{TMPRSS13}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "9c818317debde76cb7f9f8667672a70aba77295b666d2dc1a534c1e8c8443997",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:502",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {B4GALNT3},{CCDC77},{IQSEC3},{KDM5A},{NINJ2},{RAD52},{SLC6A12},{SLC6A13},{WNK1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "254a4b857df3f8b29dd59f2e3f979d90c5da1aac0e3ae0e6631ff9d00c1b622e",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:47",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{OGFOD1},{PLLP},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a52e71d1efd16beb97b566cd47f9ae42a37d7a072fbe9a71ae61ba690429e0ec",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:32",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {APOA1},{APOA4},{APOA5},{APOC3},{BUD13},{PAFAH1B2},{SIK3},{ZPR1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7ae3aae35d8af733de4216a046d4c0f144a855f6a227aa4d9ed8a722d5210cad",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:200",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Central nucleus volume\nGenes in locus: {BANK1},{MANBA},{NFKB1},{SLC39A8}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "fa62874c7b56afb41c38357455df3c6a395f581c1bae8738abd649f068e6aab6",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:134",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{DOK4},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "13b32c98c5b2e1a53d12ebbb6a828b4c84c088718c24a6b4df064f29e4a5ce64",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:27",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Medial nucleus volume\nGenes in locus: {BANK1},{PPP3CA},{SLC39A8}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3b50c2f37b5b3d8530be7b0199bbaa464e5644b48d244a8b7046eb895bfba766",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:559",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sum score\nGenes in locus: {ABHD1},{AGBL5},{ATRAID},{BABAM2},{C2orf16},{CAD},{CCDC121},{CGREF1},{DNAJC5G},{DPYSL5},{EIF2B4},{EMILIN1},{FNDC4},{GCKR},{GPN1},{GTF3C2},{IFT172},{KHK},{KRTCAP3},{MAPRE3},{MPV17},{MRPL33},{NRBP1},{OST4},{PPM1G},{PREB},{PRR30},{RBKS},{SLC30A3},{SLC4A1AP},{SLC5A6},{SNX17},{SUPT7L},{TCF23},{TMEM214},{TRIM54},{UCN},{ZNF512},{ZNF513}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "fa3cc947e5b8af0fbf7dde712e02657d78d53834304c5ed99368ac91045537e8",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:230",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{DOK4},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "13b32c98c5b2e1a53d12ebbb6a828b4c84c088718c24a6b4df064f29e4a5ce64",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:489",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {AP5B1},{BANF1},{C11orf68},{CATSPER1},{CCDC85B},{CD248},{CFL1},{CNIH2},{CST6},{CTSW},{DPF2},{DRAP1},{EFEMP2},{EHBP1L1},{EIF1AD},{FAM89B},{FIBP},{FOSL1},{FRMD8},{GAL3ST3},{KAT5},{KCNK7},{KLC2},{LTBP3},{MAP3K11},{MUS81},{OVOL1},{PACS1},{PCNX3},{RAB1B},{RELA},{RIN1},{RNASEH2C},{SART1},{SCYL1},{SF3B2},{SIPA1},{SLC25A45},{SNX32},{TIGD3},{TMEM151A},{TSGA10IP},{YIF1A},{ZNRD2}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "40c50d11ce3e83702eb46d3f8bb13dcbf02f285ff1247ae529eb3a87bfc81fff",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:378",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ADGRG5},{ARL2BP},{BBS2},{CCDC102A},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{DOK4},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "998aa21e6f300fd67df58eab354a21622bd64b7c92e69ddb0287c71a15e30243",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:288",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{OGFOD1},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "360ff025670f377507880eb25d2f3cbd76f9fa3ac92bbee2dc6f2561fcea1c0d",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:418",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Neonatal circulating Complement Component 4 (C4) protein concentration\nGenes in locus: {ABHD16A},{AIF1},{APOM},{ATF6B},{ATP6V1G2},{ATP6V1G2-DDX39B},{BAG6},{C2},{C4A},{C4B},{C6orf47},{CFB},{CLIC1},{CSNK2B},{CYP21A2},{DDAH2},{DDX39B},{DXO},{EGFL8},{EHMT2},{ENSG00000244255},{ENSG00000263020},{ENSG00000285085},{ENSG00000289282},{ENSG00000291302},{FKBPL},{GPANK1},{HLA-B},{HLA-C},{HSPA1A},{HSPA1B},{HSPA1L},{LSM2},{LST1},{LTA},{LTB},{LY6G5B},{LY6G5C},{LY6G6C},{LY6G6D},{LY6G6F},{LY6G6F-LY6G6D},{MCCD1},{MICA},{MICB},{MPIG6B},{MSH5},{MSH5-SAPCD1},{NCR3},{NELFE},{NEU1},{NFKBIL1},{POU5F1},{PPT2},{PPT2-EGFL8},{PRRC2A},{PRRT1},{SAPCD1},{SKIC2},{SLC44A4},{STK19},{TCF19},{TNF},{TNXB},{VARS1},{VWA7},{ZBTB12}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e670fd199c37dc0e4aac026d94995a706b8f2543c63bfbc5b03a54739fd582b1",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:391",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Body mass index\nGenes in locus: {BBOX1},{BDNF},{CCDC34},{FIBIN},{LGR4},{LIN7C}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "44095d59263febaccdf48762419611f8d6aa84f76d24a2f546bfc7847766c0af",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:498",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Parkinson's disease\nGenes in locus: {ATP5ME},{CPLX1},{CTBP1},{DGKQ},{FGFRL1},{GAK},{IDUA},{MAEA},{MYL5},{PCGF3},{PDE6B},{PIGG},{RNF212},{SLC26A1},{SLC49A3},{SPON2},{TMEM175},{TMEM271},{UVSSA},{ZNF141},{ZNF721}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "88c7f977e85ada3acfca32584b2db5f6ca6858f441256ef37012b85cee3df8fe",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:138",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Metabolite levels (1-linoleoyl-GPG (18:2))\nGenes in locus: {ENSG00000257062},{ENSG00000285854},{GOLT1B},{GYS2},{IAPP},{LDHB},{PYROXD1},{RECQL},{SLCO1A2},{SLCO1B1},{SLCO1B3},{SLCO1B3-SLCO1B7},{SLCO1C1},{SPX}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "8a6c102f0d85bed2909c537aad36669a7a58b01dafce7ffb84d9aa2bb77e7468",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:62",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {APOA1},{APOA4},{APOA5},{APOC3},{BACE1},{BUD13},{CEP164},{PAFAH1B2},{PCSK7},{RNF214},{SIDT2},{SIK3},{TAGLN},{ZPR1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c1e3e5a0a8807e8bd74c0f04a309c1d3f2561b41b18d59f1c5e43daa1734f575",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:471",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Prostate cancer\nGenes in locus: {EPB41L5},{GLI2},{INHBB},{RALB},{TMEM185B}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "082419f47b8d3a5057ba95a26e342779f78954cf4e8194e3cc0e17306c8e1afb",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:128",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {APOA1},{APOA4},{APOA5},{APOC3},{BUD13},{PAFAH1B2},{SIK3},{ZPR1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7ae3aae35d8af733de4216a046d4c0f144a855f6a227aa4d9ed8a722d5210cad",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:623",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {APOA1},{APOA4},{APOA5},{APOC3},{BACE1},{BUD13},{CEP164},{PAFAH1B2},{PCSK7},{RNF214},{SIDT2},{SIK3},{TAGLN},{ZPR1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c1e3e5a0a8807e8bd74c0f04a309c1d3f2561b41b18d59f1c5e43daa1734f575",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:520",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Primary open angle glaucoma (multi-trait analysis)\nGenes in locus: {CFAP52},{DHRS7C},{GAS7},{GLP2R},{GSG1L2},{MYH1},{MYH13},{MYH2},{MYH4},{MYH8},{RCVRN},{USP43}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "801a841332d3ec6bb275966d2306df8b040e1a95d119b73c2b2d2b99b7618fb0",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:64",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ACTL9},{ADAMTS10},{ANGPTL4},{CD320},{CERS4},{ENSG00000167774},{FBN3},{HNRNPM},{KANK3},{MARCHF2},{MBD3L1},{MUC16},{MYO1F},{NDUFA7},{NFILZ},{OR1M1},{OR2Z1},{PRAM1},{RAB11B},{RPS28},{ZNF414},{ZNF558}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "319565e95a8665d849f1934fc3c550bc1f5ad5fbdb494935d4c8d0587d1f05f9",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:14",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ATP6V1B2},{CSGALNACT1},{INTS10},{LPL},{LZTS1},{SLC18A1}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4c2ef9a3bcf3591a81db86fc3170c8a0a031fe08c3f3530ee262e162a24985af",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:156",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {ARL2BP},{BBS2},{CCL17},{CCL22},{CETP},{CIAPIN1},{COQ9},{CPNE2},{CX3CL1},{DOK4},{ENSG00000288725},{HERPUD1},{MT1A},{MT1B},{MT1E},{MT1F},{MT1G},{MT1H},{MT1M},{MT1X},{MT2A},{MT3},{MT4},{NLRC5},{NUP93},{PLLP},{POLR2C},{PSME3IP1},{RSPRY1},{SLC12A3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "13b32c98c5b2e1a53d12ebbb6a828b4c84c088718c24a6b4df064f29e4a5ce64",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:40",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Neonatal circulating Complement Component 4 (C4) protein concentration\nGenes in locus: {AGER},{AGPAT1},{ATF6B},{BTNL2},{C2},{C4A},{C4B},{CFB},{CYP21A2},{DXO},{EGFL8},{EHMT2},{ENSG00000244255},{ENSG00000250264},{ENSG00000285085},{FKBPL},{GPSM3},{HLA-DOB},{HLA-DQA1},{HLA-DQA2},{HLA-DQB1},{HLA-DQB2},{HLA-DRA},{HLA-DRB1},{HLA-DRB5},{NELFE},{NEU1},{NOTCH4},{PBX2},{PPT2},{PPT2-EGFL8},{PRRT1},{PSMB8},{PSMB9},{RNF5},{SKIC2},{SLC44A4},{STK19},{TAP1},{TAP2},{TNXB},{TSBP1},{ZBTB12}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "3c62ba4da854ba49cd0606a0a21d2ee0fbe5a10a65c54280d93e1f8b993c8c5d",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:492",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Mitochondrial DNA copy number (adjusted)\nGenes in locus: {CAPS},{CATSPERD},{DUS3L},{ENSG00000267157},{ENSG00000267314},{ENSG00000267740},{FUT3},{FUT5},{FUT6},{HSD11B1L},{KDM4B},{LONP1},{MICOS13},{NDUFA11},{NRTN},{PRR22},{PTPRS},{RANBP3},{RFX2},{RPL36},{SAFB},{SAFB2},{TINCR},{VMAC},{ZNRF4}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "c9ac5e5c148f3b88aab7ae295d22456a5551178d328f5cf085ccd061b5e3c346",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gwas_causal_gene_gwas_catalog:379",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Your task is to identify likely causal genes within a locus for a given GWAS phenotype. From the list, provide only the likely causal gene (matching one of the given genes). \nIdentify the causal gene.\nGWAS phenotype: Multi-trait sex score\nGenes in locus: {DHODH},{DHX38},{HP},{HPR},{PKD1L3},{PMFBP1},{TXNL4B},{ZFHX3}\n",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "2fa3800ba3ecbd35d79e1ab8a180ded5952eadabd38eec14758d458b4952ad64",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gwas causal gene evidence",
+      "skills": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
+      "scope_changes": [
+        "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gwas-causal-gene-evidence"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

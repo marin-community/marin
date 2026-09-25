@@ -1,0 +1,1168 @@
+{
+  "tasks": [
+    {
+      "task_id": "10.1101_2025.06.17.659900_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how loss of LET-418 affects C. elegans young-adult gene expression and how intestinal LET-418 and MEP-1 chromatin occupancy relates to innate immune and intracellular pathogen response programs. The local inputs in `./data` contain paired-end 50 bp TruSeq stranded mRNA FASTQ files from three N2 wild-type and three CWC85 let-418(s1617) young-adult hermaphrodite whole-worm RNA-seq replicates; single-end Nanopore DamID FASTQ files from intestinal GFP::Dam control, LET-418::Dam, and MEP-1::Dam samples with two biological replicates per construct; sample metadata for both assays; a public 80-gene intracellular pathogen response support list from Reddy et al. 2019 PLOS Pathogens S5 Table at `data/metadata/reference/ipr/reddy_2019_ipr_genes.tsv`; and C. elegans WS235 genome FASTA plus WS235 GFF2 annotation. Quantify gene expression, compare CWC85 let-418(s1617) mutants against N2 wild type, call LET-418 and MEP-1 DamID target genes from replicate-level and averaged profiles, and summarize the overlap of LET-418-regulated genes and DamID targets with intracellular pathogen response and pals-family genes.\n\nMethod guidance:\nUse the staged sample sheets to assign genotypes, constructs, and biological replicates. For RNA-seq, process the paired-end libraries as stranded mRNA data: inspect read quality with FastQC, align to the staged C. elegans WS235 genome using TopHat 2.1.1 with Bowtie2 2.2.8, and quantify gene-level counts with HTSeq-count against the staged WS235 GFF2 annotation. The libraries are Illumina TruSeq stranded mRNA (dUTP-based), so run HTSeq-count with `--stranded=reverse --mode=union --type=exon --idattr=gene_id`. Build the count matrix from raw integer counts before any normalization, with one row per WS235 annotation gene or feature identifier emitted by HTSeq-count. The count-matrix `gene_id` row values are the exact public WS235 `gene_id` strings from the staged GFF2, including feature names such as `21ur-*` and locus-style IDs such as `AC3.12`; this count matrix is not keyed by WormBase `WBGene...` stable IDs. For differential expression, use DESeq2 with `~ genotype`, N2 wild type releveled as the baseline, CWC85 let-418(s1617) as the comparison level, size-factor normalization, dispersion estimation, default independent filtering, and the negative-binomial Wald test. Use the full raw HTSeq count matrix row universe as the DESeq2 input; the final direction-specific output filters are Benjamini-Hochberg adjusted q-value <= 0.01 and |log2FoldChange| >= 1. Interpret signed log2 expression change as CWC85 let-418(s1617) over N2: positive values indicate higher expression in the mutant, and negative values indicate lower expression in the mutant.\n\nFor DamID, treat the staged single-end Nanopore FASTQs as already basecalled and demultiplexed libraries. Map reads to the staged WS235 genome with minimap2 using the Oxford Nanopore preset `-ax map-ont` and retain high-confidence alignments with mapping quality >= 30. Generate a WS235 GATC motif map from the staged genome FASTA. Retain only Nanopore DamID reads for which both mapped ends fall within ±8 bp of a genomic GATC motif. Use these filtered, sorted BAMs with `damidseq_pipeline --bamfiles --extend_reads=0` to compute GATC-resolution log2(POI::Dam / GFP::Dam) profiles for LET-418 and MEP-1, pairing each protein replicate with the matched GFP::Dam control replicate and keeping the pipeline's GATC-fragment normalization behavior.\n\nCall LET-418 and MEP-1 enriched regions separately for each replicate profile and for each two-replicate averaged profile. Average replicate bedGraph tracks with the staged `average_tracks` Perl script at `data/metadata/method_tools/damid/average_tracks.pl`, copied from the general-purpose `owenjm/damid_misc` DamID tool repository. Call peaks with `find_peaks` using GFF output and false discovery rate < 0.05; keep the script defaults for minimum fragment count, iterations, random seed, quantile range, and quantile step. Annotate significant peaks to genes using gene features parsed from the staged WS235 GFF2 annotation at `data/metadata/reference/WS235/c_elegans.WS235.annotations.gff2.gz`. Assign peaks to genes using the paper's extended gene region rule: a gene is associated with a peak when the peak lies within 2,000 bp upstream of the transcription start site through 2,000 bp downstream of the transcription end site. The DamID target-list `target_gene_id` row values are the exact public WS235 `gene_id` strings from those associated gene features.\n\nFor downstream biological summaries, map WormBase identifiers and public gene names carefully between WS235 and current annotations where required. Define intracellular pathogen response membership using the staged public support file `data/metadata/reference/ipr/reddy_2019_ipr_genes.tsv`, which contains the 80 IPR genes from Reddy et al. 2019 PLOS Pathogens S5 Table, and intersect that membership with genes upregulated in CWC85 let-418(s1617). Define pals-family overlap by public gene names in the pals family among the averaged LET-418 and MEP-1 DamID target gene sets. Each required output below states its row-key namespace and upstream input set.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "21ada54e92613f09511343dc9afbc8d7ebf65bb1f918841c94baeb2cf8a7f3c7",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.17.659900_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "expression damid integration",
+      "skills": [
+        "normalization",
+        "multiple-testing",
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "chromatin",
+        "motifs",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep annotation-native gene IDs distinct from stable database IDs; quantify enrichment from matched controls."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-expression-damid-integration"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.02.11.704850_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how direct contact with intact neighboring cells changes the transcriptomic response and inferred ligand-receptor communication landscape of UV-B/UV-C-damaged V79 Chinese hamster fibroblasts. The local `./data` directory contains 24 paired-end bulk RNA-seq FASTQ libraries from Cricetulus griseus V79 lung fibroblast populations, organized as six four-replicate groups: untreated cells grown alone, UV-treated cells grown alone, GFP-positive UV-treated cells grown in density-matched monoculture, non-GFP UV-treated partner cells from the same monoculture, GFP-positive UV-treated cells recovered from co-culture with intact neighbors, and non-GFP intact partner cells from the co-culture. The staged metadata includes sample-to-FASTQ mappings, growth condition, stimulus, and group labels, and `./data/metadata/reference` contains a CriGri_1.0 genome FASTA and matching GTF.\n\nQuantify gene expression from the reads, analyze UV-induced and monoculture-versus-co-culture differential expression, summarize Gene Ontology enrichment for direction-specific gene sets, and use the expression profiles to infer condition-dependent ligand-receptor communication between the GFP-positive irradiated population and its partner population.\n\nMethod guidance:\nUse the staged metadata to assign groups consistently and preserve the exact sample-code prefixes. IA1-IA4 are untreated cells grown alone, UA1-UA4 are UV-treated cells grown alone, UFG1-UFG4 are the GFP-positive UV-treated test population from density-matched monoculture, UF01-UF04 are the non-GFP UV-treated partner population from monoculture, IFG1-IFG4 are the GFP-positive UV-treated test population from co-culture with intact neighbors, and IF01-IF04 are the non-GFP intact partner population from co-culture. The `0` in IF01-IF04 and UF01-UF04 is the digit zero from the IF0/UF0 sample aliases; parse groups from the exact staged sample-sheet labels and preserve the full sample-code labels. Process each biological replicate independently through alignment and counting; keep paired mates together during alignment and keep biological replicates separate before count generation.\n\nInspect raw-read quality, then align paired-end RNA-seq reads to the staged CriGri_1.0 reference genome with HISAT2 v2.0.5. Quantify gene-level reads with featureCounts v1.5.0-p3 using paired-end, unstranded counting over exon features from the staged GTF, grouped by the `gene_id` attribute. The `gene_count_matrix` row key is the numeric NCBI/CriGri `gene_id` attribute value from this GTF and featureCounts output, not the gene symbol used for later DESeq2-style outputs. Build the expression matrix from unnormalized integer counts for all 24 libraries.\n\nRun downstream analysis in R 4.3.2 when possible. Use DESeq2 v1.47.0 for differential expression. Map counted `gene_id` values to gene symbols using the staged GTF annotation before DESeq2-style gene-symbol outputs; drop unmapped features and collapse duplicate symbols by summing counts. Pre-filter genes with fewer than 10 total reads, estimate DESeq2 size factors with default normalization, and use variance stabilizing transformation for PCA-based sample clustering. Fit the DESeq2 model with sample group as the biological factor; include an additional covariate only if the staged metadata explicitly identifies it as a technical batch; the replicate number alone is not a technical batch covariate. Use `lfcShrink` with `type = \"ashr\"` from ashr v2.2-63 for effect-size shrinkage.\n\nUse two DESeq2 contrasts: UV-treated alone over untreated alone, and GFP-positive UV-treated monoculture over GFP-positive UV-treated co-culture. Positive log2 fold changes should indicate higher expression in the numerator condition for each contrast, and negative values should indicate higher expression in the denominator condition. Define direction-specific differentially expressed gene sets using adjusted p-value < 0.05 with fold change > 2 for up-regulation or < 0.5 for down-regulation.\n\nFor functional enrichment, convert Chinese hamster gene names to Entrez identifiers with biomaRt v2.63.0 and the Ensembl BioMart service at `https://www.ensembl.org/biomart/martservice`, using mouse annotation as a proxy where needed. Use org.Mm.eg.db v3.18.0 and clusterProfiler v4.10.0 for Gene Ontology over-representation analysis. Run enrichment separately for up- and down-regulated genes for each contrast across the biological process, molecular function, and cellular component ontologies. Filter enriched terms at adjusted p-value < 0.05, then remove redundant terms with clusterProfiler `simplify` using semantic similarity cutoff 0.5.\n\nFor cell communication analysis, install ICELLNET v2.2.0 from the public ICELLNET source repository at `https://github.com/soumelis-lab/ICELLNET` and use its curated 1,669-row `data/ICELLNETdb.tsv` ligand-receptor interaction database with ten interaction families. Use DESeq2-normalized expression values rescaled as expected by ICELLNET. Treat the GFP-positive UV-treated population as the central population and the matching non-GFP population as its partner in each context. Compute outward communication values from central population ligand to partner receptor, and inward values from partner ligand to central population receptor; assign zero when either ligand or receptor is not expressed. Compute monoculture-minus-co-culture deltas separately for outward and inward communication values. Positive deltas should mean higher communication in the monoculture context, and negative deltas should mean higher communication in the co-culture context. Use the expression-supported ICELLNET rows with at least one nonzero directional score as the row universe for communication-score and delta-summary outputs.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "fc7edea2bac44fe3af790ca0d37b90296be02b279b6ff9d1a50a28a7d10fdc74",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.11.704850_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "bulk expression communication",
+      "skills": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "differential-expression",
+        "enrichment",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "communication",
+        "database-query",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve similar-looking sample identifiers; expression-based communication scores do not establish causal signaling."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-bulk-expression-communication"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.08.16.670679_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze how neuropeptide-associated gene expression varies across the avian song-control circuit and its neighboring regions, and how song motor-region expression relates to deafening-associated song destabilization and singing covariates. The local `./data` bundle contains SLCR-seq libraries from Bengalese finch and zebra finch laser-captured brain-region samples, including HVC, RA, Area X, LMAN, Arco, NC/NCL, NR/Nido, and striatal samples across intact/hearing, deafened, and singing-amount contexts. Primary inputs are mostly coordinate-sorted alignments with one small FASTQ-only run, accompanied by sample metadata with brain region, bird identity, song metrics, mitochondrial fraction, cellular detection rate, library annotations, and song-system labels. The bundle also contains the coordinate-compatible lonStrDom2 genome sequence, gene annotation, transcript FASTA, and feature table under `./data/metadata/reference/lonStrDom2`.\n\nGenerate a filtered gene-by-sample SLCR-seq count matrix from the local primary data, then use the staged metadata to model position-specific gene expression associations with acoustic destabilization and singing covariates. Summarize position-wise differential expression, signed counts of significant genes, and pathway enrichment over ranked gene statistics for the relevant region and song-system contrasts.\n\nMethod guidance:\nUse the staged sample metadata as the source of sample identity, brain-region labels, bird IDs, song metrics, QC covariates, and library annotations. Count reads against the staged lonStrDom2 gene annotation at `./data/metadata/reference/lonStrDom2/GCF_005870125.1_lonStrDom2_genomic.gff.gz` with a gene-level RNA-seq counting tool such as `featureCounts` or `htseq-count`; preserve the numeric sample identifiers from the metadata. When extracting gene-level counts from the NCBI GFF3, use the `gene` attribute as the feature identifier so row names are avian gene symbols or LOC-style gene identifiers rather than transcript IDs or NCBI GeneID accessions. The submitted alignments use the matching lonStrDom2 reference, so count them directly against the staged lonStrDom2 annotation. For the local sample supplied only as FASTQ, create a compatible lonStrDom2 alignment before counting so all metadata samples remain represented.\n\nFor the filtered count matrix, keep the deafening-context SLCR-seq samples, drop non-target positions `lfs`, `ov`, and `meso`, require cellular detection rate greater than 0.3, standardize cellular detection rate to mean 0 and unit variance, and retain mitochondrial fraction as a sample covariate. Remove likely nidopallial-contaminated LMAN samples using the same marker rule as the analysis workflow: among LMAN samples, exclude samples with `CALCB` count below 7.5. Apply the low-expression gene filter described for the count matrix: remove genes whose total read count across samples is less than the number of samples divided by eight. For the downstream voom and enrichment models, also apply the workflow's technical-variation gene filter on normalized expression values after low-expression filtering: compute TMMwsp-normalized logCPM values, average each gene by bird tag and position, calculate log variance-to-mean ratios across positions within each bird tag and across bird tags within each position, regress the mean within-tag position log-VMR on the mean within-position tag log-VMR, and retain genes with residual greater than `-1`.\n\nFor expression modeling, use R/Bioconductor with `edgeR` v3.31.4, `limma` v3.48.3, and `sva`. Build `DGEList` objects, calculate normalization factors with `calcNormFactors(method = \"TMMwsp\")`, and pass the counts, normalization factors, and design matrix to `voom` with `normalize.method = \"none\"`. Estimate within-bird correlation with `duplicateCorrelation`, then fit models with `lmFit`, apply contrasts with `contrasts.fit`, use `eBayes` for moderated statistics, and apply Benjamini-Hochberg adjustment. Treat genes with adjusted P value below 0.1 as significant for DEG count summaries. Report positive effects as higher expression in the named modeled direction and negative effects as lower expression in that direction.\n\nFor the position-wise acoustic-destabilization and singing model, derive bird-level covariates from metadata: `log1p` transform euthanasia-day song count and pre-procedure songs per day, then standardize each to mean 0 and unit variance; transform K-L distance as `log(kl_mean + 0.1)`, then bin it within intact/deafened procedure groups using breaks `-3`, `-1.3`, `-0.65`, and `2`, with factor levels `intact-1`, `intact-2`, `deaf-2`, and `deaf-3`. Impute missing pre-procedure songs per day to the observed mean before log transformation. Add two surrogate variables from `svaseq`, using the full model with position, position-specific euthanasia-day singing, position-specific K-L/procedure bins, their interaction, position-specific pre-procedure singing, scaled cellular detection rate, and scaled mitochondrial fraction, and the reduced model with position plus the two scaled QC covariates. Fit the final model with position main effects, position-specific euthanasia-day singing, position-specific K-L/procedure bins, their interaction, position-specific pre-procedure singing, scaled cellular detection rate, scaled mitochondrial fraction, `sv1`, and `sv2`, blocking on bird-by-position identity. For each brain position, the model contains these named coefficient families: `kl_mean_2_hearing` for the intact/hearing second K-L bin, `kl_mean_2_deaf` for the deafened second K-L bin, `kl_mean_3` for the high deafened K-L bin, `num_songs_euth_date` for euthanasia-day singing, `num_songs_pre` for pre-procedure singing, and `inter` for the high-deafened-K-L by euthanasia-day-singing interaction. Use the artifact-specific Required Outputs below for the coefficient labels that each file must contain.\n\n\nFor gene-set enrichment analysis, use Gene Ontology C5 gene sets from MSigDB version 7. The enrichment contract uses the MSigDB C5 Gene Ontology gene sets only. Before enrichment, remove C5 pathways whose names match the technical high-variance categories `ENDOPLAS`, `RIBOSOM`, `TRANSLATION`, `METABO`, `CATABOL`, `RESPIR`, `HYDROGEN`, `OXIDAT`, `OXIDO`, `MITOCH`, `PROTON`, `VIRAL`, `ELECTRON`, `ATP`, `RRNA`, `BIOSYNTHETIC`, `INORGANIC`, or `INNER_MEMBRANE`. Rank genes within each position and modeled coefficient by the limma moderated statistic, run `fgsea` v1.18.0 using `fgseaMultilevel(minSize = 20, maxSize = 200)`, filter pathways at adjusted P value below 0.2 before pruning, and use `collapsePathways` with `pval.threshold = 0.05`. Use deterministic seeds for stochastic R steps, for example `set.seed(1)` immediately before `svaseq` and each `fgseaMultilevel` call. Preserve the sign of enrichment with respect to the same modeled coefficient direction used for differential expression.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "a8a6677ef80b679b65b3e8b21740b5458e0aa82c5427ecb5c4c4577528670ca6",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.08.16.670679_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "repeated subject expression",
+      "skills": [
+        "normalization",
+        "transformation",
+        "association",
+        "multiple-testing",
+        "differential-expression",
+        "enrichment",
+        "prediction",
+        "sequence-query",
+        "read-qc",
+        "database-query",
+        "statistics",
+        "data-management",
+        "cell-qc"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "functional-genomics",
+        "systems-biology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Preserve bird and anatomical-region dependence; imputation, model coefficients and enrichment direction share one design."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-repeated-subject-expression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.02.03.703548_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine whether the local horsehair-worm sequencing data support more than one genomic group within *Chordodes* and whether any individuals show evidence of mixed ancestry between *C. formosanus*-like and *C. japonensis*-like lineages.\n\nThe local `./data` directory contains trimmed paired-end RNA-seq FASTQs for *Chordodes* and mantid host libraries, trimmed single-end ddRAD-Seq FASTQs for *Chordodes formosanus* and outgroup sampling, sample sheets linking run identifiers to library aliases, scientific names, and library layout, plus a de novo *Chordodes* SuperTranscript FASTA with matching GFF annotation under `./data/metadata/reference`. The *Chordodes* RNA-seq libraries include samples collected before, during, and after host emergence.\n\nQuantify SuperTranscript-level expression in the *Chordodes* RNA-seq libraries, derive normalized abundance values from the same quantification, build a merged RNA-seq/ddRAD variant set for retained *Chordodes* individuals, infer two-component ancestry, and summarize per-individual hybrid-index patterns from the filtered genotypes.\n\nMethod guidance:\nUse only the local files under `./data` as sequencing input. The staged RNA-seq and ddRAD-Seq reads were already trimmed for adapters and low-quality bases, so begin from the FASTQs without another trimming pass unless basic file-integrity checks fail.\n\nFor SuperTranscript expression, identify the *Chordodes* RNA-seq libraries from the local RNA-seq sample sheet and exclude mantid host libraries. Build a HISAT2 index from the staged SuperTranscript FASTA, align each paired-end *Chordodes* library, and convert alignments to sorted, indexed BAM files with SAMtools 1.18. Count reads with `featureCounts` from subread against the staged GFF in paired-end mode using `-p --countReadPairs -t exon -g gene_id`, summarizing every staged GFF `gene_id` feature at the SuperTranscript cluster level. Keep the full featureCounts cluster row set for the raw count matrix, including clusters with zero counts across the requested Chordodes libraries. Compute TPM for the same row set from the same counts using annotated exonic cluster lengths: divide each count by its cluster length, divide by the library sum of length-normalized counts, and multiply by 1e6.\n\nFor the merged variant workflow, restrict ddRAD candidates to the 27 *Chordodes formosanus* PRJNA914055 runs used as the paper's pre-filter ddRAD set: `SRR22822834`, `SRR22822866`, `SRR22822865`, `SRR22822864`, `SRR22822862`, `SRR22822860`, `SRR22822859`, `SRR22822858`, `SRR22822854`, `SRR22822852`, `SRR22822851`, `SRR22822850`, `SRR22822849`, `SRR22822848`, `SRR22822847`, `SRR22822846`, `SRR22822843`, `SRR22822842`, `SRR22822839`, `SRR22822838`, `SRR22822837`, `SRR22822836`, `SRR22822835`, `SRR22822833`, `SRR22822827`, `SRR22822825`, and `SRR22822824`. Exclude other staged PRJNA914055 runs from the merged variant workflow. Combine those 27 ddRAD libraries with the *Chordodes* RNA-seq libraries, then apply the read-depth and genotype filters below to determine the final retained merged sample set. Assemble a de novo transcriptome from the after-emergence *Chordodes* RNA-seq library with the largest paired-read yield using Trinity 2.15.2 with `--seqType fq`, paired reads, `--max_memory 50G`, and `--CPU 6`. Index the assembly with BWA 0.7.18, create the sequence dictionary with Picard 3.3.0, and create the FASTA index with SAMtools 1.18.\n\nAlign paired-end RNA-seq libraries and single-end ddRAD libraries to the Trinity assembly with `bwa mem`. Convert SAM to BAM, sort, and index with SAMtools. Process each BAM with Picard `FixMateInformation`, then `MarkDuplicatesWithMateCigar` using `REMOVE_DUPLICATES=true`, `MINIMUM_DISTANCE=502`, and `DS=TOTAL_MAPPED_REFERENCE_LENGTH`, then `AddOrReplaceReadGroups` with platform `illumina` and one unique read group per library.\n\nCall variants with GATK 3.8. Run `HaplotypeCaller` in GVCF mode with `-stand_call_conf 30`, use each sample GVCF as known sites for `BaseRecalibrator`, apply recalibration with `PrintReads`, call each recalibrated BAM again with `HaplotypeCaller` in GVCF mode using `-stand_call_conf 30`, combine sample GVCFs with `CombineGVCFs`, and jointly genotype with `GenotypeGVCFs`. Retain libraries with at least 5,000 reads represented in the final VCF, producing the final merged RNA-seq plus ddRAD individual set for the ADMIXTURE and hybrid-index outputs.\n\nFilter the joint VCF with BCFTools 1.21 by removing indels, requiring minor allele frequency 0.02, and retaining biallelic sites only. Linkage-prune with PLINK2 2.0.0-a.6.9 using `--indep-pairwise 50 10 0.5`; export the pruned variants as VCF, adjust contig identifiers consistently if transcript-derived names break downstream tools, and use VCFTools 0.1.16 with `--max-missing 0.75 --recode --recode-INFO-all` to remove loci with more than 25% missing genotypes.\n\nUse three population labels for structure analyses: `TWN` for retained ddRAD *C. formosanus* individuals, `POTCF` for RNA-seq *Chordodes* individuals assigned to the formosanus-like COXI group, and `CJPOT` for RNA-seq *Chordodes* individuals assigned to the japonensis-like COXI group. If COXI grouping must be reconstructed, assemble COXI sequences from RNA-seq reads with MitoGeneExtractor 1.9.5 using *Chordodes* mitochondrial protein annotation as reference; use MitoFinder 1.43 for ambiguous assemblies, align COXI sequences with MAFFT 7.526 using L-INS-i, select the JC69 model by AICc-supported model selection, and infer an IQ-TREE 2.2.6 tree with 1,000 ultrafast bootstrap replicates.\n\nFor population structure, convert the filtered VCF to ipyrad HDF5 with ipyrad 0.9.105 using `ld_block_size=50000`. Run ipyrad PCA with `TWN`, `POTCF`, and `CJPOT` imap groups, `minmap=0.5` for each group, `mincov=0.7`, `impute_method=3`, 100 replicates, and seed 123. In R 4.3.1, load the filtered VCF with vcfR 1.15.0, convert to genind, and use adegenet 2.1.10: run `snapclust.choose.k` with `max=3` under AIC and BIC, run `snapclust` at `k=2`, and run `find.clusters` with `max.n.clust=3` using all available components.\n\nPrepare ADMIXTURE 1.3.0 input from the filtered VCF with PLINK2 using `--allow-extra-chr --double-id --set-missing-var-ids @:#`. Run ADMIXTURE for K from 1 to 3 with cross-validation on the full filtered dataset and select the lowest-error K; use the K=2 solution for the ancestry summary. Orient the two components so positive assignment to the formosanus-like side corresponds to `TWN`/`POTCF`, while positive assignment to the japonensis-like side corresponds to `CJPOT`.\n\nFor hybridization summaries, load the same filtered VCF in vcfR and use triangulaR 0.0.1. Recode `POTCF` as `TWN` for the formosanus-like parental side, keep `CJPOT` as the japonensis-like parental side, and reserve `POTHYB` for objectively mixed or discordant *Chordodes* individuals rather than either parental allele-frequency pool. Run `alleleFreqDiff(..., p1=\"TWN\", p2=\"CJPOT\", difference=1)` followed by `hybridIndex(..., p1=\"TWN\", p2=\"CJPOT\")`; interpret the hybrid-index scale as increasing from the `TWN`/formosanus-like side toward the `CJPOT`/japonensis-like side.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "005c58143eaaadc09e501f3b49a70adf55fab6091ca3acf863626475d826ae99",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.03.703548_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "expression variant ancestry",
+      "skills": [
+        "normalization",
+        "dimension-reduction",
+        "clustering",
+        "prediction",
+        "model-evaluation",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "variant-analysis",
+        "population-genetics",
+        "trajectory",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Separate host and focal-species libraries; orient ancestry labels using explicit populations and preserve missing genotypes."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-expression-variant-ancestry"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.20.665670_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze how PPR-derived small RNAs are produced and conserved across Arabidopsis thaliana accessions, with attention to PPR locus abundance, cross-accession homolog relationships, clustered PPR-siRNA production, TAS intervals, NLR homolog groups, read-processing summaries, and small-RNA target predictions against PPR transcripts.\n\nThe local `./data` tree contains single-end Illumina small RNA-seq FASTQ files from rosette leaf libraries for An-1, Col-0, Ct-1, Cvi-1, Eri-1, Kyo-1, Ler-0, and Sha, with two biological replicates per accession. It also contains a sample sheet, an accession reference index, TAIR10/Araport11 files for Col-0, the exact 475-protein PlantPPR Col-0 anchor reference, accession-specific genome assemblies and gene annotations for the other accessions, Rfam 14.9 structural-RNA resources, and miRBase files for Arabidopsis trigger small RNAs. Use these local inputs to quantify PPR-siRNA abundance, identify homologous PPR, NLR, and TAS loci across accessions, classify siRNA-producing and conserved PPR loci from abundance criteria, summarize the small-RNA read processing pipeline, and predict trigger small-RNA interactions with PPR transcripts.\n\nMethod guidance:\nUse the sample sheet under `./data/metadata` to map FASTQ files to accession and replicate labels, and use the reference index under `./data/metadata` to select the matching genome and annotation for each accession.\n\nProcess each small RNA-seq library independently. Trim the adapter sequence `AGATCGGAAGAG` with Cutadapt v3.2, discarding reads that are not successfully trimmed or that contain more than one `N` base. Apply Trimmomatic v0.36 in single-end mode with `LEADING:3`, `TRAILING:3`, `SLIDINGWINDOW:4:15`, `MINLEN:18`, and `MAXLEN:28`. Retain 18-28 nt reads after quality filtering.\n\nMap the filtered reads first against the local Rfam 14.9 structural-RNA resources and remove reads derived from tRNA, rRNA, snRNA, or snoRNA families. Map the remaining reads to the matching accession genome with Bowtie using all alignments and zero mismatches (`-a -v 0`). Treat genome-matched reads after structural-RNA subtraction as clean reads. Track both total reads and unique sequences at each major processing step.\n\nDefine PPR, NLR, and TAS loci from the local Col-0 genome, annotations, peptide/transcript resources, and accession annotations. For Col-0 PPR anchors, use `./data/metadata/reference/plantppr_col0/plantppr_col0_475.faa`, the staged canonical PlantPPR amino acid set of 475 Col-0 proteins, and use `./data/metadata/reference/plantppr_col0/plantppr_col0_475_membership.tsv` for the corresponding protein and gene identifiers. These two files define the sole Col-0 PPR anchor universe for `ppr_sirna_tpm_matrix`, `sirna_producing_ppr_loci`, `conserved_sirna_producing_ppr_loci`, `hotspot_ppr_cluster_loci`, `ppr_ortholog_groups`, `srna_ppr_target_predictions`, and `ppr_sirna_summary_counts`, including all cross-accession PPR homology and PPR target-transcript analyses. Annotate NLRs with nlrsnake/NLRtracker-style protein-domain calls and preserve the transcript-model suffix selected by that workflow instead of collapsing NLR identifiers to bare gene IDs. Identify homologs of Col-0 protein-coding genes in the other accessions with SimpleSynteny v1.3.2 plus BLAST+ v2.9.0 `blastn` and `blastp` using default search settings, excluding mitochondrial and chloroplast genes and CDS shorter than 80 amino acids. Keep initial homolog candidates with query coverage greater than 30%, subject coverage greater than 30%, identity greater than 60%, and BLAST bit value greater than 50, then retain the top-ranked candidate per Col-0 query using the alignment ranking expression based on query coverage, subject coverage, BLAST bit value, and gap count. For Ct-1, use the native Gan2011 `ATCT-1G...` identifiers in PPR abundance, PPR locus-set, hotspot, and target-prediction outputs; in PPR and NLR ortholog-group tables, use the Col-0-lifted Ct-1 annotation identifiers when the lifted annotation maps the Ct-1 model to its Col-0 anchor. For TAS loci and trigger small RNAs, choose the best cross-accession alignment by highest sequence similarity.\n\nFor each accession and PPR locus, count 21 nt small RNAs assigned to the locus from clean genome-matched reads. Because the genome mapping step uses Bowtie `-a -v 0`, count each exact genomic alignment that overlaps a PPR coding sequence toward that locus; keep the TPM denominator as total genome-matched clean reads in the same library. Normalize abundance as TPM: locus-assigned small-RNA reads divided by total genome-matched clean reads in the same library, multiplied by 1,000,000. Summarize accession-level PPR-siRNA abundance across the biological replicates using the mean replicate TPM. Classify siRNA-producing PPR loci with TPM > 5, and classify conserved siRNA-producing homolog groups as those meeting that abundance criterion in at least five accessions for the same homologous group. Identify the major chromosome 1 PPR-siRNA hotspot cluster by combining the 21 nt coding-sequence small-RNA signal, PPR homolog positions, and the phylogenetic/homology group that accounts for the dominant PPR-siRNA-producing loci; use the paper's >75% nucleotide-sequence-similarity cutoff to group hotspot PPRs and keep the chromosome-5 AT5G16640 homolog group as a separate comparison rather than part of the chromosome-1 hotspot table.\n\nFor target prediction, use the local miRBase files and TAS homolog alignments to define the 11 trigger small RNAs: miR161.1, miR161.2, miR400, TAS1a 3' D9 (-), TAS1b 3' D4 (-), TAS1c 3' D6 (-), TAS1c 3' D10 (-), TAS2 3' D6 (-), TAS2 3' D9 (-), TAS2 3' D11 (-), and TAS2 3' D12 (-). Run `GSTAr.pl` v1.0 from the public GSTAr repository (`https://github.com/MikeAxtell/GSTAr`) against PPR transcript targets for all eight accessions. Report the full scored GSTAr result table for the required target-prediction artifact, including interactions with Allen values below 4 and interactions with Allen values at or above 4; the Allen < 4 cutoff defines predicted-target status but is not a row filter for that output. Lower Allen values indicate stronger complementarity.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "45e0b307d6e755f05b5e80094f647e459c5b6d87d257e8e067b28aff2dbb0f14",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.20.665670_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "small rna orthology",
+      "skills": [
+        "normalization",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "orthology",
+        "phylogeny",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "molecular-evolution",
+        "molecular-structure"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Multiple genomic alignments and total-read normalization use different denominators; preserve accession-specific identifier namespaces."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-small-rna-orthology"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.08.663208_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze mitochondrial-nuclear interactions in heteroplasmic Mus musculus embryonic fibroblasts after CRISPR perturbation of nuclear mitochondrial-maintenance genes. The local `./data` directory contains paired-end bulk RNA-seq FASTQs from sorted cells for non-targeting, Opa1, and Tfam perturbations with two biological replicates per condition; paired 10x Multiome gene-expression and ATAC FASTQs, TAP-seq guide-enrichment FASTQs, and mtDNA-capture FASTQs for two CROP-seq biological replicates; and ATF4-Dam plus Dam-only DamID-seq FASTQs. Staged metadata under `./data/metadata` provides sample sheets linking libraries to assay, condition, replicate, and FASTQ files, a CROP-seq guide-library table and guide-spacer FASTA, UCSC mm10/GRCm38 genome and NUMT/mtDNA blacklist resources, plus GENCODE M25 mouse annotation.\n\nQuantify bulk gene expression for the single-guide perturbation samples, reconstruct the integrated single-cell Multiome analysis with guide assignment and per-cell mtDNA heteroplasmy estimation, and identify reproducible ATF4 DamID binding regions and their nearest-gene targets.\n\nMethod guidance:\nFor bulk RNA-seq, assess raw FASTQs with FastQC v0.11.9, trim Illumina TruSeq paired-end adapters with Trimmomatic v0.39 using `ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10:2:True LEADING:3 TRAILING:3 MINLEN:36`, align trimmed paired reads to the staged mm10/GRCm38 reference with RUM v2.0.4 using variable-length read handling, and count reads over GENCODE gene features with HTSeq-count v2.0.3 in union mode, name-sorted BAM input, `--additional-attr gene_name`, and unstranded counting. Keep the two biological replicates separate for each of the non-targeting, Opa1, and Tfam conditions. For any bulk differential analysis, use edgeR v4.4.2 with non-targeting as the control; positive log fold changes should mean higher expression in the perturbation condition than in non-targeting cells.\n\nFor the 10x Multiome libraries, process each biological replicate with Cell Ranger ARC v2.0.2 against a Mus musculus mm10/GRCm38 reference. Build the reference from staged FASTA and annotation. Use the staged NUMT/mtDNA blacklist support files in `./data/metadata/reference/mitoblacklist/` (`mm10.full.blacklist.bed`, `mm10_peaks.narrowPeak`, and `mm10_chrM.fa`) when constructing or validating the NUMT-masked reference for mtDNA-aware processing. Use Seurat v5.1.0 and Signac v1.13.0 in R v4.3.3 for downstream processing. Apply RNA filters of 1,000 < total RNA counts < 60,000, 1,000 < detected genes < 10,000, mitochondrial RNA percentage < 10, and ribosomal percentage < 30. Apply ATAC filters of 1,000 < total ATAC counts < 150,000, 500 < accessible regions < 55,000, nucleosome signal < 2, and TSS enrichment > 1. Retain cells passing both RNA and ATAC filters.\n\nNormalize RNA with SCTransform while regressing S and G2M cell-cycle covariates, use CCA integration across the two replicates, compute RNA neighbors on dimensions 1:20, and use RNA UMAP dimensions 1:50. For ATAC, call a common peak set with MACS2, retain peaks 21-9,999 bp wide, run TF-IDF and LSI, drop the first LSI dimension, use dimensions 2:40 for ATAC neighbors, and integrate embeddings with dimensions 1:40. Cluster RNA, ATAC, and WNN graphs with the SLM algorithm (`algorithm = 3`) at resolution 2.0. Construct the WNN graph from integrated RNA CCA dimensions 1:50 and integrated ATAC LSI dimensions 2:40.\n\nFor guide assignment, extract the 16 bp 10x barcode from GEX Read 1 into the matched Read 2 header using UMI-tools v1.0.1 `extract --bc-pattern=NNNNNNNNNNNNNNNN`. Use the staged CROP-seq guide resources in `./data/metadata/guide_library/`: `cropseq_guide_library.tsv` gives the 60 pooled guide IDs, 20 bp spacer sequences, target-gene labels, and guide categories, and `cropseq_guide_spacers.fa` provides the same spacer sequences as a minimal FASTA reference. Align guide-containing Read 2 sequences with BWA v0.7.17 `mem` to the staged CROP-seq spacer reference at `./data/metadata/guide_library/cropseq_guide_spacers.fa`. Keep mapped reads with MAPQ >= 30 and match embedded barcodes to the Cell Ranger ARC cell set. Assign a guide when at least two guide reads are observed and the top guide accounts for more than two thirds of guide reads in that cell; otherwise label cells as unassigned or multi-guide, then collapse guide IDs to the `target_gene` values from `cropseq_guide_library.tsv` for downstream summaries. Treat guides with category `negative_control` and `nontargeting` as the control population for Mixscape; when using Mixscape, run `CalcPerturbSig` with 20 nearest neighbors and call KO cells from `RunMixscape` posterior probability > 0.5.\n\nFor mtDNA heteroplasmy, run mgatk v0.7.0 in tenx mode on the NUMT-masked Cell Ranger ARC ATAC BAM for each replicate using the corresponding high-quality cell barcode list. Import mgatk counts into the integrated Seurat object with `ReadMGATK`. Estimate the m.5024C>T haplotype fraction by summing allele counts across the linked informative mtDNA positions m.5024C>T and m.13715C>T together with the inverse-linked positions m.1781T>C, m.1866G>A, m.3009T>G, m.3823C>T, and m.13614T>C, using the appropriate reference or alternate allele orientation for each site. Use combined coverage across these positions when applying mtDNA-depth filtering; a combined depth of at least 20 reads is the preferred confidence threshold for downstream analyses.\n\nFor DamID-seq, process Dam-ATF4 and Dam-only paired-end FASTQs with damidseq_pipeline v1.5.3, aligning to mm10/GRCm38 with Bowtie2 v1.3.1 and assigning mapped reads to GATC fragments. Compute 300 bp binned signal with RPM normalization. Normalize every Dam-ATF4 replicate against every Dam-only replicate, giving all pairwise treatment-control comparisons. Call broad peaks for each pairwise comparison with MACS3 v3.0.3 using Dam-ATF4 as treatment, Dam-only as control, `--broad`, `--nomodel`, fixed fragment size 300 bp, effective genome size 2725537669, p < 0.05, and mfold 5-50. Merge and de-duplicate peaks for each Dam-ATF4 replicate based on signal strength, run IDR v2.0.3 across all pairwise combinations of the three Dam-ATF4 replicates, retain peaks with IDR < 0.01, then use bedtools v2.31.0 `multiinter` to build a consensus set supported by reproducible replicate overlap. Annotate consensus peaks to nearest genes with HOMER v5.1 `annotatePeaks.pl` against mm10. For enrichment summaries of genes associated with ATF4 binding sites, use clusterProfiler v4.12.1 `enrichGO` with org.Mm.eg.db v3.20.0 and a q-value cutoff of 0.05.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "bc2d38ceb532e35ee1a6df3e0cc303483131581eb74189829ca4542996fd60f0",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.08.663208_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "perturbation multiome damid",
+      "skills": [
+        "normalization",
+        "dimension-reduction",
+        "differential-expression",
+        "enrichment",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "population-genetics",
+        "integration",
+        "chromatin",
+        "network",
+        "protein-structure",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
+      "outputs": [
+        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
+        "selection.tsv: candidate eligibility, scores, ranks and ties"
+      ],
+      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
+      "decisions": [
+        "Preserve cell barcode and biological-replicate identity across modalities; guide assignment, perturbation response and allelic depth are separate evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
+        "Keep measured assay comparisons separate from geometry-only predictions."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-perturbation-multiome-damid"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.28.666515_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze DNA methylation variation associated with tau neuropathology in female rTg4510 mice across entorhinal cortex and hippocampus. The local `./data` tree contains raw HorvathMammalMethylChip40 IDAT pairs for mouse entorhinal cortex and hippocampus samples from rTg4510 and J20 cohorts, rTg4510 entorhinal cortex RRBS single-end FASTQ files with two sequencing runs per sample, phenotype tables with genotype, age, tissue, mouse identifiers, chip identifiers, and tau pathology measurements, sequencing and array sample sheets, a UCSC mm10/GRCm38.p4 reference FASTA, a GENCODE mouse annotation file, and Horvath mammalian array manifest resources. Use these inputs to quantify methylation, identify rTg4510 genotype-, age-interaction-, and tau-pathology-associated methylation changes, annotate CpG sites to mouse genomic features and genes, and summarize gene-level evidence by combining CpG-level signals.\n\nMethod guidance:\nUse only local files under `./data` for primary inputs. Match IDAT basenames and FASTQ runs to biological samples using the staged sample sheets and rTg4510 phenotype tables. Keep WT as the reference genotype and TG as the transgenic genotype. Use ages in months as numeric covariates. For pathology analyses, use the tau pathology measurement from the same tissue as the methylation profile and retain samples with non-missing pathology values.\n\nFor RRBS, run FastQC, trim with Trim Galore v0.4.5 using Phred cutoff 20, align 50 bp single-end reads to mm10/GRCm38.p4 with Bismark v0.19.0 and Bowtie2 v2.3.4.1, then extract methylation with Bismark methylation extractor in single-end bedGraph mode using `--merge_non_CpG --comprehensive`. Merge adjacent palindromic CpG evidence with `coverage2cytosine --merge_CpG --discordance 100`. When a sample has multiple sequencing runs, merge or otherwise combine run-level methylation evidence at the sample level before downstream modeling.\n\nProcess RRBS coverage with BiSeq v1.26.0. Import Bismark coverage files with `readBismark`, require coverage of at least 10 reads in at least 50% of samples for raw methylation filtering, define CpG clusters with `clusterSites` using genotype groups, `perc.samples = 0.5`, `min.sites = 5`, and `max.dist = 500`, cap coverage at the 90th percentile with `limitCov`, and obtain smoothed methylation estimates with `predictMeth` using the default 80 bp bandwidth. Represent sites as mm10 chromosome and 1-based coordinate pairs.\n\nFor the mammalian array, read the raw IDAT pairs with the staged sample sheet and HorvathMammalMethylChip40 manifest resources. Exclude methylated-control samples before modeling. Compute raw methylated and unmethylated median intensities with minfi and fail samples with median methylated intensity < 800 or median unmethylated intensity < 800. Estimate bisulfite conversion from the BISULFITE CONVERSION II control probes as `red / (red + green) * 100` and fail samples with conversion < 80. Infer sex from the mouse-mapping sex-chromosome probes with the principal-component `findGenderPC` approach used in the public analysis code and fail samples whose inferred sex disagrees with the reported sex; also drop samples whose reported tissue disagrees with the staged `predictedTissue` label. Normalize remaining mouse-mapping probes separately by tissue using SeSaMe `openSesame(idat_paths, \"custom\", manifest_sesame_filtered, \"beta\", nondetection.mask = FALSE, quality.mask = FALSE)` with `HorvathMammal40.CanonicalManifest.3.2019.sesame.csv` filtered to probes with mouse coordinates. Use the mm10 Horvath manifest to assign probe coordinates; drop probes without mouse coordinates and average duplicated array probes that map to the same genomic position when constructing position-level beta matrices.\n\nFit beta-regression models on methylation beta values with a probit link. For RRBS, use the R package `betareg`; replace exact 0 and 1 beta values with the smallest and largest observed non-boundary beta values before modeling. For array analyses, use `glmmTMB` with `beta_family(link = \"probit\")` and include chip identifier as a fixed effect. For entorhinal cortex and hippocampus array genotype analyses, fit `methylation ~ Genotype + Age_months + Genotype:Age_months + Chip_ID`; positive TG genotype coefficients indicate higher methylation in TG than WT, and positive TG-by-age coefficients indicate a steeper age-associated methylation increase in TG. For tissue-specific array pathology analyses, fit `methylation ~ Pathology + Chip_ID`; positive pathology coefficients indicate higher methylation with greater tau pathology burden. For RRBS entorhinal cortex pathology analyses, fit `methylation ~ Pathology` on smoothed methylation estimates. For RRBS entorhinal cortex genotype analyses, fit `methylation ~ Genotype + Age_months + Genotype:Age_months` on smoothed methylation estimates so that both RRBS and array sites are scored on the same set of genotype-effect terms before downstream gene-level combination. Adjust p values separately within each analysis using Benjamini-Hochberg FDR and call significant CpG-level results at FDR < 0.05.\n\nAnnotate significant methylation positions with ChIPseeker v1.22.1 using `org.Mm.eg.db` and `tssRegion = c(-1500, 1500)` on mm10 coordinates. For RRBS sites in exons or introns, cross-reference gene assignments against the staged GENCODE mouse annotation; for array probes, also use the staged Horvath mammalian manifest gene and CpG-island annotations. When combining entorhinal cortex RRBS and array results, keep platform-specific CpG-level statistics but harmonize coordinates and gene annotations in the mm10 namespace.\n\nFor gene-level summaries, combine significant entorhinal cortex CpG-level evidence across RRBS and array positions assigned to each mouse gene symbol. Use the significant-position methylation beta matrix for the relevant effect, restrict to samples common to the contributing RRBS and array beta matrices, impute missing methylation values within each CpG by that CpG's mean, and apply `EmpiricalBrownsMethod::empiricalBrownsMethod` separately to the genotype and tau-pathology FDR-adjusted p-value vectors for each gene. Include one gene row per mouse gene symbol that has at least one FDR<0.05 CpG assigned to it in either the combined entorhinal-cortex RRBS+array genotype analysis or the combined entorhinal-cortex RRBS+array tau-pathology analysis. Report `brown_pvalue_genotype` as `NA` for a gene that has no significant genotype CpGs and `brown_pvalue_pathology` as `NA` for a gene that has no significant pathology CpGs.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "85ec0b339ef5c516185f1af9bfb40d21a7ad35fc31f15e520ae08e1ad06f4cbf",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.28.666515_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "cross platform methylation",
+      "skills": [
+        "normalization",
+        "dimension-reduction",
+        "regression",
+        "multiple-testing",
+        "clustering",
+        "classification",
+        "prediction",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "variant-analysis",
+        "integration",
+        "methylation",
+        "database-query",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "clinical",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [
+        "Array and sequencing filters differ; repeated tissues and chip effects must remain visible when combining CpG evidence."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-cross-platform-methylation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1038_s42003-022-03654-9_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how MEK inhibition and combined MEK/JAK-STAT3 inhibition reshape transcriptional programs in human Sonic Hedgehog medulloblastoma models. The local `./data` directory contains 24 single-end bulk RNA-seq FASTQ files for UI226 human SHH medulloblastoma samples, with sample metadata in `./data/metadata/sample_metadata.tsv`. The cohort includes endpoint FACS-isolated human xenograft cells after vehicle or selumetinib treatment and cultured tumorspheres treated for 5 days with DMSO, pacritinib, selumetinib, or pacritinib plus selumetinib. Quantify expression from the primary reads, identify differential gene expression for the xenograft and tumorsphere drug contrasts, and use the xenograft MEK-inhibition contrast to summarize preranked pathway enrichment and leading-edge gene behavior.\n\nMethod guidance:\nUse the sample metadata in `./data/metadata/sample_metadata.tsv` to assign sample type, treatment group, and FASTQ file for each sample. Start from the single-end FASTQ files in `./data/raw`; do not use processed differential-expression or enrichment tables as primary inputs.\n\nFor the xenograft RNA-seq samples, align each FASTQ independently to both the human GRCh38 assembly guided by GENCODE release 23 transcripts and the mouse GRCm38 assembly guided by GENCODE release M12 transcripts using `hisat2` 2.1.0. Use `XenofilteR` on the two species alignments to retain reads of human origin, then assign retained human reads to GENCODE release 23 genes with `featureCounts`. Build a gene-count matrix and retain genes with at least five mapped reads in at least two samples. In R, use `DESeq2` v1.20.0 for the selumetinib-treated xenograft versus vehicle-control xenograft comparison, with expression differences from the DESeq results function and Benjamini-Hochberg correction. Define log2 fold changes as selumetinib-treated over vehicle control; positive values mean higher expression after selumetinib treatment. Use q-value < 0.05 for significant xenograft genes, corresponding to nominal p-value 0.00168 for this contrast.\n\nFor the tumorsphere RNA-seq samples, quantify transcripts with `salmon` v1.4.0 against a GENCODE v35 transcriptome index built with genomic decoy sequences. Import transcript quantifications into R with `tximport`, summarize to genes, and retain genes with at least five mapped reads in at least two samples. Use `DESeq2` v1.30.1 for differential expression and shrink log fold changes with `lfcShrink()` using the `apeglm` method v1.12.0. Apply Benjamini-Hochberg correction and use q-value < 0.05 for significant genes. Run contrasts for selumetinib over DMSO, pacritinib plus selumetinib over DMSO, pacritinib plus selumetinib over selumetinib alone, and pacritinib over DMSO; positive log2 fold changes should always indicate higher expression in the first treatment named in the contrast.\n\nFor gene set enrichment from the xenograft MEK-inhibition contrast, restrict the differential-expression list to protein-coding genes and rank genes by `-log10(p-value) * sign(fold change)`, where the sign follows the selumetinib-treated over vehicle-control direction. Run pre-ranked enrichment analysis using MSigDB v6.1 gene-symbol collections H, C4:CP, C6, and C8. For Hallmark gene-set summaries, retain enriched gene sets with q-value < 0.005 and extract the ranked-gene, running-enrichment, and leading-edge information needed for the required gene-set summaries. For the named leading-edge outputs, use the exact MSigDB v6.1 gene sets `HALLMARK_TNFA_SIGNALING_VIA_NFKB`, `HALLMARK_IL6_JAK_STAT3_SIGNALING`, `HALLMARK_APOPTOSIS`, and `MEK_UP.V1_DN`.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "3dcf3f9843d1c46df0e5feef3feff45e871dd20ddd513f13125203338451119f",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s42003-022-03654-9_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "xenograft and tumorsphere expression",
+      "skills": [
+        "transformation",
+        "multiple-testing",
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "read-qc",
+        "database-query",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Human and host reads require explicit disambiguation; assay-specific quantifiers and reference versions must not be mixed."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-xenograft-and-tumorsphere-expression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10_1186_s12915_024_01879_0_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how loss of REST reshapes the transcriptomes of human T98G glioblastoma cells and HEK293 cells, and identify shared REST-dependent programs plus the transcriptomic adaptation associated with the fast-growing T98G REST-null D4 clone.\n\nThe local `./data` tree contains 28 single-end 100 bp Tag-Seq FASTQ files from 16 human cell-line RNA libraries: T98G control, four T98G REST-knockout clones (C10, F7, G2, D4), HEK293 control, and two HEK293 REST-knockout clones (D10, E6), with two biological replicates per sample group and some samples split across technical sequencing runs. Staged metadata maps technical runs to biological samples and records cell line, clone, condition, replicate, library layout, and instrument. The local reference bundle includes GRCh38 primary assembly FASTA and GENCODE v38 gene annotation.\n\nStart from the FASTQ files, quantify gene-level expression, run clone-versus-control differential expression in each cell-line context, derive shared up- and down-regulated REST-knockout gene sets, identify D4-specific genes that are upregulated in D4 versus control but not shared-upregulated in the slow T98G REST-knockout clones C10/F7/G2, and perform Gene Ontology biological-process enrichment for the specified regulated gene sets.\n\nMethod guidance:\nUse the staged metadata tables under `./data/metadata` to merge technical FASTQ runs belonging to the same biological sample before read processing or alignment; keep biological replicates separate throughout quantification and differential-expression modeling.\n\nAssess raw-read quality with FastQC. Preprocess reads using the published tag-based_RNAseq pipeline from `https://github.com/z0on/tag-based_RNAseq`: run `tagseq_clipper.pl` with its default 5-prime leader pattern to remove the Tag-Seq leader, discard reads containing `N` in the deduplication tag, and remove PCR duplicates sharing the clipped leader plus the first 20 post-leader bases. Then trim poly-A and Illumina adapter sequence with cutadapt using `-a AAAAAAAA -a AGATCGG -q 15 -m 25` on PHRED+33 reads.\n\nBuild a HISAT2 v2.2.1 index from the staged GRCh38 primary assembly FASTA. Align cleaned single-end reads with default HISAT2 parameters plus `--rna-strandedness F`. Sort and index alignment files as needed. Count mapped fragments with featureCounts v2.0.1 using the staged GENCODE v38 GTF; use strand-specific gene-level counting consistent with forward-stranded reads, and carry the GENCODE gene identifiers through the count matrix.\n\nRun DESeq2 v1.30.1 in R separately by cell line and clone contrast. For each clone-versus-matched-control comparison, use a design with clone or condition as the factor and estimate REST-knockout clone over matched control log2 fold changes; positive values mean higher expression in the clone, and negative values mean higher expression in the matched control. Treat genes as differentially expressed at adjusted p-value < 0.05 and absolute fold change >= 1.5.\n\nDefine C10, F7, and G2 as the slow T98G REST-knockout group. Intersect clone-versus-control differential-expression calls to define shared T98G slow signatures separately for genes consistently higher and consistently lower in the knockout clones. For HEK293, intersect D10 and E6 clone-versus-control calls in the same direction. For the D4 adaptation analysis, use D4-versus-control genes upregulated at the same adjusted p-value and fold-change criteria, then exclude genes in the shared upregulated slow-clone signature.\n\nPerform Gene Ontology biological-process over-representation with clusterProfiler v3.18.1 and human annotation from org.Hs.eg.db, mapping between GENCODE identifiers and gene symbols as needed and using Benjamini-Hochberg adjusted p-values. Use clusterProfiler's default background for these enrichment analyses. Apply this enrichment workflow to the shared T98G slow up-regulated set, shared T98G slow down-regulated set, shared HEK293 up-regulated set, and the D4-specific upregulated set defined as D4-versus-control upregulated genes excluding shared upregulated slow-clone genes. Use STRING v12 only for protein-interaction network interpretation; keep the ontology enrichment tables derived from clusterProfiler.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "3287c9bc15ef70dd64aa482a801417527aa11179704e60dd7b061c99320944be",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10_1186_s12915_024_01879_0_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "tagseq clone signatures",
+      "skills": [
+        "multiple-testing",
+        "differential-expression",
+        "enrichment",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "network",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Technical lanes are not biological replicates; gene-set intersections must preserve direction and comparison context."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-tagseq-clone-signatures"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1038_s41467-023-44243-6_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how selective pharmacologic inhibition of KMT9 alters the transcriptome of human PC-3M prostate cancer cells, and distinguish the active inhibitor response from both vehicle-treated cells and a structurally related control compound. The local `./data` directory contains paired-end bulk RNA-seq FASTQ files for cells cultured for four days with DMSO vehicle, 360 nM KMI169, or 360 nM KMI169Ctrl, with three biological replicates per condition. Staged metadata provide the sample-to-condition mapping, pipeline notes, and hg19 reference resources including genome FASTA, RefGene gene annotation, and chromosome sizes. Quantify transcript-level expression from the raw reads, compare each compound condition against the matched DMSO vehicle group, and use the resulting expression changes to characterize KMT9 inhibitor-associated transcriptional programs.\n\nMethod guidance:\nStart from the paired FASTQ files under `./data/raw` and use the staged sample sheet under `./data/metadata` to assign each biological replicate to DMSO, KMI169, or KMI169Ctrl. Use the staged hg19 FASTA and RefGene GTF for STAR genome indexing/alignment support. Use the staged chromosome sizes under `./data/metadata/reference/hg19` for hg19 reference bookkeeping. There is one paired-end sequencing run per biological replicate, so keep each run as a separate biological replicate rather than merging across conditions.\n\nAlign reads with `STAR` version 2.7.10b against hg19. Build or reuse a STAR genome index from the staged hg19 FASTA and RefGene GTF, then align each paired-end sample independently. Perform read counting with `Homer` version 4.11. For transcript counting, use HOMER's hg19/RefSeq-style RNA counting support after running `configureHomer.pl -install hg19`, so the counted features follow its transcript and repeat-feature naming conventions.\n\nPerform differential expression with `edgeR` version 2.38.4 from the Homer-derived raw count matrices. Use the DMSO replicates as the vehicle baseline and analyze two separate treatment contrasts: KMI169Ctrl over DMSO and KMI169 over DMSO. In each contrast, orient effect sizes so values greater than the neutral ratio, or positive log fold changes if using log scale internally, mean higher expression in the compound-treated cells, while lower values mean higher expression in DMSO. Use edgeR count normalization and the replicated two-group comparison framework, retain the nominal significance statistics for all tested features, and preserve the treatment and replicate structure from the staged sample sheet.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "ec7a99a0c73382bd95712a1117622ec8d5821b05173c9e5f9df8dc7132295f6b",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s41467-023-44243-6_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "transcript level compound controls",
+      "skills": [
+        "normalization",
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "statistics",
+        "visualization",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Distinguish active treatment, related control compound and vehicle; verify cited package versions before requiring execution."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-transcript-level-compound-controls"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1016_j.crtox.2021.01.003_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how chronic drinking-water exposure to 1,4-dioxane alters liver transcriptomes in female B6D2F1/Crl mice and whether expression changes support dose- and time-dependent xenobiotic metabolism, proliferation, and DNA-damage-response mechanisms. The local `./data` tree contains single-end TempO-Seq FASTQ files from 85 post-QC FFPE liver samples spanning 0, 40, 200, 600, 2000, and 6000 ppm exposures across 7, 28, and 90 days, sample and run metadata linking libraries to exposure concentration and timepoint, the BioSpyder mouse whole-transcriptome v1.1 TempO-Seq probe manifest, and a curated DNA-damage gene-set workbook. Analyze the primary sequencing reads to produce probe-level expression counts, identify treatment effects at each exposure duration, summarize canonical pathway enrichment for directional expression responses, and assess curated DNA-damage response gene sets.\n\nMethod guidance:\nUse an R 4.0.2-compatible workflow. Start from the 85 staged single-end TempO-Seq FASTQs under `data/raw/GSE154899/fastq` and the staged sample metadata at `data/metadata/sample_metadata.tsv`. Use the staged BioSpyder manifest at `data/metadata/temposeq/100770_mus_musculus_wt_11_full_manifest_revB.csv` as the probe reference: align reads to `PROBE_SEQUENCE`, quantify probe-level counts, and use `PROBE_NAME` as the `gene_probe_id` row key. Follow the BioSpyder TempO-Seq counting convention using QuasR 1.26.0 defaults against the manifest; retain each manifest `PROBE_NAME` separately rather than collapsing by gene symbol. Count reads against the assay-specific mouse TempO-Seq probe targets to generate unnormalized integer probe counts for every staged library; the staged libraries are the retained post-QC cohort for this benchmark. Use DESeq2 1.28.1 for size-factor normalization and for concentration contrasts within each timepoint. Model treated groups against the timepoint-matched 0 ppm control with the DESeq2 Wald statistic; report treated/control log2 fold changes, with positive values indicating higher expression in treated livers. Treat Benjamini-Hochberg FDR < 10% as significant.\n\nFor pathway analysis, convert mouse identifiers to human identifiers with biomaRt 2.44.1 against the Ensembl 100 archive before querying human gene-set collections. Use `biomaRt::useEnsembl(biomart = \"genes\", dataset = \"mmusculus_gene_ensembl\", version = 100)` and live BioMart queries through `https://apr2020.archive.ensembl.org/biomart/martservice` for mouse-to-human ortholog mapping. Use the MSigDB v6.2 canonical pathway collections for KEGG, Reactome, Hallmark, BioCarta, NABA, PID, and other canonical pathway gene sets, keeping gene sets with 5 to 500 mapped genes. Run PIANO 2.4.0 pre-ranked enrichment on DESeq2 Wald statistics for each timepoint and concentration, separating positive and negative directional enrichment. Also run hypergeometric overrepresentation analyses on all significant genes and on up- and down-regulated subsets, controlling FDR at 10%.\n\nFor curated DNA-damage analyses, use the staged MSigDB v6.2-derived gene sets after excluding `GO_CELLULAR_RESPONSE_TO_DNA_DAMAGE_STIMULUS`; use all genes appearing in the retained 88 curated DNA-damage gene sets as the background. Run the same hypergeometric overrepresentation procedure for the 13 tested timepoint/concentration contrasts represented in the output contract: all nonzero day28 and day90 concentrations plus day7 600ppm, day7 2000ppm, and day7 6000ppm. Keep non-directional, up-regulated, and down-regulated results distinct.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "eabe5dc26b5d5c201675dfa931e9328930e304548df086919ab611b66ff1c9e6",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1016_j.crtox.2021.01.003_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "probe transcriptomics pathways",
+      "skills": [
+        "normalization",
+        "multiple-testing",
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "read-qc",
+        "orthology",
+        "database-query",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Probe IDs remain separate from gene symbols; curated gene-set backgrounds and cross-species mappings require frozen provenance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-probe-transcriptomics-pathways"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.06.02.657493_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how lithocholic acid changes the time-resolved transcriptomic response of Escherichia coli Nissle 1917 relative to a solvent control and to a non-biofilm-inducing bile acid control. The local `./data` directory contains single-end RNA-seq FASTQ files for anaerobic EcN cultures treated with DMSO, LCA, or CDCA at 15, 30, 90, and 180 minutes, with three biological replicates per treatment-timepoint combination. It also contains a sample sheet mapping sequencing runs to treatment, timepoint, and replicate labels, plus a staged EcN genome FASTA and GFF3 annotation for alignment and gene-level counting.\n\nUse these inputs to quantify gene-level RNA abundance from the raw reads, compare LCA-treated cultures against DMSO and CDCA within the time course, and identify treatment-specific differential expression patterns at the biofilm-onset timepoints.\n\nMethod guidance:\nUse the staged sample sheet to assign each FASTQ to its treatment, timepoint, and biological replicate. Treat the RNA-seq libraries as single-end 50 bp reads generated from TruSeq Stranded Total RNA libraries after rRNA depletion.\n\nTrim low-quality bases with Trimmomatic using `LEADING:27 TRAILING:27 SLIDINGWINDOW:4:20 MINLEN:3`. Align the trimmed reads with Bowtie2 against an index built from the staged EcN reference FASTA in `./data/metadata/reference`. Count reads per annotated locus with featureCounts against the staged GFF3 annotation at `./data/metadata/reference/CP007799.1.gff3` using gene and pseudogene features (`-t gene,pseudogene`) and the `locus_tag` attribute as the gene identifier (`-g locus_tag`). Configure featureCounts for reversely stranded TruSeq stranded total-RNA reads (`-s 2`), count reads that overlap multiple genes with `-O`, and do not count reads that map to multiple genomic locations. Carry gene product or functional annotation from the GFF3 into downstream differential-expression summaries when available.\n\nBuild a raw integer count matrix from the featureCounts outputs with one column per treatment-timepoint-replicate sample. Use R 4.3.2 with DESeq2 for size-factor normalization, dispersion estimation, Wald statistics, Benjamini-Hochberg adjusted p-values, and log2 fold-change shrinkage. Run DESeq2 on the full featureCounts matrix using DESeq2's default independent filtering, without adding a separate expression-count prefilter. Apply `lfcShrink` with the `apeglm` method to the treatment coefficients used for reporting effect sizes.\n\nAnalyze treatment effects within each timepoint rather than pooling timepoints into a single contrast. For each timepoint, subset the count matrix to samples from that timepoint and fit DESeq2 with `design = ~ treatment` using the three biological replicates per treatment. Compare LCA against DMSO and LCA against CDCA by setting the comparator treatment as the reference level before extracting and shrinking the LCA coefficient with `lfcShrink(type = \"apeglm\")`. Define log2 fold changes as LCA divided by the comparator treatment: positive values indicate higher expression after LCA treatment, and negative values indicate higher expression in the comparator. Call genes differentially expressed when the adjusted p-value is below 0.05 and the absolute apeglm-shrunken log2 fold change is greater than 1.\n\nAs a quality check before finalizing results, inspect library sizes, mapping rates, assignment rates from featureCounts, replicate clustering, and the expected lack of broad treatment separation at the earliest timepoints. If strand-specific counting gives unexpectedly poor assignment, verify the strandedness against the alignments and annotation before generating the final counts.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "98445cb9d64c60deb2bb174f1610fa3c82eceed95e113d822740fbd0f35557ab",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.02.657493_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "probiotic timecourse expression",
+      "skills": [
+        "normalization",
+        "multiple-testing",
+        "differential-expression",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "database-query",
+        "statistics",
+        "data-management",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Overlapping genes, multimapping and reverse-stranded counting have distinct counting rules; do not pool timepoints."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-probiotic-timecourse-expression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.03.10.709901_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze whether targeted single-cell homopolymer microsatellite sequencing can recover the known clonal expansion structure of HCT116 cells. The local `./data` tree contains single-end targeted microsatellite amplicon FASTQ files for two 54-cell HCT116 homopolymer panels, one targeting 15-50 bp repeats and one targeting 10-14 bp repeats. Staged metadata includes RETrace2 samplesheets with local FASTQ mappings and clone group labels, a run manifest, the staged hg38 reference FASTA, and panel-specific hg38 homopolymer target BED files.\\n\\nQuantify per-cell microsatellite library quality for both homopolymer panels, call microsatellite genotypes, reconstruct pairwise genetic distances and a neighbor-joining lineage tree for the 15-50 bp panel, and summarize how the reconstructed topology agrees with the three-clone expansion structure encoded in the samplesheets.\n\nMethod guidance:\nUse the RETrace2 Nextflow workflow and process each homopolymer panel separately with the staged samplesheet for that panel. The staged FASTQ files are single-end reads, so run the microsatellite workflow with paired-end mode disabled and without methylation processing. Use the staged hg38 FASTA at `./data/metadata/reference/hg38/hg38.fa.gz`; decompress it as needed and build a BWA index before alignment, or point the workflow directly to an existing index. Use `./data/metadata/reference/bed/RETrace.hg38.1nt15-50bp.12472probes.bed` as the complete 15-50 bp HipSTR locus universe and `./data/metadata/reference/bed/RETrace2.hg38.1nt10-14bp.12000probes.bed` as the complete 10-14 bp HipSTR locus universe; the staged hg38 FASTA contains all contigs named by both BED files.\\n\\nFor read processing, follow the RETrace2 microsatellite module settings: FastQC v0.12.1; Trim Galore v0.6.10 with `--quality 30`, `--phred33`, `--stringency 3`, and `--length 36`; BWA-MEM v0.7.19 against hg38 with duplicate reads retained; and SAMtools v1.21 for coordinate sorting, indexing, and alignment summaries. Count target coverage from the aligned BAMs by requiring reads to fully span each BED interval. Treat a cell as passing microsatellite QC when it has at least 500 target loci covered by at least 10 reads.\\n\\nRun HipSTR on the QC-pass BAMs using the matching complete panel target BED named above and the staged hg38 FASTA, `--use-unpaired`, `--no-rmdup`, `--min_reads 10`, `--max_stutter 1`, and `--min_qual 0`. Chromosome-parallel HipSTR is appropriate. Parse HipSTR calls by retaining genotypes with genotype probability at least the `--min_qual` value, at least 10 reads, and stutter/read ratio no greater than 1.0. Convert called allele lengths to repeat-aware allele classes by grouping consecutive repeat counts within each locus before distance calculation.\\n\\nFor the 15-50 bp panel, compute pairwise microsatellite distances only among cells that pass the microsatellite QC filter. Use the RETrace2 `minComp_EqorNot` distance metric: for each shared locus, compare the minimum number of alleles present in the two cells to accommodate allelic dropout, treat allele-class matches as 0 and mismatches as 1, sum across comparable alleles, and divide by the number of allele comparisons. Keep self-distances at zero and use a consistent sorted cell order for the distance matrix.\\n\\nBuild the 15-50 bp lineage tree from the pairwise distance matrix with the neighbor-joining implementation in scikit-bio v0.6.3 and midpoint rooting. Prefer one thread for the alignment/tree workflow when practical, because multi-threaded alignment in repetitive regions can introduce nondeterministic tie handling.\\n\\nFor topology comparison, use the clone group labels from the staged samplesheet together with the HCT116 ex vivo clone-distance resource from the RETrace2 method code at `resources/reference_phylo/HCT116_exvivo/exVivo.rootDist.v2.csv` (raw URL `https://raw.githubusercontent.com/tonypincheng/RETrace2/main/resources/reference_phylo/HCT116_exvivo/exVivo.rootDist.v2.csv`). Apply the RETrace2 triplet procedure implemented in `scripts/evalPhylo.py` (raw URL `https://raw.githubusercontent.com/tonypincheng/RETrace2/main/scripts/evalPhylo.py`) to the reconstructed tree and the saved distance dictionary: enumerate cell triplets containing at least two clone groups, skip unresolved triplets with tied clone or tree distances, and tabulate the fraction of triplets whose most distant pair in the reconstructed tree matches the corresponding pair in the clone-distance resource, including the overall aggregate.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "43d50429448896adf0297e8703005f0987169f565af222e7471fd5aa265b2360",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.03.10.709901_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "microsatellite cell lineage",
+      "skills": [
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "trajectory",
+        "methylation",
+        "sequence-design",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "context_tags": [
+        "single-cell"
+      ],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "Missing alleles change the comparable-locus denominator; unresolved triplets cannot be counted as agreement or disagreement."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-microsatellite-cell-lineage"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.21.665972_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Use the local human rhabdomyosarcoma sequencing data to quantify tumor-associated mRNA and miRNA expression changes relative to non-malignant skeletal muscle. The biological question is to distinguish expression programs associated with alveolar, embryonal, spindle cell/sclerosing, and pleomorphic rhabdomyosarcoma from wildtype skeletal muscle, with emphasis on signed differential abundance patterns for coding transcripts and mature miRNAs.\n\nThe `./data` directory contains paired-end NovaSeq 6000 150 bp mRNA-seq FASTQ files for human primary tumor and skeletal muscle samples, single-end NovaSeq 6000 50 bp small-RNA-seq FASTQ files for human primary tumor and skeletal muscle samples, sample metadata assigning each sequencing run to a tissue group, and staged human reference resources. The mRNA sample metadata supports ARMS, combined E/SC/PRMS, and control skeletal muscle contrasts; the small-RNA metadata supports ARMS, ERMS, and control skeletal muscle contrasts. Reference materials include the GRCh38 human genome and transcript annotations from GENCODE v46 and Ensembl release 112, plus human miRNA annotations from miRBase v22.\n\nGenerate expression quantification and differential expression analyses for the mRNA-seq and small-RNA-seq datasets, covering the tumor-versus-skeletal-muscle contrasts needed for the requested downstream summaries.\n\nMethod guidance:\nUse the sample metadata in `./data/metadata` to assign every sequencing run to ARMS, ERMS, SCRMS, PRMS, or wildtype/control skeletal muscle before modeling. Treat ERMS, SCRMS, and PRMS together as E/SC/PRMS for the combined non-ARMS mRNA contrast. Use tumor groups as the numerator and wildtype/control skeletal muscle as the denominator for signed log2 effects, so positive values indicate higher abundance in the tumor group and negative values indicate higher abundance in skeletal muscle. If the sample sheet shows multiple sequencing runs per GEO sample/biosample, sum per-run counts into one row per biological sample before DESeq2 so the DESeq2 sample unit matches the published per-tissue design.\n\nFor mRNA-seq, process the 150 bp paired-end libraries by filtering out reads containing unassigned nucleotides, using Trim Galore to remove adapters, and discarding reads shorter than 20 nt. Align trimmed reads to the human genome v38/GRCh38 with HISAT2 for QC/coverage inspection. Build any required indexes from the staged GENCODE v46 and Ensembl release 112 reference FASTA/GTF files. The differential-expression count source is Kallisto pseudoalignment of trimmed reads against the staged GENCODE v46 / Ensembl v112 transcripts FASTA; summarize transcript-level counts consistently to the annotated gene level (e.g. with tximport), then carry counts into R for DESeq2 normalization and differential expression. The published methods cite DESeq2 v1.2.10, which is almost certainly a typo; use any current Bioconductor release of DESeq2 (e.g. 1.40+) and document the actual version used. Fit a single DESeq2 dataset over all mRNA samples (ARMS, E/SC/PRMS, control) with condition as the design factor and extract both contrasts (ARMS vs control, E/SC/PRMS vs control) from that one fit so baseMean and independent filtering are shared. Use DESeq2 size-factor normalization and the negative-binomial framework. The required mRNA CSV rows are the genes with Benjamini-Hochberg adjusted p-value (`padj`) < 0.05 for the corresponding contrast; use the paper's log2-fold-change and nominal-p thresholds only when summarizing stricter differential-expression classifications in `METHODS.md`.\n\nFor small-RNA-seq, process the 50 bp single-end libraries by removing reads with unassigned nucleotides and trimming the specified adapters: 3' AGATCGGAAGAGCACACGTCT and 5' GTTCAGAGTTCTACAGTCCGACGATC. Discard reads shorter than 20 nt after trimming. Map small RNAs full length with zero mismatches to human genome v38/GRCh38 and corresponding annotations using PatMaN. Use the staged miRBase mature, hairpin, and human GFF resources (release 22 or the equivalent 22.1 archive currently served by the miRBase download endpoints) to quantify human miRNAs: count reads whose PatMaN alignments overlap mature human miRNA loci defined in `hsa.gff3`, aggregating per `Name` (mature miRNA ID, e.g. `hsa-miR-1-3p`) to produce one count per mature miRNA per sample. Fit a single DESeq2 dataset over all small-RNA samples (ARMS, ERMS, control) with condition as the design factor and extract both contrasts (ARMS vs control, ERMS vs control) from that one fit. Use any current Bioconductor release of DESeq2 in place of the paper-cited v1.2.10. Apply independent filtering to remove low-abundance small-RNA features in normalized counts, and identify differentially expressed small RNAs with p-value < 0.05, Benjamini-Hochberg FDR < 5%, and log2 offset fold change > 1.\n\nKeep replicate/run handling consistent with the sample metadata: pair mates for mRNA-seq runs, keep small-RNA runs single-end, and do not mix mRNA-seq and small-RNA-seq libraries in the same model. Inspect basic library and mapping summaries before differential analysis, and document any samples or reads excluded by objective QC criteria.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "7e8060a1c830446e56593de55f0f269e6722a1eff22e99eed31ef45dc04015a7",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.21.665972_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "mrna mirna tumor contrasts",
+      "skills": [
+        "normalization",
+        "multiple-testing",
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "abundance",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Do not mix assay count matrices; transcript-to-gene aggregation and mature-miRNA identities define different row universes."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-mrna-mirna-tumor-contrasts"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.01.09.698641_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Analyze human iPSC-derived cortical neuron transcriptomic data to determine how TDP-43 depletion and 5-Azacytidine treatment alter transposable element expression, gene expression, intron usage, and long-read transcript isoform discovery.\n\nThe local `./data` tree contains single-end Illumina short-read RNA-seq FASTQs for four i3Neuron conditions (`ctrl`, `tdp43kd`, `5aza`, and `tdp43kd_5aza`) with two biological replicates per condition. It also contains PacBio CrypTE-seq subread FASTQs for the same four conditions with one long-read library per condition, sample metadata mapping libraries to condition and replicate, GRCh38 primary assembly plus GENCODE v47 annotation files, and UCSC hg38 RepeatMasker transposable-element annotation.\n\nQuantify genes and transposable element families from the short-read libraries, run condition-versus-control differential expression contrasts, identify differential intron excision across the same short-read contrasts, and quantify known and novel transcripts from the long-read libraries.\n\nMethod guidance:\nUse only the local files under `./data` as sequencing and metadata input. Use the local sample metadata to map each library to `ctrl`, `tdp43kd`, `5aza`, or `tdp43kd_5aza`, preserving biological replicate identity for the short-read libraries and condition identity for the one-library-per-condition long-read data.\n\nTreat the short-read libraries as rRNA-depleted, strand-specific, single-end Illumina RNA-seq. Align the short-read FASTQs to hg38/GRCh38 with `STAR` v2.7.6, using the staged GRCh38 primary assembly and GENCODE v47 annotation, and set `--outFilterMultimapNmax 100` so multi-mapping reads can contribute to transposable-element quantification. Quantify gene and transposable-element family abundance from the STAR alignments with `TEtranscripts` v2.2.3, using `./data/metadata/reference/gencode.v47.annotation.gtf.gz` for genes and `./data/metadata/reference/ucsc_hg38_rmsk_TEtranscripts.gtf.gz` for transposable elements. The TE GTF was converted from the public UCSC hg38 RepeatMasker table with `gene_id` and `transcript_id` formatted as `repName:repClass:repFamily`; the original table is also staged at `./data/metadata/reference/ucsc_hg38_rmsk.txt.gz`.\n\nFor differential expression, build a combined gene and transposable-element count matrix and analyze it with `DESeq2` using DESeq size-factor normalization and negative-binomial modeling. Run three condition-versus-control contrasts: `tdp43kd` over `ctrl`, `tdp43kd_5aza` over `ctrl`, and `5aza` over `ctrl`. Orient signed log2 fold changes so positive values indicate higher abundance in the first-named condition and negative values indicate higher abundance in `ctrl`. Use Benjamini-Hochberg adjusted P-value below 0.05 as the significance criterion. Use the `DESeq2` variance-stabilizing transformation for expression heatmap or PCA summaries when inspecting sample structure.\n\nFor alternative splicing, run `Leafcutter` from the short-read splice-junction evidence following the documented workflow for junction extraction, intron clustering, and differential intron excision. Use the same three condition-versus-control groupings as the differential-expression analysis. Identify every intron with the stable `Intron coordinate` key formatted as `chromosome:donor:acceptor:strand` using UCSC-style chromosome names; do not include a run-specific Leafcutter `clu_N` label in this row key. Retain Leafcutter cluster identifiers only in the non-key `intron` and `cluster` columns. Define each `deltapsi` as PSI(`ctrl`) minus PSI(first-named treatment), matching the published tables, so positive values indicate higher intron usage in `ctrl` and negative values indicate higher usage in the first-named treatment. Annotate introns against GENCODE v47 to assign overlapping genes and to distinguish splice junctions already present in the annotation from cryptic junctions.\n\nFor long-read CrypTE-seq processing, start from the staged PacBio long-read FASTQs for the four condition groups. The paper generated circular consensus reads with PacBio CCS v8, then demultiplexed, refined, and clustered reads with IsoSeq toolkit v4.0.0 before creating FASTA files for alignment. Use the staged public FASTQs as the available benchmark read input for each condition, preserving the one-library-per-condition mapping. Document any additional long-read preprocessing in `METHODS.md`. Align the processed long-read sequences to hg38/GRCh38 using `minimap2` v2.24 with the high-quality spliced transcript preset (`-x splice:hq`) and GT-AG search on the transcript strand (`-u f`). Run `bambu` v3.2.6 with GENCODE v47 as the reference annotation to perform transcript discovery and quantification across the four condition libraries, retaining raw transcript-level abundance estimates and Bambu known/novel transcript classifications.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "88a99c3400ddff8dbcb64c1555d81bdb90b365208ea1812cf2ffca1e8a3b21fb",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.09.698641_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "transposable elements splicing isoforms",
+      "skills": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "multiple-testing",
+        "differential-expression",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management",
+        "visualization"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "context_tags": [
+        "long-read"
+      ],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Stable intron coordinates differ from run-specific cluster labels; one long-read library per condition does not support replicated significance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-transposable-elements-splicing-isoforms"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.31.667834_v1",
+      "disposition": "excluded",
+      "reason": "The existing source review excludes this objective from task authoring.",
+      "source_question": "Analyze the early transcriptional response of Nakaseomyces glabratus, also known as Candida glabrata, to short azole exposure. The local data under `./data` contain paired-end QuantSeq 3' mRNA-seq FASTQ files for the BG2 and CBS138 reference strains grown in RPMI medium with DMSO vehicle, fluconazole, or voriconazole, with three biological replicates for each strain-treatment combination. The staged metadata include a sample sheet mapping each read pair to strain, treatment, and replicate, plus strain-specific genome FASTA and annotation files for BG2 and CBS138.\n\nQuantify gene-level expression separately against the matching strain reference, compare azole-treated samples against vehicle controls within each strain, and summarize biological-process GO Slim annotations for genes showing a shared upregulated azole response across strains.\n\nMethod guidance:\nUse the staged sample sheet to assign each paired FASTQ to its strain, treatment, and biological replicate. Treat fluconazole and voriconazole as separate azole conditions for the strain-specific contrasts, and use all three biological replicates per condition.\n\nThe RNA libraries are Lexogen QuantSeq 3' mRNA-Seq V2 REV libraries. Follow the reported QuantSeq paired-read workflow: run FastQC 0.12.1 for read QC, trim adapters with Cutadapt 4.3 using `--trim-n -O 1 -m 20`, no UMI extraction or UMI deduplication, then align with HISAT2 2.2.1 to the matching staged strain genome. Use reverse-stranded paired-end alignment/counting, no spliced alignment, suppress unaligned reads, allow up to two reported alignments per read, and use a maximum insert size of 1500. Run SAMtools 1.17 for BAM conversion, sorting, and indexing, and use MultiQC 1.14 to inspect combined QC reports. The method-source files used to pin this workflow are staged under `./data/metadata/method_tools/nextflow_paired_reads_pipeline_code/`.\n\nFor QuantSeq counting, create or adapt annotation features by extending the annotated CDS or transcript feature 300 nt at the 3' end according to strand before assigning reads. Count with Subread featureCounts using paired-end reverse-stranded settings (`-p -s 2`) against the appropriate 3'-extended strain annotation. For BG2, group counts by the gene identifier attribute in the staged GTF. For CBS138, use the staged GFF3 annotation and group by `locus_tag` rather than the default GFF3 ID field so that strain-native locus tags are retained. Aggregate featureCounts outputs into one raw count matrix per strain using the sample sheet; preserve integer count values, and mirror the preprocessing workflow's one-count offset when building the combined count tables used for downstream DESeq2 analysis.\n\nPerform differential expression in R 4.3.2 with DESeq2 1.40.2. For each strain separately, build a DESeq2 dataset from the strain-specific count matrix and sample metadata using a treatment/medium design. Run the fluconazole-versus-DMSO and voriconazole-versus-DMSO contrasts with log2 fold changes oriented as azole treatment divided by DMSO; positive values mean higher abundance after azole exposure and negative values mean higher abundance in the vehicle control. Report full DESeq2 result tables for all tested genes, and define upregulated/downregulated gene sets using absolute log2 fold change greater than 1 with Benjamini-Hochberg adjusted p-value below 0.05. The paper-analysis RMarkdown source files used for method guidance are staged under `./data/metadata/method_tools/cglab_rnaseq_rmd/`.\n\nFor cross-strain summaries, build reciprocal best-hit protein orthology between BG2 and CBS138 using the staged strain protein FASTA files `./data/metadata/reference/bg2/GCA_014217725.1_ASM1421772v1_protein.faa.gz` and `./data/metadata/reference/cbs138/GCF_000002545.3_ASM254v2_protein.faa.gz`, mapping hits back to the strain-native gene identifiers in the staged annotations. Use DESeq2 on the matched-gene count matrix with a model including strain and a binary azole-versus-DMSO term, treating fluconazole and voriconazole as azole conditions. Define the shared upregulated azole-response set from the positive azole term using the same fold-change and adjusted-p-value criteria. Annotate that gene set with CGD biological-process GO Slim terms, and summarize each assigned term by the number and percentage of genes in the shared upregulated set carrying the term.\n\nUse the staged public GO support files under `./data/metadata/go/` for the GO Slim summary: `gene_association.cgd.gz` contains CGD GO annotations including CBS138/CAGL0 entries, `goslim_candida.obo` defines the Candida GO Slim subset, and `go-basic.obo` is used to propagate biological-process annotations to the GO Slim terms. Public method source is also staged locally under `./data/metadata/method_tools/`; use those local source files as method guidance rather than repository `data/` directories, published processed matrices, or published result tables as analysis inputs.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "f32a835b83e2c651c3e71aedaaa8e0c1822959a1b7d1aa88226007bcac7e5767",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.31.667834_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "excluded objective",
+      "skills": [],
+      "applications": [],
+      "context_tags": [],
+      "reframed_question": "",
+      "outputs": [],
+      "verification": "",
+      "decisions": [],
+      "scope_changes": [],
+      "authoring_requirements": [],
+      "review_sources": [],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "restricted/excluded",
+      "recipes": []
+    },
+    {
+      "task_id": "10.1101_2025.07.18.664654_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how H2AK118ub chromatin deposition differs among Ras[V12]-transformed Drosophila melanogaster cultured embryonic cell backgrounds with intact or disrupted Polycomb/RING1 complex components, and relate those chromatin states to inducible barcoded reporter activity at genomic integration sites.\n\nThe local `./data` directory contains paired-end ChIP-seq FASTQ files from Drosophila cultured cells, with biological replicate libraries for Input and H2AK118ub across control, Psc/Su(z)2-KO, Siesta-KO, and RING1-KO backgrounds, plus RING1, Psc, and H3K27me3 ChIP-seq libraries for selected backgrounds. It also contains TRIP reporter sequencing from the same cell system, including iPCR integration-mapping libraries, genomic-DNA normalization libraries, and cDNA reporter-expression libraries before induction and after 2 hours of 0.5 mM CuSO4 induction. Staged metadata links each local FASTQ to its genotype, antibody or TRIP library type, induction state, and biological replicate, and `./data/metadata/reference` provides the UCSC dm6 genome FASTA, chromosome sizes, and refGene annotation.\n\nQuantify normalized ChIP-seq signal across dm6, summarize H2AK118ub and H3K27me3 signal in fixed genomic windows, assign chromatin classes from H2AK118ub signal profiles, recover genuine TRIP reporter insertions and their expression levels before and after induction, and assign each reporter integration to the corresponding local chromatin class.\n\nMethod guidance:\nUse the local FASTQs and staged sample metadata as the input source. Build or reuse a Bowtie2 index for the staged dm6 FASTA. For ChIP-seq genome windowing, use the staged dm6 chromosome sizes restricted to the seven major chromosomes `chr2L`, `chr2R`, `chr3L`, `chr3R`, `chr4`, `chrX`, and `chrY`.\n\nFor ChIP-seq, align paired-end reads to dm6 with Bowtie2 v2.4.4 using `--phred33 --no-discordant --very-sensitive-local -p 32`. Filter alignments with samtools v1.3.1 using `-h -b -@ 32 -q 30`, then generate paired-end fragment pileups with MACS3 `pileup` using BAMPE mode. Compute per-bin signal with bedtools v2.30.0 by creating 50 bp genome windows with `makewindows -w 50` and mapping pileup signal with `map -o mean`.\n\nNormalize ChIP-seq signal with the siQ-ChIP scaling formula `Y(i) = R_i / (R_total * F_proc * F_lib * 1e-6)`, where `R_i` is the read signal for bin `i`, `R_total` is the total read count for the library, `F_proc` is the fraction of ChIP or Input DNA used for library preparation, and `F_lib` is the fraction of library used for sequencing. Use the per-library `F_proc` and `F_lib` constants staged at `./data/metadata/stage9_method_resources/siq_chip_library_constants.tsv`, joining by the ChIP sample names in `./data/metadata/sample_metadata_GSE302678.tsv`. Apply the same scaling framework to Input profiles. Remove repetitive-region artifacts by excluding 50 bp bins whose scaled Input signal is greater than that sample's mean plus 3 standard deviations. Aggregate the filtered normalized signal to consecutive 1 kb, 0-based, half-open windows on `chr2L`, `chr2R`, `chr3L`, `chr3R`, `chr4`, `chrX`, and `chrY`, retaining each chromosome's final partial terminal window, and average biological replicate pairs within each matching genotype and antibody.\n\nFor bound-region context, call RING1 and Psc enriched regions per replicate with MACS3 `callpeak -f BAMPE -g dm --qvalue 0.1`, retaining regions with fold enrichment >= 3. Call H3K27me3 enriched regions with Epic2 using `--genome dm6`, also retaining fold enrichment >= 3. Define Polycomb-response regions from intersections of RING1, Psc, and H3K27me3 enriched intervals when useful for checking the ChIP profiles.\n\nFor H2AK118ub window classification, use normalized 1 kb H2AK118ub values from the control, Psc/Su(z)2-KO, and Siesta-KO backgrounds. Use the RING1-KO H2AK118ub profile as the no-H2AK118ub baseline: windows exceeding the RING1-KO mean plus 3 standard deviations are enriched for H2AK118ub. Standardize H2AK118ub signal values across backgrounds with R `scale`, then cluster windows with R `stats` v4.4.3 k-means using `centers = 3` and `nstart = 25`. Use the exact cluster labels `Cluster I`, `Cluster II`, `Cluster III`, and `No H2AK118ubi`. Label the high control-L10/H3K27me3, Psc/Su(z)2-KO-depleted class as `Cluster I`; label the two remaining enriched H2AK118ub classes as `Cluster II` and `Cluster III` by decreasing mean H2AK118ub signal across the control, Psc/Su(z)2-KO, and Siesta-KO backgrounds; and use `No H2AK118ubi` for the RING1-KO-baseline/no-signal class.\n\nFor TRIP, use the staged metadata to separate iPCR mapping, genomic-DNA normalization, and cDNA expression libraries by genotype, induction state, and replicate. For expression and normalization libraries, use the reverse 150 bp read containing plasmid sequence and barcode. For mapping libraries, use paired-end 150 bp reads containing the piggyBac end, barcode, and adjacent genomic sequence. Parse pooled or indexed TRIP reads by sequencing index with sabre, then parse normalization reads by promoter index using `./data/metadata/stage9_method_resources/trip_promoter_indices.tsv` and the author awk parser staged as `./data/metadata/stage9_method_resources/trip_promoter_index_demultiplexing.sh`. Process parsed mapping, normalization, and expression reads with the TASK 0.5 executable staged at `./data/metadata/method_tools/trip0.5/scripts/trip0.5.pl`, using the per-promoter-index configs under `./data/metadata/stage9_method_resources/task_read_structures/`; update the `bowtie_base` entry in a working copy of each config to the dm6 Bowtie2 index path you build from the staged FASTA. `./data/metadata/stage9_method_resources/task_read_structure_template.cfg` documents the shared read structure, and `./data/metadata/stage9_method_resources/task_example_command.txt` gives the author's TASK invocation pattern.\n\nFilter TRIP barcode calls by sorting barcodes by genomic-DNA normalization counts, removing lower-count barcode variants at the same genomic position, retaining mappings with quality greater than 10, and keeping only barcode-position pairs observed in both biological replicate experiments. For each retained insertion, compute reporter signal as expression barcode RPM divided by genomic-DNA normalization barcode RPM. Summarize replicate-consistent reporter signal separately before induction and after 2 hours of 0.5 mM CuSO4 induction, where larger values indicate more reporter transcript per integrated template. Assign each retained reporter integration to the ChIP-seq-derived H2AK118ub chromatin class for the 1 kb dm6 window containing its insertion coordinate.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "f0614569ddc8c5596f125d123a8e229586d774835d7ffe20aeaf4bb73f1fb2e6",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.18.664654_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "chromatin reporter integration",
+      "skills": [
+        "normalization",
+        "enrichment",
+        "clustering",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "integration",
+        "chromatin",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology",
+        "systems-biology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Preserve terminal partial windows and normalization constants; reporter DNA abundance is distinct from transcript abundance."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-chromatin-reporter-integration"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.01.02.697332_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Characterize how GCNT2-dependent glycosylation state and intestinal tissue residence relate to transcriptional programs and chromatin accessibility in mouse intestinal T cells. The local `./data` directory contains Mus musculus raw sequencing inputs: single-end bulk RNA-seq FASTQs for Gcnt2 heterozygous and knockout intestinal intraepithelial lymphocyte subsets sorted as CD8aa or CD8ab with three biological replicates per genotype-subset group; single-end bulk RNA-seq FASTQs for OT-I memory T cells from small intestinal intraepithelial and splenic compartments with three biological replicates per tissue; and paired-end ATAC-seq FASTQs for I-Ag positive and I-Ag negative small intestinal CD8aa T cells with four biological replicates per condition. Staged metadata include sample sheets for each assay, an Ensembl GRCm39 release 103 genome and gene annotation for RNA-seq, and UCSC mm10 genome and mouse blacklist resources for ATAC-seq. Quantify gene expression from raw reads, compare expression across the indicated genotype/subset and tissue contrasts, and identify chromatin accessibility peaks that differ between I-Ag positive and I-Ag negative intestinal CD8aa T cells.\n\nMethod guidance:\nUse the staged sample sheets in `./data/metadata/sample_sheets` to define sample identities and biological groups. For RNA-seq, align reads to Ensembl GRCm39 release 103 with STAR v2.4.0j using default settings except discard reads mapping to more than one genomic location, equivalent to setting the maximum number of reported alignments per read to 1. Build the STAR reference from the staged GRCm39 primary assembly FASTA and release 103 GTF. Construct a nonredundant gene model by merging all annotated exons from all annotated protein-coding isoforms for each gene, then count reads overlapping those merged exon regions with featureCounts v1.4.6-p1 to obtain raw gene-level integer counts. Preserve every Ensembl gene row from this merged protein-coding gene model in the raw count matrices, including genes with zero total counts across the samples in that experiment. Normalize expression in parallel as RPKM. For each differential-expression contrast, apply the paper's 1 RPKM low-expression cutoff within the six samples used for that contrast, retaining genes with RPKM >= 1 in at least three of those six samples before edgeR testing. Perform library-size normalization and differential expression with edgeR in R. Use Benjamini-Hochberg corrected p < 0.05 as the gene-level significance criterion; the requested differential-expression tables contain the full tested row universe after the low-expression filter. For the genotype contrast, analyze KOCD8aa over HetCD8aa, where positive log2 effects indicate higher expression in the knockout group and negative values indicate higher expression in the heterozygous group. For the OT-I memory contrast, analyze SI_IEL over Spleen, where positive log2 effects indicate higher expression in the small intestinal intraepithelial group and negative values indicate higher expression in spleen.\n\nFor ATAC-seq, process paired-end reads for the IAgP and IAgN groups separately by replicate. Trim adapters with cutadapt 3.5 using the Nextera/Tn5 adapter sequence on both mates with `-a CTGTCTCTTATACACATCT -A CTGTCTCTTATACACATCT -m 20 -O 5` in paired-end mode. Align trimmed reads to the staged UCSC mm10 genome with bowtie2 v2.4.4 using `--maxins 2000 -p 8 -N 1`. Filter alignments with samtools v1.12 using `view -h -F 1796 -q 20`. Call peaks from paired-end alignments with MACS2 v2.2.7.1 using `callpeak --format BAMPE --call-summits --shift -75 --extsize 150 --keep-dup all -B --SPMR -g mm`. Merge peaks from all replicates that fall within 1 kb using bedtools v2.30, remove regions overlapping the staged mouse blacklist, and keep coordinates in UCSC-style mm10 naming. Count paired-end fragments over the merged peak set with featureCounts v2.0.3 using `-T 4 -O -p --countReadPairs`; convert the peak set to a compatible annotation if needed so each interval is counted as one feature. Run DESeq2 differential accessibility analysis after prefiltering peaks with total counts greater than 100 across samples. Use IAgP over IAgN as the contrast: positive log2 effects indicate higher accessibility in I-Ag positive cells and negative values indicate higher accessibility in I-Ag negative cells. Use FDR < 0.05 and fold change > 1.5 in either direction to define the two directional peak sets.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "bec2eebf08cd30f5100b4efecacacd83afe88ce640b16e441248e72198058e30",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.02.697332_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "expression accessibility integration",
+      "skills": [
+        "normalization",
+        "multiple-testing",
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "chromatin",
+        "database-query",
+        "evidence-extraction",
+        "statistics",
+        "data-management",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "The two assays use different genome assemblies; coordinate joins require explicit harmonization and biological-replicate preservation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-expression-accessibility-integration"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.01.31.702960_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Characterize how loss of TCER-1 changes endogenous small-RNA regulation and mRNA expression in *Caenorhabditis elegans*, with emphasis on WAGO-associated 22G-RNAs and their target transcripts during adult growth on non-pathogenic *E. coli* OP50.\n\n`./data` contains raw sequencing inputs for three biological replicates each of wild-type N2, `tcer-1(glm27)`, and `tcer-1(tm1452)` gravid adult animals. The mRNA libraries are rRNA-depleted, directional, paired-end 150-cycle RNA-seq FASTQs, and the small-RNA libraries are polyphosphatase-treated, 16-30 nt size-selected, single-end 75-cycle FASTQs. `./data/metadata` contains a sample sheet with condition, replicate, library type, and layout assignments, short pipeline notes, an exact WormBase WS279 PRJNA13758 mRNA/RSEM reference bundle under ./data/metadata/reference/wormbase_ws279_mrna/, and a Montgomery Lab tinyRNA WS279 reference bundle under `./data/metadata/reference/montgomery_tinyrna_ws279/`. Quantify mRNA expression and small-RNA abundance, compare each `tcer-1` allele with N2, identify concordant at-least-twofold changes across both alleles, and integrate WAGO-class 22G-RNA changes with paired mRNA changes for each allele.\n\nMethod guidance:\nUse the staged sample sheet to assign libraries to `N2`, `tcer-1(glm27)`, and `tcer-1(tm1452)` groups, keeping three biological replicates per group and separate mRNA-seq and small-RNA-seq designs. Treat N2 as the reference condition for all differential analyses. For every log2 fold change, use mutant over N2 direction: positive values indicate higher expression or abundance in the mutant, and negative values indicate higher expression or abundance in N2.\n\nFor mRNA-seq, trim each paired library with `fastp` using `fastp -w 16 -q 30 -u 70 -l 30 -r -W 4 -M 20`. Build the `RSEM v1.3.1` reference from the exact staged WormBase WS279 PRJNA13758 mRNA files: `./data/metadata/reference/wormbase_ws279_mrna/c_elegans.PRJNA13758.WS279.genomic.fa.gz` and `./data/metadata/reference/wormbase_ws279_mrna/c_elegans.PRJNA13758.WS279.canonical_geneset.gtf.gz`, using `rsem-prepare-reference --gtf` with `--star` so WormBase gene IDs are the gene-level identifiers, and quantify with `STAR v2.7.10b` as the aligner. Summarize to the gene-level rows emitted by RSEM expected-count quantification, retaining WormBase gene identifiers and gene names where available. Analyze the count matrix with `DESeq2 v1.50.2`, using median-of-ratios size-factor normalization, a condition-only design with N2 as the reference level, Wald-statistic inference, and Benjamini-Hochberg adjusted p-values. Extract the two mutant-versus-N2 contrasts, report DESeq2-normalized counts for the RSEM gene-level row universe, and use absolute log2 fold change of at least 1 with adjusted p-value below 0.05 when defining genes changed concordantly across both mutant alleles.\n\nFor small-RNA-seq, process the nine single-end libraries with the `tinyRNA` pipeline using default settings against the staged Montgomery Lab WS279 tinyRNA bundle: `./data/metadata/reference/montgomery_tinyrna_ws279/c_elegans.PRJNA13758.WS279.genomic.fa.gz`, `./data/metadata/reference/montgomery_tinyrna_ws279/sRNAs_WS279.gff3`, and `./data/metadata/reference/montgomery_tinyrna_ws279/features_cel_v1.5.csv`. Use the library design as 16-30 nt, polyphosphatase-treated small RNA, and define 22G-RNAs as antisense-strand 21-23 nt reads containing a 5-prime G. Carry the tinyRNA feature universe through downstream tables, including miRNA MIMAT rows, sequence-level 23H-RNA rows, and class-specific WBGene 22G rows. Run DESeq2 within `tinyRNA` with the same N2 reference, mutant-versus-N2 contrast direction, Wald-statistic inference, and Benjamini-Hochberg adjustment. Use DESeq2 size-factor normalized small-RNA counts and the same twofold and adjusted-p-value criteria for concordant allele-level changes. When a small-RNA feature maps to the same gene in multiple classes, keep the feature class and feature name attached so distinct small-RNA classes remain separate.\n\nFor the integrated 22G-RNA/mRNA analysis, run `RNA-integrate` on the count tables generated from the `tinyRNA` and `RSEM` workflows, with metadata marking N2 as the control condition and both `tcer-1(tm1452)` versus N2 and `tcer-1(glm27)` versus N2 as cross-comparisons. Use `./data/metadata/reference/montgomery_tinyrna_ws279/sRNAs_WS279.gff3` as the WAGO target-pairing source and `./data/metadata/reference/montgomery_tinyrna_ws279/features_cel_v1.5.csv` as the tinyRNA class-rule source for the gene class/name information required by `RNA-integrate`. Restrict integrated summaries to annotated WAGO 22G-RNA target genes. For each allele separately, compare the small-RNA and mRNA log2 mutant-over-N2 effects, and derive anticorrelated groups with small RNA down and mRNA up more than twofold, as well as the reciprocal small RNA up and mRNA down more than twofold, using adjusted p-value below 0.05 for significance classification.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "7b051b20bc9abd9321f7795bfe79362f4ca23192712e9827c2654531bb7428f4",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.31.702960_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "paired small rna mrna regulation",
+      "skills": [
+        "normalization",
+        "association",
+        "multiple-testing",
+        "differential-expression",
+        "sequence-query",
+        "read-qc",
+        "variant-consequence",
+        "integration",
+        "database-query",
+        "statistics",
+        "expression-quantification"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Keep small-RNA classes attached to gene identities; opposing transcript changes are associations, not evidence of a direct mechanism."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-paired-small-rna-mrna-regulation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "10.64898_2026.02.04.703711_v1",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Determine how droplet-scale spatial isolation and starting community order shape the composition, productivity, and null-interaction growth expectations of a 21-strain synthetic soil bacterial community grown in single-carbon and soil-extract media.\\n\\nThe local `./data` tree contains paired-end 300 bp 16S V3-V4 amplicon reads from AVITI sequencing, raw microscopy images, flow-cytometry count tables, plate-reader monoculture growth curves, Monod-model parameter files and scripts, SILVA v138.1 taxonomy FASTA references, SynCom V3-V4 reference sequences, strain genome metadata with 16S rRNA operon copy numbers, OD-to-cell-count conversion ratios, strain carbon-mass parameters, and a sample sheet mapping sequencing samples to medium, time point, biological replicate, and fragmentation condition.\\n\\nAnalyze the amplicon reads to infer sequence variants and taxon-level community composition, correct taxon abundances for 16S rRNA operon copy number, combine composition with biomass and cell-count measurements to summarize taxon productivity and biomass productivity efficiency, and run the null-interaction Monod simulation needed to compare observed community trajectories with substrate-competition-only expectations.\n\nMethod guidance:\nUse the staged sample sheet as the authoritative map from sample identifiers to medium, incubation day, replicate, sequencing batch, and fragmentation condition. Treat the fragmentation labels as isolated 43 um droplets with about 1-2 starting taxa, low-order 43 um droplets with about 7 starting taxa, high-order 67 um droplets with about 14 starting taxa, and full mixed liquid culture. For the graded 16S-derived outputs, use the 2024-06-18 main sequencing batch only; do not include the 2025-03-05 extra bulk-condition batch in `community_composition` or `asv_sequence_count_matrix`. The extra bulk batch is staged only as context for the paper's repeat bulk experiment.\\n\\nFor 16S read processing, follow the R scripts under `./data/raw` for the first-batch DADA2 and phyloseq workflow. Trim primer sequences with CUTADAPT 4.4 using forward primers `CCTACGGGDGGCWGCAG` and `CCTAYGGGGYGCWGCAG` and reverse primer `GACTACNVGGGTMTCTAATCC`. Process paired reads with DADA2 1.32.0 using `truncLen = c(260, 250)`, `maxN = 0`, `maxEE = c(4, 7)`, and `truncQ = 2`; infer ASVs, merge forward and reverse reads, build the sequence table, and remove chimeras. Write `asv_sequence_count_matrix` from the first-batch no-chimera DADA2 sequence table before downstream prevalence/read-count filtering, retaining sequencing controls that remain in that table. For taxon-level community summaries, filter out ASVs present in fewer than four samples across the full first-batch dataset or supported by fewer than 100 total reads. Assign taxonomy with the staged SILVA nr99 v138.1 species training references.\\n\\nMap retained ASV sequences to the staged SynCom V3-V4 reference sequences to assign community members, excluding unmapped reads from taxon-level summaries. Use the staged genome metadata to divide taxon read abundance by each strain's 16S rRNA operon count, then calculate per-sample relative composition from the adjusted abundance values. For `community_composition`, report biological SynCom samples from the first sequencing batch only, including the four day-0 inoculum samples with fragmentation_condition `IN` (`C21_INOH`, `C21_INOL`, `SE_INOH`, and `SE_INOL`), and excluding medium controls. Include all 21 SynCom taxon rows for each retained biological sample and each retained inoculum sample, using zero abundance and zero proportion when no retained ASV maps to that taxon in that sample. Preserve medium, day, replicate, and fragmentation annotations from the sample sheet throughout the community-composition workflow.\\n\\nFor productivity summaries, reproduce the paper's day-7 taxon maximum-productivity summary for the isolated community (`I`) and monoculture (`Mono`) conditions. Use the staged flow-cytometry counts with the documented dilution, aqueous-phase recovery, and empty-droplet corrections to estimate isolated-community cell densities, and use the staged monoculture growth/strain metadata and local analysis scripts for the `Mono` rows. Combine corrected day-7 taxon composition with total cell density for the `I` rows, then summarize mean productivity and mean biomass productivity efficiency across biological replicates for each medium, condition (`I` or `Mono`), and taxon. Do not output L, H, or F community-productivity rows or non-day-7 rows for `taxon_productivity_summary`.\\n\\nFor the null-interaction model, install GNU Octave with the package manager and run the staged MATLAB-compatible workflow at `./data/raw/zenodo_18468666/Zenodo_folder/Fig3&4&S2&S9&S11&S12/scripts/DropletEnvironment_Succinate.m` with the parameter files under `./data/raw/zenodo_18468666/Zenodo_folder/Raw_data/simulations/`. Parameterize the Monod framework with per-strain lag times, maximum specific growth rates from ln-transformed monoculture OD600 curves, half-maximum constants, yields, starting inoculum proportions from OD-to-cell-count ratios, and strain carbon-mass conversions. Convert isolated-condition maximum cell numbers to biomass concentration using 0.264 pg C for an average 2 um3 E. coli cell and the microscopy-derived volumetric correction; use 10 mM succinate as 0.4808 mg carbon/mL for the single-carbon condition and keep computed yields as implemented by the staged simulation code. Simulate droplet communities by Poisson-sampling taxa according to measured starting proportions into 4,000 droplets with microscopy-matched droplet volumes, run four biological replicates, update growth by primary carbon utilization until substrate no longer supports biomass increase, and use a single 1 uL volume with 100,000 founder cells at measured starting proportions for the full mixed liquid culture condition. Run the unit carbohydrate-availability null-interaction setting used by the staged workflow and report species abundance trajectories for the required days and fragmentation conditions.",
+      "source_question_kind": "original-objective-and-method-guidance",
+      "source_question_sha256": "f7355868fd0e4ee7789cde42d8a10de0b220b4a424cb260dcab30b51f2e25bc4",
+      "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.04.703711_v1/agent/task_body.json",
+      "source_group": "",
+      "workflow": "observed community and growth model",
+      "skills": [
+        "sequence-alignment",
+        "sequence-query",
+        "variant-analysis",
+        "composition",
+        "trajectory",
+        "spatial",
+        "image-analysis",
+        "database-query",
+        "evidence-extraction",
+        "sequence-design",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology",
+        "bioimaging",
+        "biological-knowledge"
+      ],
+      "context_tags": [
+        "spatial"
+      ],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "An experimentally assembled community still yields real observations; stochastic null-model trajectories are derived simulations and need separate reproducibility checks."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "id": "portfolio-bixbench3-observed-community-and-growth-model"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

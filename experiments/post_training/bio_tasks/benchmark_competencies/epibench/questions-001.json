@@ -1,0 +1,368 @@
+{
+  "tasks": [
+    {
+      "task_id": "atac_1a",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Given 23 sub20M paired-end FAST-ATAC BAMs aligned to hg19, a samplesheet assigning each sample to ETV6-RUNX1, DUX4-ERG, or Hyperdiploid B-ALL, and an Ensembl hg19 GTF, use the appropriate MACS peak-calling convention at unadjusted p=0.01. Build experimental design-aware consensus peaksets at 50% consensus. For each consensus peakset, report the fraction of peaks whose midpoint lies within 2 kb of any transcript-level TSS, then answer the technical and biological interpretation questions.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\n \"n_consensus_peaks_ETV6_RUNX1\": \"<value>\",\n \"n_consensus_peaks_DUX4_ERG\": \"<value>\",\n \"n_consensus_peaks_Hyperdiploid\": \"<value>\",\n \"tss2kb_frac_ETV6_RUNX1\": \"<value>\",\n \"tss2kb_frac_DUX4_ERG\": \"<value>\",\n \"tss2kb_frac_Hyperdiploid\": \"<value>\",\n \"technical_answer\": \"<value>\",\n \"interpretation_answer\": \"<value>\"\n}\n</EVAL_ANSWER>\n\ntechnical_answer -- With p=0.01 fixed, which combination of input representation, model convention, local-lambda setting, and duplicate handling matches the dataset's peak-calling convention?\n1. Input: raw paired-end BAM; model: paired-end fragment-length inference; local-lambda on; duplicates removed.\n2. Input: raw paired-end BAM; model: fixed Tn5-centred shift/extension; local-lambda off; duplicates retained.\n3. Input: raw single-end BAM; model: fixed Tn5-centred shift/extension; local-lambda off; duplicates removed.\n4. Input: single-bp Tn5 insertion-site BED; model: fixed Tn5-centred shift/extension; local-lambda off; duplicates retained.\n5. Input: single-bp Tn5 insertion-site BED; model: paired-end fragment-length inference; local-lambda off; duplicates retained.\n6. Input: single-bp Tn5 insertion-site BED; model: fixed Tn5-centred shift/extension; local-lambda on; duplicates retained.\n7. Input: single-bp Tn5 insertion-site BED; model: fixed Tn5-centred shift/extension; local-lambda on; duplicates removed.\n8. Input: single-bp Tn5 insertion-site BED; model: fixed Tn5-centred shift/extension; local-lambda off; duplicates removed.\n9. Input: read-5-prime BED without Tn5 offset; model: fixed shift/extension; local-lambda off; duplicates retained.\n10. Input: single-bp Tn5 insertion-site BED; model: broad-peak calling; local-lambda off; duplicates retained.\n\ninterpretation_answer -- What is the single most likely biological interpretation of the observed cross-subtype TSS-proximal pattern?\n1. Subsampling depth and p-value cutoff dominate the peak universe, making subtype-specific chromatin biology negligible.\n2. DUX4-ERG is relatively promoter-distal because IGH-DUX4 enhancer hijacking ectopically activates DUX4-associated AP-1/BRD4/EP300 distal regulatory programs that are reproducibly accessible across patients.\n3. Hyperdiploid is relatively promoter-proximal because trisomied chromosomes create broad dosage-driven read-count inflation around gene bodies and promoter flanks.\n4. ETV6-RUNX1 is most promoter-proximal because TEL-AML1 concentrates accessible chromatin at promoter-proximal IKZF1, PAX5, EBF1, and BCL6 regulatory loci through a dominant bHLH/TCFL5 program.\n5. DUX4-ERG is relatively promoter-distal because DUX4 globally closes promoter-proximal chromatin through NuRD-dependent repression across B-ALL blasts.\n6. Hyperdiploid is relatively promoter-distal because its larger sample size makes distal reproducibility thresholds harder to satisfy than in smaller subtypes.\n7. ETV6-RUNX1 is relatively promoter-distal because TEL-AML1 silences promoter-proximal RUNX1 targets through NuRD-mediated H3K27me3 deposition.\n8. The TSS-proximal differences mainly reflect subtype-specific FRiP differences at the 20M subsampled depth.\n9. DUX4-ERG is relatively promoter-distal because its libraries have lower complexity and therefore lose low-signal promoter peaks during consensus construction.\n10. The TSS-proximal differences mainly reflect patient-age differences among the three B-ALL subtypes.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "e3331789c02fdefe6396ab92e33cf24a7035eaaf2107d05dabacc20482c3b7b9",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/atac_1a/eval.json",
+      "source_group": "",
+      "workflow": "atac consensus and tss context",
+      "skills": [
+        "intervals",
+        "chromatin",
+        "database-query",
+        "evidence-ranking",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
+      "outputs": [
+        "results.fasta / results.gff3 / results.bed as appropriate to the requested endpoint",
+        "audit.tsv: source identifier, coordinates, strand, operation and result identifier"
+      ],
+      "verification": "Parse the submitted artifacts with pinned native parsers and independently recompute sequence/coordinate operations or verify all declared constraints. Accept equivalent valid representations; reject wrong strands, shifts, missing sequences and invalid products.",
+      "decisions": [
+        "Freeze assembly, peak-calling representation, replicate consensus and TSS denominator."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Preserve actual native input formats and coordinate conventions.",
+        "Sequence validity alone does not establish experimental efficacy or safety."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-atac-consensus-and-tss-context"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "chipseq_K2",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Brief: In a pediatric B-cell acute lymphoblastic leukemia H3K27ac ChIP-seq cohort, decide whether empirical distal-enhancer motif evidence supports a PAX5-centered paired-domain program or a different leading enhancer-organizer motif program.\n\nYou are given per-sample H3K27ac ChIP-seq alignments, broad peak calls, coverage tracks, genome resources, and cohort consensus peak resources. Use motif-enrichment evidence appropriate for active enhancer sequence questions; do not answer from disease label alone.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\n  \"pax5_outside_leading_band\": \"<0_or_1>\",\n  \"biological_answer\": \"<option_number>\"\n}\n</EVAL_ANSWER>\n\npax5_outside_leading_band - 1 if the canonical B-cell paired-domain motif is outside the leading band of motif-enrichment results for the distal enhancer consensus; 0 if it is inside that leading band. Treat the leading band as the top 20 motif entries.\nbiological_answer - option number only, as a bare integer from 1 to 10.\n\n**biological_answer** - What lineage/regulatory interpretation is best supported by the motif ranking?\n1. A PAX5-centered paired-domain B-cell identity program is the best-supported leading distal-enhancer motif interpretation, so motif enrichment mainly confirms the disease label.\n2. A CTCF/cohesin architectural program dominates, indicating enhancer boundaries rather than active lineage occupancy are the primary signal.\n3. A RUNX/IKZF lymphoid differentiation program dominates, consistent with lymphoid regulation but not the leading enhancer-organizer motif family in this analysis.\n4. An AP-1 inflammatory/stress enhancer program dominates, implying activation-state motifs rather than lineage enhancer architecture explain the result.\n5. A HOX/MEIS immature leukemia stemness program dominates, indicating developmental state rather than B-lineage enhancer organization is primary.\n6. A MEF2 developmental enhancer program dominates, suggesting non-B-lineage developmental enhancer activity is the main driver.\n7. An ETS-family pioneer/enhancer-organizer program is the best-supported leading distal-enhancer motif interpretation.\n8. A MYC/E2F proliferation program dominates, implying cell-cycle enhancer activity explains the motif ranking better than lineage occupancy.\n9. An interferon/STAT response program dominates, indicating cytokine signaling rather than lineage enhancer organization is primary.\n10. A GATA-family myeloid/erythroid program dominates, contradicting the B-lineage enhancer context.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "7a516d1775a3b4ddfa9a7e6d683143d73edf0ad530c5e1df4f565de9033b60d4",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/chipseq_K2/eval.json",
+      "source_group": "",
+      "workflow": "enhancer motif program",
+      "skills": [
+        "enrichment",
+        "cell-annotation",
+        "trajectory",
+        "chromatin",
+        "motifs",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "A disease label is not evidence for the leading motif program; overlapping motif families need equivalence rules."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-enhancer-motif-program"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "cold_03b",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "Using the provided pediatric B-ALL subtype ATAC peak-event sets and RNA-DE tables, preserve subtype-direction labels until pooling. Classify a DA peak-event as RNA-supported when any same-direction significant RNA-DE TSS lies within +/-10 kb of the peak midpoint. Compare unsupported vs supported events by GENCODE v19 TSS context, using promoter overlap [TSS-2000, TSS+500], and report the requested metrics and interpretations.\n\nReturn EXACTLY:\n<EVAL_ANSWER>\n{\n  \"pooled_silent_fraction_pct\": \"<value>\",\n  \"promoter_fraction_silent_pct\": \"<value>\",\n  \"promoter_fraction_concordant_pct\": \"<value>\",\n  \"median_nearest_tss_silent_kb\": \"<value>\",\n  \"technical_answer\": \"<value>\",\n  \"biological_answer\": \"<value>\"\n}\n</EVAL_ANSWER>\n\ntechnical_answer -- Which technical definition best identifies the event class for this context comparison?\n1. Assign context first, then call unsupported events from promoter status and use RNA only as a later sanity check.\n2. Keep subtype-direction event labels but compare them to RNA abundance rank rather than differential-expression direction.\n3. Mark events using opposite-direction RNA evidence, then summarize them alongside the unsupported class.\n4. Collapse subtype and direction before any RNA gate, then restore labels only for reporting.\n5. Use paper-level enhancer categories as the primary event labels and skip the matched RNA test.\n6. Define the unsupported class from low accessibility across samples rather than from paired modality evidence.\n7. Restrict the comparison to promoter-centered events so both classes share the same context by construction.\n8. Transfer each gene's RNA-only label to every nearby peak before testing event-level accessibility.\n9. Treat gene-desert membership as the class definition and exclude promoter-adjacent events before summarizing.\n10. Gate each DA event by matched RNA directionality before adding genomic context and pooling.\n\nbiological_answer -- Which interpretation is best supported by the computed context contrast?\n1. The unsupported class is promoter-centered, so the main signal is likely RNA quantification noise near annotated TSSs.\n2. The context shift disappears when compared against RNA-supported events, so accessibility adds little beyond expression.\n3. The relationship is primarily a subtype-labeling artifact rather than a chromatin/RNA coupling pattern.\n4. Unsupported events should be discarded because a missing nearest-gene RNA match rules out regulatory relevance.\n5. RNA-supported events dominate the DA landscape, making the unsupported class a minor boundary case.\n6. Nearest-TSS matching is sufficient for enhancer interpretation because both event classes share compact promoter context.\n7. The pattern mainly reflects CTCF transcript abundance rather than event-level chromatin context.\n8. The results imply a universal pan-B-ALL promoter program that is largely independent of subtype and direction.\n9. The unsupported class is shifted toward broader non-promoter regulatory context, so nearest-gene same-direction RNA misses much of the DA signal.\n10. The conclusion should be generalized without checking window choice, subtype-direction labels, or context assignment.",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "b0a026967db03417f56f1d8709d2f7f1f26edd96be41efef66d1c9fde752ff0b",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/cold_03b/eval.json",
+      "source_group": "",
+      "workflow": "direction aware multiomic events",
+      "skills": [
+        "differential-expression",
+        "intervals",
+        "chromatin",
+        "evidence-extraction",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "epigenomics",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Pooling before matching loses condition/direction information; transcript proximity does not prove regulation."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-direction-aware-multiomic-events"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gse149608_c3_enhancer_methylation",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have methylation (WGBS), gene expression (RNA-seq), TSS annotation, and tissue-specific chromatin state data from an esophageal squamous cell carcinoma cohort with matched tumor-normal pairs.\n\nSome genes in this cohort show a non-canonical pattern: promoter hypermethylation concurrent with increased expression. Investigate whether the methylation gain at these genes is confined to the promoter or extends to nearby enhancer elements.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_paradoxical\": <int>, \"mean_enhancer_delta_beta\": <float>, \"answer\": \"<letter>\"}\n</EVAL_ANSWER>\n\nwhere n_paradoxical is the number of genes with significantly hypermethylated promoters AND significantly upregulated expression, mean_enhancer_delta_beta is the mean tumor-minus-normal methylation change at enhancers near these genes, and <letter> is:\nA) Enhancer methylation is essentially unchanged — the hypermethylation is confined to the promoter, suggesting a targeted mechanism at specific regulatory elements rather than regional epigenetic drift\nB) Enhancers are also hypermethylated — the entire regulatory domain gains methylation, consistent with regional spreading of de novo methylation from a nucleation site\nC) Enhancers are strongly hypomethylated, following the genome-wide trend — the paradoxical promoter hypermethylation occurs against a background of regional demethylation\nD) Enhancer methylation matches the promoter direction but with much larger magnitude, indicating enhancers are the primary targets\nE) There is no consistent enhancer pattern — methylation changes are stochastic and gene-specific\nF) Enhancers are hypomethylated specifically at CTCF binding sites within enhancer regions, disrupting enhancer-promoter insulation\nG) Enhancers gain methylation only at CpG-dense regions but lose it at CpG-poor enhancer sequences\nH) Enhancer methylation depends on the chromosome — autosomal enhancers are hypermethylated while X-linked enhancers are hypomethylated\nI) Enhancers show a bimodal distribution with half gaining and half losing methylation\nJ) The enhancer methylation change is identical to the genome-wide average, suggesting these genes' enhancers are not specifically targeted",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "8a9dffa072fbaa74e4579d185ac46bc8c3d814d066c18652a556c2ea84e6ffac",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_c3_enhancer_methylation/eval.json",
+      "source_group": "",
+      "workflow": "paired regulatory methylation expression",
+      "skills": [
+        "intervals",
+        "chromatin",
+        "methylation",
+        "protein-structure",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "molecular-structure",
+        "functional-genomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
+      "outputs": [
+        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
+        "selection.tsv: candidate eligibility, scores, ranks and ties"
+      ],
+      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
+      "decisions": [
+        "Preserve tumor-normal pairing and avoid mechanistic claims from association alone."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
+        "Keep measured assay comparisons separate from geometry-only predictions."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-paired-regulatory-methylation-expression"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "gse149608_wnt2_promoter_genome_build",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You have a CpG methylation matrix from a gastrointestinal cancer study. The file is a parquet matrix with rows indexed by (chr, start) genomic position and columns for each sample (N1, N2, N6, N7, N8, N9, N11, N12, N13 = normal; T1, T2, T6, T7, T8, T9, T11, T12, T13, T15 = tumor). Values are methylation beta values on a 0-1 scale.\n\nWhat is the methylation state of the WNT2 promoter in tumors from this cohort? Use a promoter window appropriate for DNA methylation analysis (typically 1.5–3 kb around the TSS). Report the number of CpGs you identify in the WNT2 promoter and their mean methylation across tumor samples.\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_cpgs\": <int>, \"mean_tumor_methylation\": <float>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "58dabf62521e0639dafa5bb5cdcf3f63ea682185d4307e2531b208ea779e38e9",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_wnt2_promoter_genome_build/eval.json",
+      "source_group": "",
+      "workflow": "assembly aware promoter methylation",
+      "skills": [
+        "intervals",
+        "methylation",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Coordinate build and promoter window are part of the scientific contract."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-assembly-aware-promoter-methylation"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "zebrafish_009c_cutnrun_vs_chip_h3k9me3",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with CUT&RUN BAMs for H3K9me3 from zebrafish embryos at 6 hpf (two replicates, aligned to GRCz12tu) and a pre-computed broadPeak file containing H3K9me3 ChIP-seq peaks from the same developmental stage (called from two scramble-control replicates using MACS2 broad mode on an independent study, also aligned to GRCz12tu).\n\nH3K9me3 is the hallmark modification of constitutive heterochromatin, enriched at pericentromeric repeats, telomeric regions, and transposable elements. It recruits HP1 proteins and maintains transcriptional silencing across cell divisions. Profiling this mark presents unique challenges because heterochromatic regions are repetitive, AT-rich, and form extended genomic domains rather than narrow peaks.\n\nCUT&RUN uses protein A-MNase to cleave chromatin in situ on native (unfixed) chromatin, releasing antibody-bound fragments that diffuse out of nuclei. ChIP-seq crosslinks chromatin, sonically shears it, and immunoprecipitates antibody-bound fragments from a soluble extract.\n\nWe want to compare how these two methods capture the H3K9me3 landscape. Merge the two CUT&RUN replicates and call peaks using an approach appropriate for this heterochromatin mark. How many peaks does each method produce? What fraction of CUT&RUN peaks overlap at least one ChIP-seq peak? What is the FRiP for the CUT&RUN data, and what is the total genomic coverage (in Mb) of each peak set?\n\nFor `assay_comparison_code`, select the BEST explanation for why CUT&RUN peaks for H3K9me3 are substantially broader than ChIP-seq peaks, resulting in greater total genomic coverage per peak:\n1. CUT&RUN has higher background noise that inflates peak widths without representing true H3K9me3 signal — the extra coverage is artifactual\n2. CUT&RUN's in-situ MNase cleavage on native (unfixed) chromatin preserves the true broad domain architecture of H3K9me3 heterochromatin, while ChIP-seq crosslinking creates rigid chromatin that sonication fragments into many narrow peaks unable to reconstruct the continuous domain\n3. The CUT&RUN data has a higher duplication rate, causing MACS2 to merge nearby duplicate-inflated regions into artificially broad peaks\n4. MNase has sequence bias toward AT-rich regions, causing CUT&RUN to capture AT-rich heterochromatin more efficiently while ChIP-seq's random sonication is unbiased\n5. The difference reflects library depth — CUT&RUN has more reads so peaks are wider due to better statistical power at domain boundaries\n6. ChIP-seq input control subtraction erodes peak edges, narrowing peaks and fragmenting continuous domains into multiple smaller peaks with gaps\n7. CUT&RUN's lack of crosslinking allows the antibody to diffuse and bind off-target heterochromatic regions adjacent to genuine H3K9me3 loci, artificially expanding peak boundaries\n8. H3K9me3 forms liquid-liquid phase-separated condensates that are preserved in native CUT&RUN chromatin but disrupted by ChIP-seq formaldehyde crosslinking, explaining why CUT&RUN captures the full condensate territory\n9. The broader CUT&RUN peaks represent PCR amplification bias during library preparation that preferentially duplicates AT-rich heterochromatic fragments, creating false peak extensions\n10. CUT&RUN produces broader peaks because pA-MNase has lower processivity than sonication, generating longer DNA fragments on average — the ~700 bp average CUT&RUN peak width directly reflects the typical MNase digestion fragment length, while ChIP-seq sonication produces ~300 bp fragments that set the ceiling for each peak's width\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"n_cutnrun_peaks\": <integer>, \"n_chip_peaks\": <integer>, \"cutnrun_peaks_overlapping_chip\": <integer>, \"overlap_fraction_cutnrun\": <float>, \"frip_cutnrun\": <float>, \"cutnrun_coverage_mb\": <float>, \"chip_coverage_mb\": <float>, \"assay_comparison_code\": <integer>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "8266f73ac845fae2ebc4ba2aaa6e2ecd9cd83b642a930aa009ebddec3d3105a9",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_009c_cutnrun_vs_chip_h3k9me3/eval.json",
+      "source_group": "",
+      "workflow": "broad chromatin assay comparison",
+      "skills": [
+        "enrichment",
+        "chromatin",
+        "statistics",
+        "data-management"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "immunology"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Broad chromatin domains require assay-aware background and overlap denominators."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-broad-chromatin-assay-comparison"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "zebrafish_014g_h2az_bivalent_promoters",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "You are provided with pre-computed peak files from zebrafish 6 hpf embryo CUT&RUN/CUT&Tag experiments:\n- H3K4me3 narrow peaks (CUT&RUN)\n- H3K27me3 broad peaks (CUT&RUN)\n- H2A.Z broad peaks (CUT&Tag)\n- GRCz12tu gene annotation (GTF)\n\nI want to understand how H2A.Z distributes across chromatin states defined by histone modifications. Using a 2kb promoter window centered on each gene's TSS (±1kb from TSS), classify promoters by their histone mark status — bivalent (both H3K4me3 and H3K27me3), K4me3-only, or K27me3-only — and determine what fraction of promoters in each category also carry H2A.Z. I'm interested in comparing these rates to the genome-wide background rate of H2A.Z at all promoters, and in the enrichment of H2A.Z at K4me3-only promoters relative to K27me3-only promoters.\n\nI'm also interested in how many genes carry all three marks simultaneously (H3K4me3, H3K27me3, and H2A.Z at their promoters). These triple-marked genes represent bivalent loci where the variant histone is also incorporated.\n\nFor `h2az_pattern_code`, select the BEST biological interpretation of the observed H2A.Z distribution pattern across chromatin states:\n1. H2A.Z is uniformly distributed across all promoters regardless of chromatin state, indicating it plays a general structural role in nucleosome organization\n2. H2A.Z is specifically deposited at Polycomb-repressed promoters (K27me3-only) to maintain stable silencing through nucleosome rigidity\n3. H2A.Z preferentially marks active and bivalent promoters because the SWR1/SRCAP remodeling complex is recruited by transcriptional activity and H3K4 methylation — its relative exclusion from K27me3-only promoters reflects that stably silenced heterochromatin is inaccessible to remodeling\n4. H2A.Z is absent from bivalent promoters because the simultaneous presence of H3K4me3 and H3K27me3 creates a chromatin structure incompatible with H2A.Z incorporation\n5. H2A.Z follows the same distribution as H3K4me3 because both are deposited by the same enzymatic complex during S-phase\n6. The pattern is an artifact of peak calling — H2A.Z CUT&Tag peaks are broader and more likely to overlap with any genomic feature, creating apparent enrichment at gene-dense active regions\n7. H2A.Z marks poised regulatory elements to facilitate rapid nucleosome turnover — its highest enrichment at active promoters (K4me3-only) reflects ongoing transcription-coupled exchange, while intermediate levels at bivalent promoters indicate these loci maintain partial accessibility for potential activation despite Polycomb repression\n8. H2A.Z deposition is constitutive at all CpG islands, and the observed pattern simply reflects that active genes have more CpG islands than silenced genes\n9. The K27me3-only promoters lack H2A.Z because PRC2 directly evicts H2A.Z through its methyltransferase activity on H3K27\n10. H2A.Z enrichment correlates with gene expression level rather than chromatin state — active genes are expressed highest and have the most H2A.Z, but the causal relationship is reversed (expression drives H2A.Z deposition, not vice versa)\n\nReturn EXACTLY:\n\n<EVAL_ANSWER>\n{\"frac_h2az_bivalent\": <float>, \"frac_h2az_k4only\": <float>, \"frac_h2az_k27only\": <float>, \"frac_h2az_background\": <float>, \"enrichment_k4_vs_k27\": <float>, \"n_genes_triple_marked\": <integer>, \"h2az_pattern_code\": <integer>}\n</EVAL_ANSWER>",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "d83b57ce4415361c8dd724063d0e333ea7979202f9bc2c00c3ff52ae9bb82be1",
+      "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_014g_h2az_bivalent_promoters/eval.json",
+      "source_group": "",
+      "workflow": "multi mark promoter context",
+      "skills": [
+        "association",
+        "enrichment",
+        "intervals",
+        "variant-analysis",
+        "chromatin",
+        "methylation",
+        "statistics"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "molecular-structure"
+      ],
+      "context_tags": [],
+      "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
+      "outputs": [
+        "result.tsv: every requested estimate, comparison or selection with identifiers and units",
+        "analysis_spec.json: eligibility, measurement units, design and numerical conventions",
+        "evidence.tsv or native intermediate: sufficient input-derived quantities to check the requested result"
+      ],
+      "verification": "Run a pinned input-reading reference and independently check identities, eligibility, denominators, aggregation and the requested outputs. Compare deterministic quantities within justified tolerances; use explicit label/set equivalences where multiple representations are valid. Score complete required results, not the quality of explanatory prose.",
+      "decisions": [
+        "Retain unique promoter/gene policies and denominators; joint occupancy does not establish a deposition mechanism."
+      ],
+      "scope_changes": [
+        "The proposed contract retains the requested endpoint and freezes unspecified conventions. Any change of study, input stage or interpretation must be recorded when authoring."
+      ],
+      "authoring_requirements": [
+        "Freeze any unspecified design, background, threshold, tie, missingness or numerical convention.",
+        "Use independent observed biological inputs; record any changed study, organism or input-stage boundary.",
+        "Require a passing reference and meaningful incorrect-output controls before marking the authored task validated."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "id": "portfolio-epibench-multi-mark-promoter-context"
+        }
+      ],
+      "annotation_basis": "rule-assisted draft; review required",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}

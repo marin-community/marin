@@ -1,0 +1,515 @@
+{
+  "tasks": [
+    {
+      "task_id": "proteingym-dms/VG08_BPP22_Tsuboyama_2023_2GP8_indels",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VG08_BPP22_Tsuboyama_2023_2GP8_indels\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nindel variants for the protein Scaffolding protein from the organism Salmonella phage P22 (Bacteriophage P22). This protein has Uniprot ID: VG08_BPP22. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-69.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Scaffolding protein.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5` column to split the data into training and test sets. This column contains integer values from 0 to 4, \nwhich indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences with `fold_random_5 == 0`, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score).\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fitness_score\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different folds\nfor fold in range(5): \n    fold_mask = data[\"fold_random_5\"] == fold\n    train_data = data[~fold_mask]  # train on all folds except the current one\n    test_data = data[fold_mask]  # test on the current fold\n\n    # train the model **from scratch** on the training set \n    trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n    # predict the fitness score for the sequences in the current fold \n    predictions.loc[fold_mask, \"fitness_score\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score`: The predicted fitness score for that sequence predicted by the model trained on the \n    cross-validation split defined by the `fold_random_5` column.\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and fitness score column\n\n## Evaluation\n\nYour model will be evaluated using the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "45b43b69f511bc8c692e6a99821615db885330c1aac6ed4b873f04fbabd064d9",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VG08_BPP22_Tsuboyama_2023_2GP8_indels/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VG08_BPP22_Tsuboyama_2023_2GP8_indels",
+      "workflow": "held out assay ranking indels",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VILI_CHICK_Tsuboyama_2023_1YU5\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nmulti-substitution variants for the protein Villin-1 from the organism Gallus gallus. This protein has Uniprot ID: VILI_CHICK. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-6.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Villin-1.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "49a40cf10b3017e6da373ce354d8bc0c45acf28234d8bc840cd604349cdde0a8",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5_indels",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VILI_CHICK_Tsuboyama_2023_1YU5_indels\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nindel variants for the protein Villin-1 from the organism Gallus gallus. This protein has Uniprot ID: VILI_CHICK. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-69.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Villin-1.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5` column to split the data into training and test sets. This column contains integer values from 0 to 4, \nwhich indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences with `fold_random_5 == 0`, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score).\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fitness_score\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different folds\nfor fold in range(5): \n    fold_mask = data[\"fold_random_5\"] == fold\n    train_data = data[~fold_mask]  # train on all folds except the current one\n    test_data = data[fold_mask]  # test on the current fold\n\n    # train the model **from scratch** on the training set \n    trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n    # predict the fitness score for the sequences in the current fold \n    predictions.loc[fold_mask, \"fitness_score\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score`: The predicted fitness score for that sequence predicted by the model trained on the \n    cross-validation split defined by the `fold_random_5` column.\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and fitness score column\n\n## Evaluation\n\nYour model will be evaluated using the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "1ad8d31dd8713fa4b7b287925a75c2019def5f52f2e6f7a5b66fa6a00d68c859",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5_indels/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VILI_CHICK_Tsuboyama_2023_1YU5_indels",
+      "workflow": "held out assay ranking indels",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VKOR1_HUMAN_Chiasson_2020_abundance",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VKOR1_HUMAN_Chiasson_2020_abundance\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nsingle-substitution variants for the protein VKORC1 from the organism Homo sapiens. This protein has Uniprot ID: VKOR1_HUMAN. \n\nThe DMS selection assay was described as follows: \n\n    Protein abundance (egfp fusion reporter)\n\nIt was categorised as measuring the following (general) fitness attribute: Expression. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Multiplexed measurement of variant abundance and activity reveals VKOR topology, active site and human variant impact\"\n\nand can be accessed at the following DOI: 10.7554/eLife.58026.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of VKORC1.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "e4400363acce9fab20ff2a2b5af5cde20f8d8f7af4c01d0035daded8dc27bb5e",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VKOR1_HUMAN_Chiasson_2020_abundance/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VKOR1_HUMAN_Chiasson_2020_abundance",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "proteomics",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VKOR1_HUMAN_Chiasson_2020_activity",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VKOR1_HUMAN_Chiasson_2020_activity\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nsingle-substitution variants for the protein VKORC1 from the organism Homo sapiens. This protein has Uniprot ID: VKOR1_HUMAN. \n\nThe DMS selection assay was described as follows: \n\n    Carboxylation activity (carboxylation reporter on cell surface)\n\nIt was categorised as measuring the following (general) fitness attribute: Activity. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Multiplexed measurement of variant abundance and activity reveals VKOR topology, active site and human variant impact\"\n\nand can be accessed at the following DOI: 10.7554/eLife.58026.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of VKORC1.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "5129937be3ef803322e6e138b1bcb68d8a0d04c19d6f345af7aafd1971f7350d",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VKOR1_HUMAN_Chiasson_2020_activity/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VKOR1_HUMAN_Chiasson_2020_activity",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VRPI_BPT7_Tsuboyama_2023_2WNM\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nsingle-substitution variants for the protein Bacterial RNA polymerase inhibitor from the organism Escherichia phage T7 (Bacteriophage T7). This protein has Uniprot ID: VRPI_BPT7. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-6.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Bacterial RNA polymerase inhibitor.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "0f173f965b5cc385565edac2b2d9cbd254b321c04debb593077ee61f1a213a99",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM_indels",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: VRPI_BPT7_Tsuboyama_2023_2WNM_indels\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nindel variants for the protein Bacterial RNA polymerase inhibitor from the organism Escherichia phage T7 (Bacteriophage T7). This protein has Uniprot ID: VRPI_BPT7. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-69.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Bacterial RNA polymerase inhibitor.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5` column to split the data into training and test sets. This column contains integer values from 0 to 4, \nwhich indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences with `fold_random_5 == 0`, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score).\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fitness_score\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different folds\nfor fold in range(5): \n    fold_mask = data[\"fold_random_5\"] == fold\n    train_data = data[~fold_mask]  # train on all folds except the current one\n    test_data = data[fold_mask]  # test on the current fold\n\n    # train the model **from scratch** on the training set \n    trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n    # predict the fitness score for the sequences in the current fold \n    predictions.loc[fold_mask, \"fitness_score\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score`: The predicted fitness score for that sequence predicted by the model trained on the \n    cross-validation split defined by the `fold_random_5` column.\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and fitness score column\n\n## Evaluation\n\nYour model will be evaluated using the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "9eb1ddaa1b1f4d7da440fc17cdb38842bc7548cc4c025b2807df648c74b72115",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM_indels/description.md",
+      "source_group": "BioML-bench/proteingym-dms/VRPI_BPT7_Tsuboyama_2023_2WNM_indels",
+      "workflow": "held out assay ranking indels",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/YAIA_ECOLI_Tsuboyama_2023_2KVT",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: YAIA_ECOLI_Tsuboyama_2023_2KVT\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nmulti-substitution variants for the protein Uncharacterized protein YaiA from the organism Escherichia coli. This protein has Uniprot ID: YAIA_ECOLI. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-6.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of Uncharacterized protein YaiA.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "86be5bb3d9a5af35a2af3e3709a5446bac37b0db88aa3450d7ecc2cd700908a6",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/YAIA_ECOLI_Tsuboyama_2023_2KVT/description.md",
+      "source_group": "BioML-bench/proteingym-dms/YAIA_ECOLI_Tsuboyama_2023_2KVT",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/YAP1_HUMAN_Araya_2012",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: YAP1_HUMAN_Araya_2012\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nmulti-substitution variants for the protein YAP1 from the organism Homo sapiens. This protein has Uniprot ID: YAP1_HUMAN. \n\nThe DMS selection assay was described as follows: \n\n    Peptide binding\n\nIt was categorised as measuring the following (general) fitness attribute: Binding. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"A fundamental protein property, thermodynamic stability, revealed solely from large-scale measurements of protein function\"\n\nand can be accessed at the following DOI: 10.1073/pnas.1209751109.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of YAP1.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "0eca77146f19418ef4dbb8ee6e0c41a48941e104680e602c5762776af71e1179",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/YAP1_HUMAN_Araya_2012/description.md",
+      "source_group": "BioML-bench/proteingym-dms/YAP1_HUMAN_Araya_2012",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: YNZC_BACSU_Tsuboyama_2023_2JVD\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nmulti-substitution variants for the protein UPF0291 protein YnzC from the organism Bacillus subtilis. This protein has Uniprot ID: YNZC_BACSU. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-6.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of UPF0291 protein YnzC.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5`, `fold_modulo_5`, and `fold_contiguous_5` columns to split the data into training and test sets.\nEach of these columns contains integer values from 0 to 4, which indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences in fold 0 for the `fold_random_5` split, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score). Then repeat the process separately for the other two cross-validation split columns\n`fold_modulo_5` and `fold_contiguous_5`. Hence, each sequence should have three predicted fitness scores,\ncorresponding to the prediction for that sequence under models trained on the three different cross-validation splits.\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different cross-validation splits\nfold_columns = [\"fold_random_5\", \"fold_modulo_5\", \"fold_contiguous_5\"]\nfor column in fold_columns:  # different splits\n    for fold in range(5):  # different folds per-split\n        fold_mask = data[column] == fold\n        train_data = data[~fold_mask]  # train on all folds except the current one\n        test_data = data[fold_mask]  # test on the current fold\n\n        # train the model **from scratch** on the training set \n        trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n        # predict the fitness score for the sequences in the current fold \n        predictions.loc[fold_mask, f\"fitness_score_{column}\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score_fold_random_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_random_5` column\n- `fitness_score_fold_modulo_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_modulo_5` column\n- `fitness_score_fold_contiguous_5`: The predicted fitness score for that sequence predicted by the model trained on the \n  cross-validation split defined by the `fold_contiguous_5` column\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the \"random\" 5-fold cross-validation split\n- `fold_modulo_5`: The fold of the variant (0-4) in the \"modulo\" 5-fold cross-validation split\n- `fold_contiguous_5`: The fold of the variant (0-4) in the \"contiguous\" 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and the three fitness score columns\n\n## Evaluation\n\nYour model will be evaluated on the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "1abe3bb199fc0ca578469358c1a7db3d7e7a51c35cf25b428b1bdcf2c0cd7cf2",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD/description.md",
+      "source_group": "BioML-bench/proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD",
+      "workflow": "held out assay ranking substitutions",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    },
+    {
+      "task_id": "proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD_indels",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "\n# Proteingym-DMS dataset: YNZC_BACSU_Tsuboyama_2023_2JVD_indels\n\n## Description\n\nThis dataset is part of the ProteinGym DMS benchmark, which contains deep mutational scanning datasets that measure\nprotein fitness (in different contexts) for sequence variants of a wide range of proteins. This dataset contains\nindel variants for the protein UPF0291 protein YnzC from the organism Bacillus subtilis. This protein has Uniprot ID: YNZC_BACSU. \n\nThe DMS selection assay was described as follows: \n\n    Stability\n\nIt was categorised as measuring the following (general) fitness attribute: Stability. Higher scores indicate better fitness.\n\nThe source publication for this dataset is titled: \n\n\"Mega-scale experimental analysis of protein folding stability in biology and design\"\n\nand can be accessed at the following DOI: 10.1038/s41586-023-06328-69.\n\n## Objective\n\nThe objective of this benchmark is to train a model that can predict the fitness of unseen single-substitution sequence variants of UPF0291 protein YnzC.\nTo train your model, you will use 5-fold cross-validation on the sequences and fitness scores defined in the `data.csv` file. \n\nYou will use the `fold_random_5` column to split the data into training and test sets. This column contains integer values from 0 to 4, \nwhich indicate the fold of the sequence in the corresponding 5-fold cross-validation split.\n\nWhen predicting the fitness score for a given sequence, **you must use a model trained only on sequences from other folds**.\nFor example, to predict the fitness score for sequences with `fold_random_5 == 0`, you must use a model trained\nonly on the sequences with `fold_random_5` values other than 0.\n\nYou must repeat this process for each of the five folds in `fold_random_5` (so that all sequences in `data.csv` \nreceive a predicted score).\n\nOverall, your training and inference pseudocode loop should look like this:\n\n```python\nimport pandas as pd\ndata = pd.read_csv(\"data.csv\")\nwt_sequence = data.iloc[0][\"sequence\"]\n\n# remove the wild-type sequence from the data\ndata = data.iloc[1:]\n\n## define your model here ##\nmodel = ...\n\n# initialize a dataframe to store the predictions\npredictions = pd.DataFrame(columns=[\"id\", \"fitness_score\"], index=data.index)\npredictions[\"id\"] = data[\"id\"]\n\n# loop over the different folds\nfor fold in range(5): \n    fold_mask = data[\"fold_random_5\"] == fold\n    train_data = data[~fold_mask]  # train on all folds except the current one\n    test_data = data[fold_mask]  # test on the current fold\n\n    # train the model **from scratch** on the training set \n    trained_model = model.fit(train_data[\"sequence\"], train_data[\"fitness_score\"]) \n\n    # predict the fitness score for the sequences in the current fold \n    predictions.loc[fold_mask, \"fitness_score\"] = trained_model.predict(test_data[\"sequence\"])\n```\n\nHence, the output data frame should contain four columns:\n- `id`: The ID of the sequence \n- `fitness_score`: The predicted fitness score for that sequence predicted by the model trained on the \n    cross-validation split defined by the `fold_random_5` column.\n\n## Data Format\n\nThe `data.csv` file contains the following columns:\n- `id`: The index of the sequence\n- `sequence`: The amino acid sequence of the variant\n- `fitness_score`: The fitness score of the variant\n- `fold_random_5`: The fold of the variant (0-4) in the 5-fold cross-validation split\n\nThe first row of the CSV file contains the wild-type sequence in the `sequence` field and missing values for the other columns.\n\n## Files\n\n- `data.csv`: File with sequences and fitness scores\n- `sample_submission.csv`: Example submission format with ID column and fitness score column\n\n## Evaluation\n\nYour model will be evaluated using the Spearman correlation between the predicted fitness scores and the true fitness scores for\neach of the sequences in `data.csv`.\n",
+      "source_question_kind": "original-task-description",
+      "source_question_sha256": "bc4c9145c96d1c6f21f17d3d88b957585f7bb32a335b92147ed57cf5b058ec6e",
+      "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD_indels/description.md",
+      "source_group": "BioML-bench/proteingym-dms/YNZC_BACSU_Tsuboyama_2023_2JVD_indels",
+      "workflow": "held out assay ranking indels",
+      "skills": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "applications": [
+        "genome-variation",
+        "genome-sequence",
+        "biological-knowledge"
+      ],
+      "context_tags": [],
+      "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
+      "outputs": [
+        "predictions.tsv or native output artifact: evaluation_id and every requested prediction",
+        "model or executable prediction script",
+        "evaluation_spec.json: metric, grouping, missing-output and threshold rules"
+      ],
+      "verification": "Run the submitted inference path on private inputs where practical; otherwise validate complete prediction identities and compute the declared metric against withheld observed labels. Accept different scientifically valid models meeting the frozen criterion; never require exact equality to one learned baseline.",
+      "decisions": [],
+      "scope_changes": [
+        "Registry definitions, configured IDs and source assays are not independent workflows. Reconcile description, config, variant type, metric and fold semantics; retain malformed definitions and unsupported input access explicitly. Use independent benign measured assay observations, not benchmark source data."
+      ],
+      "authoring_requirements": [
+        "Select independent observed data and preserve patient, sequence, scaffold or study separation as appropriate.",
+        "Task-internal evaluation partitions do not create extra corpus splits.",
+        "Verify model/data availability and sandbox resources; a proposed metric is not an executed validation."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
+        }
+      ],
+      "annotation_basis": "workflow-family draft",
+      "existing_mapping_status": "unmapped",
+      "recipes": []
+    }
+  ]
+}
