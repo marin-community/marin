@@ -1,126 +1,111 @@
-// Benchmark and question views share the embedded inventory; no runtime fetches.
-const benchmarkById = new Map(D.benchmarks.map(b => [b.id, b]));
-const verificationNames = {
-  'numeric-contract': 'Executable check proposed',
-  'needs-definition': 'Scientific definition needed',
-  'defer-interpretation': 'Open-ended endpoint deferred',
-};
+// Benchmark and question views share embedded, versioned inventories.
+const benchmarkById = new Map(D.benchmarks.map(benchmark => [benchmark.id, benchmark]));
 const routeHref = path => location.href.split('#')[0] + '#' + path;
 const benchmarkHref = id => routeHref('benchmark/' + encodeURIComponent(id));
 const questionHref = (benchmark, question) => routeHref('question/' + encodeURIComponent(benchmark) + '/' + encodeURIComponent(question));
-const questionTitle = q => q.annotation?.question_summary || q.summary || q.id;
-const questionLabels = q => q.annotation ? [...q.annotation.focal_competencies, ...q.annotation.supporting_competencies] : [];
-const paragraphs = values => values.map(value => `<p>${esc(value)}</p>`).join('');
+const questionTitle = question => question.annotation?.question_summary || question.summary || question.id;
+const verifiedQuestions = benchmark => benchmark.questions.filter(question => question.annotation?.competencies.length);
+const setAsideQuestions = benchmark => benchmark.questions.filter(question => question.annotation && !question.annotation.competencies.length);
 
 function benchmarkForSource(source) {
-  return D.benchmarks.find(b => source.task_inventory ? b.inventory === source.task_inventory : b.id === source.name);
+  return D.benchmarks.find(benchmark => source.task_inventory ? benchmark.inventory === source.task_inventory : benchmark.id === source.name);
 }
 
 function renderBenchmarkIndex() {
   const first = benchmarkById.get('BixBench-Verified-50');
-  el('benchmark-entry').innerHTML = `<h3>Start with the question-level review</h3>
-    <p><a class="page-link" href="${benchmarkHref(first.id)}">BixBench-Verified-50 → 50 questions and a flat competency list</a></p>
-    <p>Each benchmark has a page; each inventoried ID question has a permalink. Only BixBench-Verified currently has question-level competency annotations. Other inventories retain their inspection limits. OOD question content is excluded.</p>`;
+  el('benchmark-entry').innerHTML = `<h3>Question-level review</h3>
+    <p><a href="${benchmarkHref(first.id)}">BixBench-Verified-50: questions and competencies</a></p>
+    <p>Each eligible benchmark has an inventory page and each inventoried question has a permalink. BixBench-Verified currently has competency annotations. OOD question content remains excluded.</p>`;
 }
 
-function competencyCounts(benchmark, role) {
-  return benchmark.review.competencies.map(c => {
-    const focal = benchmark.questions.filter(q => q.annotation?.focal_competencies.includes(c.id)).length;
-    const total = benchmark.questions.filter(q => questionLabels(q).includes(c.id)).length;
-    return {...c, focal, total, count: role === 'focal' ? focal : total};
-  }).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+function competencyCounts(benchmark) {
+  return benchmark.review.competencies.map(competency => ({
+    ...competency,
+    count: verifiedQuestions(benchmark).filter(question => question.annotation.competencies.includes(competency.id)).length,
+  })).sort((first, second) => second.count - first.count || first.name.localeCompare(second.name));
 }
 
 function renderBenchmark(benchmark) {
-  const reviewed = benchmark.questions.filter(q => q.annotation).length;
-  const numeric = benchmark.questions.filter(q => q.annotation?.verification_status === 'numeric-contract').length;
-  const unresolved = benchmark.questions.filter(q => q.annotation?.verification_status === 'needs-definition').length;
-  const deferred = benchmark.questions.filter(q => q.annotation?.verification_status === 'defer-interpretation').length;
+  const reviewed = verifiedQuestions(benchmark);
+  const excluded = setAsideQuestions(benchmark);
   el('benchmark-page').innerHTML = `<div class="breadcrumbs"><a href="${routeHref('sources')}">Benchmarks</a> / ${esc(benchmark.name)}</div>
     <h2 tabindex="-1">${esc(benchmark.name)}</h2>
-    <p><span class="badge">${esc(benchmark.distribution)}</span> <a href="${esc(benchmark.source_url)}">Original source</a>
-    ${benchmark.inventory ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.inventory, 'Versioned question inventory') : ''}</p>
-    <p class="reference-note">Inventory scope: ${esc(benchmark.inspection)}</p>
-    ${benchmark.review ? `<p class="notice">Draft competency annotations for review. These counts describe source questions, not generated tasks or validated coverage. Only executable rewards are eligible for generation; no LLM judge.</p>
-    <div class="stats benchmark-stats"><div class="stat"><b>${reviewed}</b><span>Questions reviewed</span></div><div class="stat"><b>${benchmark.review.competencies.length}</b><span>Flat draft competencies</span></div><div class="stat"><b>${numeric}</b><span>Executable checks proposed</span></div><div class="stat"><b>${unresolved} / ${deferred}</b><span>Need definitions / deferred</span></div></div>
-    <p>“Focal” identifies the requested endpoint; “supporting” identifies a necessary component. A question may have several labels. Related questions can share one biological study and one workflow.</p>
-    <details><summary>Annotation method and counting</summary><p>${esc(benchmark.review.method)}</p><p>${esc(benchmark.review.counting)}</p><p>${esc(benchmark.review.reward_policy)}</p>
-    <p>${link('experiments/post_training/bio_tasks/' + benchmark.review_file, 'Review the versioned annotations and definitions')}</p></details>
-    <h3>How often does each competency appear?</h3>
-    <div class="toolbar"><label for="competency-count-mode">Count</label><select id="competency-count-mode"><option value="all">Focal + supporting</option><option value="focal">Focal only</option></select><span class="muted">Click a bar to show its questions. Frequency is not a generation quota.</span></div>
-    <div id="competency-bars" class="competency-bars" aria-label="Competencies ranked by source-question count"></div>` :
-      `<p class="notice">${benchmark.distribution === 'OOD' ? 'Held out: question content and training competency mappings are excluded.' : 'Question-level competency review has not been done for this benchmark. Inventory patterns are provisional descriptions, not endpoint-specific competency assignments.'}</p>`}
-    <h3>Questions ${benchmark.questions.length ? '(' + benchmark.questions.length + ' inventory records)' : ''}</h3>
-    ${benchmark.questions.length ? `<div class="toolbar"><label for="question-search">Search</label><input id="question-search" type="search" placeholder="Question ID, operation or competency…">
-      ${benchmark.review ? `<label for="question-competency">Competency</label><select id="question-competency"><option value="">All competencies</option>${benchmark.review.competencies.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>
-      <label for="question-verification">Verification</label><select id="question-verification"><option value="">All dispositions</option>${Object.entries(verificationNames).map(([id, name]) => `<option value="${id}">${name}</option>`).join('')}</select>` : ''}</div>
-      <p id="question-count" class="reference-note" aria-live="polite"></p><div id="question-table" class="panel table-scroll"></div>` : '<p>No eligible question inventory is available on this page.</p>'}`;
+    <p class="page-meta">${esc(benchmark.distribution)} · <a href="${esc(benchmark.source_url)}">Source</a>
+    ${benchmark.inventory ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.inventory, 'Inventory') : ''}
+    ${benchmark.review_file ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.review_file, 'Annotations') : ''}</p>
+    ${benchmark.review ? `<p>${reviewed.length} questions with proposed executable checks · ${benchmark.review.competencies.length} draft competencies. Click a bar to see its questions.</p>
+      <div id="competency-bars" class="competency-bars" aria-label="Competencies ranked by number of questions"></div>` :
+      `<p>${benchmark.distribution === 'OOD' ? 'Held out: question content and training mappings are excluded.' :
+        'Question-level competency review is pending. Inventory patterns below are provisional.'}</p>`}
+    <h3>${benchmark.review ? 'Questions with proposed executable checks' : 'Inventoried questions'} <span class="count-muted">(${benchmark.review ? reviewed.length : benchmark.questions.length})</span></h3>
+    ${benchmark.questions.length ? `<div class="toolbar"><label for="question-search">Search questions</label><input id="question-search" type="search" placeholder="ID, question or competency"></div>
+      <p id="question-count" class="reference-note" aria-live="polite"></p><div id="question-table" class="table-scroll"></div>` : '<p>No eligible questions are inventoried for this benchmark.</p>'}
+    ${excluded.length ? `<details class="set-aside"><summary>${excluded.length} questions set aside for now</summary><p>These need a clearer scientific contract or ask for open-ended interpretation. They have no competency labels or frequency credit.</p>
+      <div class="table-scroll"><table><thead><tr><th>Question</th><th>Why set aside</th></tr></thead><tbody>${excluded.map(question =>
+        `<tr><td><a href="${questionHref(benchmark.id, question.id)}">${esc(question.id)}</a><br>${esc(questionTitle(question))}</td>
+        <td>${esc(question.annotation.decisions)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+  if (benchmark.review) renderCompetencyBars(benchmark);
   if (benchmark.questions.length) {
     el('question-search').oninput = () => renderQuestionTable(benchmark);
-    if (benchmark.review) {
-      el('question-competency').onchange = () => renderQuestionTable(benchmark);
-      el('question-verification').onchange = () => renderQuestionTable(benchmark);
-      el('competency-count-mode').onchange = () => { renderCompetencyBars(benchmark); renderQuestionTable(benchmark); };
-      renderCompetencyBars(benchmark);
-    }
     renderQuestionTable(benchmark);
   }
 }
 
 function renderCompetencyBars(benchmark) {
-  const rows = competencyCounts(benchmark, el('competency-count-mode').value);
-  const max = Math.max(1, ...rows.map(c => c.count));
-  el('competency-bars').innerHTML = rows.map(c => `<button class="competency-bar" data-competency="${esc(c.id)}" aria-label="${esc(c.name)}: ${c.count} questions; filter questions">
-    <span>${esc(c.name)}</span><span class="bar-track"><span style="width:${100 * c.count / max}%"></span></span><b>${c.count}</b>
-    <small>${c.focal} focal · ${c.total} total</small></button>`).join('');
+  const counts = competencyCounts(benchmark);
+  const max = Math.max(1, ...counts.map(competency => competency.count));
+  el('competency-bars').innerHTML = counts.map(competency =>
+    `<button class="competency-bar" data-competency="${esc(competency.id)}" aria-label="${esc(competency.name)}: ${competency.count} questions; filter questions">
+      <span>${esc(competency.name)}</span><span class="bar-track"><span style="width:${100 * competency.count / max}%"></span></span><b>${competency.count}</b></button>`).join('');
   el('competency-bars').querySelectorAll('button').forEach(button => {
     button.onclick = () => {
-      el('question-competency').value = button.dataset.competency;
+      const selected = el('competency-bars').dataset.selected;
+      el('competency-bars').dataset.selected = selected === button.dataset.competency ? '' : button.dataset.competency;
+      el('competency-bars').querySelectorAll('button').forEach(bar =>
+        bar.setAttribute('aria-pressed', String(bar.dataset.competency === el('competency-bars').dataset.selected)));
       renderQuestionTable(benchmark);
-      el('question-competency').focus();
+      el('question-table').scrollIntoView({behavior: 'smooth', block: 'start'});
     };
   });
 }
 
 function renderQuestionTable(benchmark) {
   const query = el('question-search').value.toLowerCase().trim();
-  const competency = benchmark.review ? el('question-competency').value : '';
-  const verification = benchmark.review ? el('question-verification').value : '';
-  const names = new Map((benchmark.review?.competencies || []).map(c => [c.id, c.name]));
-  const questions = benchmark.questions.filter(q =>
-    (!competency || (el('competency-count-mode').value === 'focal' ? q.annotation?.focal_competencies || [] : questionLabels(q)).includes(competency)) &&
-    (!verification || q.annotation?.verification_status === verification) &&
-    [q.id, questionTitle(q), ...questionLabels(q).map(id => names.get(id))].join(' ').toLowerCase().includes(query));
-  el('question-count').textContent = `${questions.length} of ${benchmark.questions.length} records shown`;
-  el('question-table').innerHTML = `<table><thead><tr><th>Question</th><th>Focal competencies</th><th>Verification plan</th></tr></thead><tbody>${questions.map(q => `<tr>
-    <td><a href="${questionHref(benchmark.id, q.id)}">${esc(q.id)}</a><br>${esc(questionTitle(q))}</td>
-    <td>${q.annotation ? q.annotation.focal_competencies.map(id => esc(names.get(id))).join('<br>') : 'Not reviewed'}</td>
-    <td>${q.annotation ? esc(verificationNames[q.annotation.verification_status]) : 'Not reviewed'}</td></tr>`).join('')}</tbody></table>`;
+  const selected = benchmark.review ? el('competency-bars').dataset.selected : '';
+  const definitions = new Map((benchmark.review?.competencies || []).map(competency => [competency.id, competency.name]));
+  const candidates = benchmark.review ? verifiedQuestions(benchmark) : benchmark.questions;
+  const questions = candidates.filter(question =>
+    (!selected || question.annotation?.competencies.includes(selected)) &&
+    [question.id, questionTitle(question), ...(question.annotation?.competencies || []).map(id => definitions.get(id))]
+      .join(' ').toLowerCase().includes(query));
+  el('question-count').textContent = `${questions.length} of ${candidates.length} shown`;
+  el('question-table').innerHTML = `<table><thead><tr><th>Question</th><th>Competencies</th></tr></thead><tbody>${questions.map(question =>
+    `<tr><td><a href="${questionHref(benchmark.id, question.id)}">${esc(question.id)}</a><br>${esc(questionTitle(question))}</td>
+    <td>${question.annotation ? question.annotation.competencies.map(id => esc(definitions.get(id))).join('<br>') : 'Not reviewed'}</td></tr>`).join('')}</tbody></table>`;
 }
 
 function renderQuestion(benchmark, question) {
   const annotation = question.annotation;
-  const index = benchmark.questions.indexOf(question);
-  const previous = benchmark.questions[index - 1], next = benchmark.questions[index + 1];
-  const definitions = new Map((benchmark.review?.competencies || []).map(c => [c.id, c]));
-  const cards = ids => ids.map(id => {
-    const c = definitions.get(id);
-    return `<div class="competency-card"><h3>${esc(c.name)}</h3><p>${esc(c.outcome)}</p></div>`;
-  }).join('');
+  const included = Boolean(annotation?.competencies.length);
+  const definitions = new Map((benchmark.review?.competencies || []).map(competency => [competency.id, competency]));
+  const peers = included ? verifiedQuestions(benchmark) : setAsideQuestions(benchmark);
+  const index = peers.indexOf(question);
+  const previous = peers[index - 1], next = peers[index + 1];
   el('question-page').innerHTML = `<div class="breadcrumbs"><a href="${routeHref('sources')}">Benchmarks</a> / <a href="${benchmarkHref(benchmark.id)}">${esc(benchmark.name)}</a> / ${esc(question.id)}</div>
-    <h2 tabindex="-1">${esc(question.id)}</h2><p class="lede">${esc(questionTitle(question))}</p>
-    <p class="reference-note">${annotation ? 'Paraphrased question summary; competency annotations are a draft.' : 'Inventory pattern only; the exact question endpoint and competencies still need review.'} <a href="${esc(question.source_url)}">Original source metadata</a></p>
-    ${annotation ? `<div class="panel"><h3>Focal competencies</h3><div class="competency-cards">${cards(annotation.focal_competencies)}</div>
-      <h3>Supporting competencies</h3><div class="competency-cards">${cards(annotation.supporting_competencies) || '<p>No additional supporting labels assigned at this granularity.</p>'}</div></div>
-      <div class="panel verification-panel"><span class="badge">${esc(verificationNames[annotation.verification_status])}</span><h3>Executable reward design</h3><p>${esc(annotation.verification)}</p><h3>Decisions and limits</h3><p>${esc(annotation.decisions)}</p>
-      <p class="reference-note">This is a proposed verification contract, not a passing implementation. Generated tasks use independent biological data, a reference solution and executable artifact checks. No LLM judge.</p></div>` : '<p class="notice">No question-level competency annotation yet. Shared workflow stages below are source context and may exceed this individual endpoint.</p>'}
-    <details><summary>Inventory context and existing task mappings</summary>
-      <p>Workflow family: <code>${esc(question.family)}</code>. Formats: ${esc(question.formats.join(', ') || 'Not inventoried')}.</p>
-      <p>Inventory mapping status: <strong>${esc(question.status)}</strong>. This status is separate from the new draft competency labels.</p>
+    <h2 tabindex="-1">${esc(question.id)}</h2>
+    ${annotation ? `<div class="source-question"><div class="eyebrow">Original question</div><p>${esc(annotation.source_question)}</p></div>
+      ${included ? `<h3>Competencies</h3><div class="competency-cards">${annotation.competencies.map(id => {
+        const competency = definitions.get(id);
+        return `<div class="competency-card"><h4>${esc(competency.name)}</h4><p>${esc(competency.outcome)}</p></div>`;
+      }).join('')}</div>
+      <h3>Executable check to design</h3><p>${esc(annotation.verification)}</p><p class="reference-note">${esc(annotation.decisions)}</p>` :
+      `<p class="notice">Set aside for now. No competencies are assigned.</p><p>${esc(annotation.decisions)}</p>`}` :
+      `<p>${esc(questionTitle(question))}</p><p class="notice">Question-level competency review is pending for this benchmark.</p>`}
+    <details><summary>Source and inventory details</summary><p><a href="${esc(question.source_url)}">Source metadata</a>
+      ${benchmark.inventory ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.inventory, 'Inventory') : ''}</p>
+      <p>Workflow family: ${esc(question.family)}. Inventory mapping status: ${esc(question.status)}.</p>
       <p>Related authored recipes: ${esc(question.recipes.join(', ') || 'None mapped')}.</p>
-      ${question.recipes.length ? `<p><a href="${routeHref('examples')}">Inspect published generated examples</a></p>` : ''}
-      <p class="reference-note">The inventory’s shared workflow stages may include upstream operations not required by this question. They are not automatically assigned as competencies.</p>${paragraphs(question.stages)}
-      ${annotation ? `<p>Question fingerprint: <code class="hash-value">${esc(annotation.source_question_sha256)}</code></p>` : ''}</details>
+      ${annotation ? `<p>Question SHA-256: <code class="hash-value">${esc(annotation.source_question_sha256)}</code></p>` : ''}</details>
     <div class="question-pagination">${previous ? `<a href="${questionHref(benchmark.id, previous.id)}">← ${esc(previous.id)}</a>` : '<span></span>'}
       <a href="${benchmarkHref(benchmark.id)}">All questions</a>${next ? `<a href="${questionHref(benchmark.id, next.id)}">${esc(next.id)} →</a>` : '<span></span>'}</div>`;
 }
@@ -130,7 +115,7 @@ function routePage() {
   try {
     parts = location.hash.slice(1).split('/').map(decodeURIComponent);
   } catch {
-    showPageError('The page link contains an invalid encoded identifier.');
+    showPageError('The page link contains an invalid identifier.');
     return;
   }
   const [kind, benchmarkId, questionId] = parts;
@@ -142,15 +127,17 @@ function routePage() {
       tab('benchmark-page');
       document.title = benchmark.name + ' · Biology competencies';
     } else {
-      const question = benchmark.questions.find(q => q.id === questionId);
+      const question = benchmark.questions.find(item => item.id === questionId);
       if (!question) { showPageError('This question is not in the eligible inventory.'); return; }
       renderQuestion(benchmark, question);
       tab('question-page');
       document.title = question.id + ' · ' + benchmark.name;
     }
+    document.body.classList.add('focus-view');
     document.querySelector('.tab:not(.hidden) h2').focus({preventScroll: true});
     return;
   }
+  document.body.classList.remove('focus-view');
   const section = !kind ? 'coverage' : kind;
   if (!['coverage', 'plan', 'examples', 'sources', 'assets', 'method'].includes(section)) {
     showPageError('This page is not available.');
@@ -164,6 +151,7 @@ function routePage() {
 function showPageError(message) {
   el('benchmark-page').innerHTML = `<h2>Page unavailable</h2><p>${esc(message)}</p><a href="${routeHref('sources')}">Browse benchmarks</a>`;
   tab('benchmark-page');
+  document.body.classList.add('focus-view');
 }
 
 window.addEventListener('hashchange', routePage);

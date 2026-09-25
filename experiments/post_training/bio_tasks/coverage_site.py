@@ -73,9 +73,12 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
                 raise ValueError(f"Duplicate competency definitions: {name}")
             for row in inventory["tasks"]:
                 annotation = annotations[row["task_id"]]
-                labels = annotation["focal_competencies"] + annotation["supporting_competencies"]
+                labels = annotation["competencies"]
                 if len(labels) != len(set(labels)) or not set(labels) <= competency_ids:
                     raise ValueError(f"Invalid competency labels: {name}/{row['task_id']}")
+                eligible = annotation["verification_status"] == "numeric-contract"
+                if bool(labels) != eligible:
+                    raise ValueError(f"Only verifiable questions may have competency labels: {name}/{row['task_id']}")
                 if annotation["source_question_sha256"] != row["source_question_sha256"]:
                     raise ValueError(f"Question changed since review: {name}/{row['task_id']}")
             page["review"] = {key: value for key, value in review.items() if key != "tasks"}
@@ -124,76 +127,93 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
 def benchmark_markdown(review: dict) -> str:
     """Render the flat question review for editing alongside the explorer."""
     names = {row["id"]: row["name"] for row in review["competencies"]}
-    counts = []
-    for competency in review["competencies"]:
-        focal = sum(competency["id"] in row["focal_competencies"] for row in review["tasks"])
-        total = sum(
-            competency["id"] in row["focal_competencies"] + row["supporting_competencies"] for row in review["tasks"]
-        )
-        counts.append((competency, focal, total))
+    included = [row for row in review["tasks"] if row["competencies"]]
+    excluded = [row for row in review["tasks"] if not row["competencies"]]
+    counts = sorted(
+        (
+            (competency, sum(competency["id"] in row["competencies"] for row in included))
+            for competency in review["competencies"]
+        ),
+        key=lambda row: (-row[1], row[0]["name"]),
+    )
     lines = [
         "# BixBench-Verified: flat competency review",
         "",
-        f"Draft for review. All {len(review['tasks'])} source questions are annotated; "
-        f"the {len(review['competencies'])} competency definitions are provisional. "
-        "Task generation remains paused. Only executable rewards are eligible; no LLM judge.",
+        f"Draft for review: {len(included)} of {len(review['tasks'])} source questions have "
+        f"proposed executable checks and {len(review['competencies'])} provisional competencies. "
+        "Task generation remains paused. No LLM judge is in scope.",
         "",
-        "An **analysis competency** is a reusable operation with an observable outcome. "
-        "A **workflow recipe** connects several competencies to answer a scientific question. "
-        "Generate connected workflows on independent real inputs, and use competencies to track breadth. "
-        "Source questions may ask for just one endpoint from a shared workflow.",
+        "An **analysis competency** is a reusable scientific analysis with a checkable outcome. "
+        "A **workflow recipe** connects competencies to answer a scientific question on observed data. "
+        "Filters, covariates, model options and denominators belong in the question-specific contract "
+        "unless they change the analysis being assessed. These boundaries are open for review.",
         "",
-        "Focal labels describe the requested endpoint; supporting labels describe necessary components. "
-        "Count a question once per label. Counts overlap and do not measure unique studies, "
-        "independent workflows, scientific importance or validated generated tasks.",
+        "Use the same competency when two tasks require the same scientific analysis and a comparable "
+        "output contract, even if species, tool or threshold changes. Split it when the scientific "
+        "decision or required artifacts change substantially. A task can carry several competencies "
+        "when its verifier checks the connected intermediate results.",
         "",
-        "[Versioned annotations and verification notes]"
+        "Each question may require several competencies; it is counted once per assigned label. "
+        "The counts overlap and do not measure unique studies, independent workflows or validated generated tasks.",
+        "",
+        "[Versioned annotations, original questions and verification notes]"
         "(../../experiments/post_training/bio_tasks/benchmark_competencies/bixbench-verified-50.json) · "
-        "[Source inventory](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json)",
+        "[Source inventory](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) · "
+        "[Licensed source dataset](https://huggingface.co/datasets/phylobio/BixBench-Verified-50)",
         "",
-        "The naming is informed by [EDAM's separation of operations, topics, data and formats]"
-        "(https://edamontology.org/). These are local draft labels, not official EDAM terms. "
-        "The [ISCB framework](https://academic.oup.com/bioinformaticsadvances/article/4/1/vbae166/7903279) "
-        "addresses broader professional competencies; our units are narrower, observable analysis operations.",
+        "The naming follows [EDAM's separation of operations, topics, data and formats]"
+        "(https://edamontology.org/). These are local draft labels, not official EDAM terms.",
         "",
-        "## Ranked competency list",
+        "## Ranked competencies",
         "",
-        "Total includes focal and supporting appearances. Generic supporting operations can dominate; "
-        "inspect focal counts before deciding generation priorities. No weighting policy is selected.",
-        "",
-        "| Competency | Focal questions | Total questions | Observable outcome |",
-        "| --- | ---: | ---: | --- |",
+        "| Competency | Questions | Checkable outcome |",
+        "| --- | ---: | --- |",
     ]
-    for competency, focal, total in sorted(counts, key=lambda row: (-row[2], row[0]["name"])):
-        lines.append(f"| {competency['name']} | {focal} | {total} | {competency['outcome']} |")
+    for competency, count in counts:
+        lines.append(f"| {competency['name']} | {count} | {competency['outcome']} |")
     lines.extend(
         [
             "",
-            "## Question-by-question draft",
+            "## Questions with proposed executable checks",
             "",
-            "Summaries are paraphrases checked against the pinned Verified question hashes. "
-            "An executable check is only proposed, not validated. `needs-definition` requires "
-            "a frozen scientific contract. `defer-interpretation` excludes the open-ended endpoint.",
+            "These are prospective verifier designs. No new Harbor validation is claimed.",
             "",
-            "| Question | Summary | Focal competencies | Supporting competencies | Reward disposition |",
-            "| --- | --- | --- | --- | --- |",
+            "| Question | Short description | Competencies |",
+            "| --- | --- | --- |",
         ]
     )
-    for row in review["tasks"]:
-        focal_names = "; ".join(names[key] for key in row["focal_competencies"])
-        supporting_names = "; ".join(names[key] for key in row["supporting_competencies"]) or "—"
-        lines.append(
-            f"| {row['task_id']} | {row['question_summary']} | {focal_names} | "
-            f"{supporting_names} | {row['verification_status']} |"
-        )
+    for row in included:
+        labels = "; ".join(names[key] for key in row["competencies"])
+        lines.append(f"| {row['task_id']} | {row['question_summary']} | {labels} |")
     lines.extend(
         [
             "",
-            "Review granularity first: merge labels that would lead to the same assessment, "
-            "and split labels when they require different scientific decisions or output checks. "
-            "Choose a connected workflow, freeze its artifact contract, then vary study, organism, "
-            "assay and design using independent observed data. New instances must add substantive "
-            "biological variation; changing labels alone adds no coverage.",
+            "## Set aside for now",
+            "",
+            "These questions have no competency assignment or count while their complete endpoint lacks "
+            "an executable contract.",
+            "",
+            "| Question | Short description | Reason |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for row in excluded:
+        lines.append(f"| {row['task_id']} | {row['question_summary']} | {row['decisions']} |")
+    lines.extend(
+        [
+            "",
+            "## Boundaries to review",
+            "",
+            "- Differential expression analysis is one competency here; shrinkage, design formula and "
+            "filtering specify the task instance.",
+            "- Phylogenetic tree metrics currently share one competency; we could split it if the metrics "
+            "require distinct assessment contracts.",
+            "- Spearman correlation and Mann-Whitney tests are counted as competencies. They might instead "
+            "be cross-cutting statistical tags.",
+            "- Eligibility and denominator choices are required verifier checks, not separate competencies "
+            "in this draft.",
+            "- A question requiring both differential expression and pathway enrichment counts toward "
+            "both competencies. A generated task must validate the connected workflow.",
             "",
             "Rebuild this Markdown and the HTML with "
             "`uv run python -m experiments.post_training.bio_tasks.coverage_site`.",
