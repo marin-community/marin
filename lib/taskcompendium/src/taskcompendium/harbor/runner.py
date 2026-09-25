@@ -3,7 +3,6 @@
 
 """Resolve a launch separately from a task-owned Harbor binding."""
 
-import dataclasses
 from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
@@ -89,8 +88,8 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
     kwargs = dict(launch.agent_kwargs)
     if launch.agent == "chat" and rendering is not None and rendering.answer_format == AnswerFormat.FINAL_ACTION:
         agents["chat"] = "taskcompendium.harbor.adapter:NativeActionAgent"
-        kwargs["functions"] = [dataclasses.asdict(function) for function in rendering.functions]
-        kwargs["messages"] = [dataclasses.asdict(message) for message in rendering.messages]
+        kwargs["functions"] = [function.model_dump(mode="json") for function in rendering.functions]
+        kwargs["messages"] = [message.model_dump(mode="json") for message in rendering.messages]
         kwargs["tool_choice"] = rendering.tool_choice
         kwargs["parallel_tool_calls"] = rendering.parallel_tool_calls
     agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": kwargs}

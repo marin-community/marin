@@ -5,7 +5,7 @@
 
 import json
 
-import msgspec
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, VerifierHandler
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierSpec
@@ -15,30 +15,40 @@ from taskcompendium.rendering import AnswerFormat
 KIND = "nemo_predicted_action"
 
 
-class FunctionCallPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+class FunctionCallPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
     name: str
     arguments: str
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_call(self) -> "FunctionCallPayload":
         if not self.name:
             raise ValueError("Expected function calls require a name")
         parse_arguments(self.arguments)
+        return self
 
 
-class PredictedActionPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+class PredictedActionPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     expected_calls: tuple[FunctionCallPayload, ...]
     numeric_tolerance: float | None = None
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_action(self) -> "PredictedActionPayload":
         if not self.expected_calls:
             raise ValueError("Predicted-action verifier requires expected function calls")
         ToolCallComparatorConfig(self.numeric_tolerance)
+        return self
 
 
 def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> VerifierSpec:
     """Construct a private strict function-call verifier descriptor."""
-    payload = PredictedActionPayload(tuple(FunctionCallPayload(call.name, call.arguments) for call in expected_calls))
-    return VerifierSpec(KIND, msgspec.to_builtins(payload))
+    payload = PredictedActionPayload(
+        expected_calls=tuple(FunctionCallPayload(name=call.name, arguments=call.arguments) for call in expected_calls)
+    )
+    return VerifierSpec(kind=KIND, parameters=payload.model_dump(mode="json"))
 
 
 def _grade_action(payload: PredictedActionPayload, attempt: GradingAttempt) -> GradeResult:

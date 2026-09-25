@@ -61,7 +61,7 @@ def _functions(request: dict[str, Any]) -> tuple[NativeFunction, ...]:
             raise ValueError("function description must be a string")
         if strict is not None and not isinstance(strict, bool):
             raise ValueError("function strict must be a boolean")
-        functions.append(NativeFunction(name, parameters, description, strict))
+        functions.append(NativeFunction(name=name, parameters=parameters, description=description, strict=strict))
     if len({function.name for function in functions}) != len(functions):
         raise ValueError("advertised function names must be unique")
     return tuple(functions)
@@ -91,7 +91,7 @@ def _messages(request: dict[str, Any]) -> tuple[NativeMessage, ...]:
             content = "".join(item["text"] for item in content)
         if not isinstance(content, str) or not content.strip():
             raise ValueError("source messages require text")
-        turns.append(NativeMessage(message["role"], content))
+        turns.append(NativeMessage(role=message["role"], content=content))
     if not turns:
         raise ValueError("source input has no messages")
     return tuple(turns)
@@ -123,7 +123,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Ren
     advertised = {function.name for function in functions}
     if any(call.name not in advertised for call in expected_calls):
         raise ValueError("expected function call is absent from source tools")
-    source = Source(DATASET, REVISION, expected_sha256, IMPORTER_REVISION)
+    source = Source(dataset=DATASET, revision=REVISION, row=expected_sha256, importer_revision=IMPORTER_REVISION)
     specification = TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
         instructions=format_native_messages(messages),
@@ -133,6 +133,11 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Ren
         permitted_answer_formats=(AnswerFormat.FINAL_ACTION,),
     )
     rendering = Rendering(
-        "nemo-native-final-action", AnswerFormat.FINAL_ACTION, functions, messages, tool_choice, parallel_tool_calls
+        id="nemo-native-final-action",
+        answer_format=AnswerFormat.FINAL_ACTION,
+        functions=functions,
+        messages=messages,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
     )
     return specification, rendering

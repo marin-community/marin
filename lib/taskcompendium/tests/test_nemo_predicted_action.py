@@ -6,7 +6,6 @@
 import json
 import subprocess
 import sys
-from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -58,7 +57,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "from taskcompendium.lowering import read_rendering, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_attempt(read_specification(root / 'specification.json'), "
-        "GradingAttempt(read_rendering(root / 'rendering.json'), sys.argv[2])); "
+        "GradingAttempt(read_rendering(root / 'rendering.json'), sys.argv[2], object())); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -113,7 +112,10 @@ def test_predicted_action_rejects_instruction_message_drift(tmp_path):
 
     with pytest.raises(ValueError, match="differ from source messages"):
         lower_to_harbor(
-            replace(specification, instructions="Changed instruction"), rendering, HarborTaskBinding(), tmp_path / "task"
+            specification.model_copy(update={"instructions": "Changed instruction"}),
+            rendering,
+            HarborTaskBinding(),
+            tmp_path / "task",
         )
     assert not (tmp_path / "task").exists()
 

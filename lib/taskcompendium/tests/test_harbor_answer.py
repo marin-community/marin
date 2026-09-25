@@ -161,7 +161,9 @@ async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_pat
 )
 async def test_answer_task_rejects_incompatible_launch_before_trial(tmp_path, specification, launch, message):
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
 
     with pytest.raises(ValueError, match=message):
         await run_trial(task, binding, launch, tmp_path / "trials", "run")
