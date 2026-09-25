@@ -3,15 +3,15 @@
 
 """Export a direct-chat TaskSpec rendering as a Harbor task package."""
 
-import dataclasses
 import hashlib
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from taskcompendium.models import TaskSpec
 from taskcompendium.rendering import Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -20,16 +20,19 @@ RENDERING_FILE = "rendering.json"
 BINDING_FILE = "binding.json"
 
 
-@dataclass(frozen=True)
-class HarborTaskBinding:
+class HarborTaskBinding(BaseModel):
     """The environment and tools this Harbor lowering exposes to the agent."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     environment: str = DIRECT_CHAT_ENVIRONMENT
     tools: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_direct_chat(self) -> "HarborTaskBinding":
         if self.environment != DIRECT_CHAT_ENVIRONMENT or self.tools:
             raise ValueError("This lowering supports direct chat without tools")
+        return self
 
 
 @dataclass(frozen=True)
@@ -97,31 +100,17 @@ def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> Non
 
 def read_specification(path: Path) -> TaskSpec:
     """Read the private semantic record from an exported Harbor task."""
-    data = json.loads(path.read_text())
-    return TaskSpec(
-        id=data["id"],
-        instructions=data["instructions"],
-        verifier=ExactAnswer(**data["verifier"]),
-        source=Source(**data["source"]),
-        requirements=TaskRequirements(
-            capabilities=tuple(data["requirements"]["capabilities"]),
-            action_interfaces=tuple(data["requirements"]["action_interfaces"]),
-        ),
-        permitted_answer_formats=tuple(AnswerFormat(value) for value in data["permitted_answer_formats"]),
-        schema_version=data["schema_version"],
-    )
+    return TaskSpec.model_validate_json(path.read_text())
 
 
 def read_binding(path: Path) -> HarborTaskBinding:
     """Read the target binding stored in an exported Harbor task."""
-    data = json.loads(path.read_text())
-    return HarborTaskBinding(environment=data["environment"], tools=tuple(data["tools"]))
+    return HarborTaskBinding.model_validate_json(path.read_text())
 
 
 def read_rendering(path: Path) -> Rendering:
     """Read the selected output convention from an exported Harbor task."""
-    data = json.loads(path.read_text())
-    return Rendering(id=data["id"], answer_format=AnswerFormat(data["answer_format"]))
+    return Rendering.model_validate_json(path.read_text())
 
 
 def lower_to_harbor(
@@ -137,7 +126,7 @@ def lower_to_harbor(
     (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
-    (destination / SPECIFICATION_FILE).write_text(json.dumps(dataclasses.asdict(specification), indent=2) + "\n")
-    (destination / BINDING_FILE).write_text(json.dumps(dataclasses.asdict(binding), indent=2) + "\n")
-    (destination / RENDERING_FILE).write_text(json.dumps(dataclasses.asdict(rendering), indent=2) + "\n")
+    (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")
+    (destination / BINDING_FILE).write_text(binding.model_dump_json(indent=2) + "\n")
+    (destination / RENDERING_FILE).write_text(rendering.model_dump_json(indent=2) + "\n")
     return destination

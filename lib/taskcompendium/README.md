@@ -1,8 +1,10 @@
 # TaskCompendium direct-chat slice
 
-`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private exact-answer verifier. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. `compatible_lowerings` enumerates allowed rendering and environment pairs. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
+`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private exact-answer verifier. The task, rendering, and binding records are frozen Pydantic models, validated again when read from a Harbor export. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. `compatible_lowerings` enumerates allowed rendering and environment pairs. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
 The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
+
+The custom verifier has Harbor's verifier-side environment available for tasks that need workspace state. This direct-chat grader reads the saved final response, extracts the answer according to the rendering, and compares it directly with the private reference. It does not create an answer file or use a TaskTrove grading runtime.
 
 For an authenticated model run, pass the environment variable name as `HarborLaunch("chat", model="...", agent_kwargs={"api_base": "...", "api_key_env": "MODEL_API_KEY"})`. The agent reads its value at request time; Harbor trial configuration retains only the variable name. The variable must be set in the trial process environment.
 
@@ -16,12 +18,12 @@ from taskcompendium.rendering import Rendering
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
     instructions="What is 7 + 5?",
-    verifier=ExactAnswer("12"),
-    source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
+    verifier=ExactAnswer(expected="12"),
+    source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     requirements=TaskRequirements(),
     permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
 )
-renderings = (Rendering("plain", AnswerFormat.PLAIN), Rendering("json", AnswerFormat.JSON))
+renderings = (Rendering(id="plain", answer_format=AnswerFormat.PLAIN), Rendering(id="json", answer_format=AnswerFormat.JSON))
 candidates = compatible_lowerings(spec, renderings, (HarborTaskBinding(),))
 for candidate in select_lowerings(candidates, SelectionPolicy.ALL):
     lower_to_harbor(spec, candidate.rendering, candidate.binding, Path(f"/tmp/arithmetic-{candidate.rendering.id}"))

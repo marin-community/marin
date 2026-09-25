@@ -3,8 +3,9 @@
 
 """Private semantics for one deterministic, single-turn answer task."""
 
-from dataclasses import dataclass
 from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 SCHEMA_VERSION = "0.2"
 
@@ -16,35 +17,40 @@ class AnswerFormat(StrEnum):
     JSON = "json"
 
 
-@dataclass(frozen=True)
-class Source:
+class Source(BaseModel):
     """Pinned provenance for the source row and the importer that converted it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     dataset: str
     revision: str
     row: str
     importer_revision: str
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_source(self) -> "Source":
         if not all((self.dataset, self.revision, self.row, self.importer_revision)):
             raise ValueError("Complete source provenance is required")
+        return self
 
 
-@dataclass(frozen=True)
-class ExactAnswer:
+class ExactAnswer(BaseModel):
     """An exact reference answer and its text-normalization rules."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected: str
     ignore_case: bool = True
     ignore_whitespace: bool = True
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_expected(self) -> "ExactAnswer":
         if not self.expected.strip():
             raise ValueError("An exact answer is required")
+        return self
 
 
-@dataclass(frozen=True)
-class TaskRequirements:
+class TaskRequirements(BaseModel):
     """Environment functionality required to run the task.
 
     ``capabilities`` contains generic operations such as ``filesystem`` or
@@ -52,13 +58,16 @@ class TaskRequirements:
     as ``workplace:v1``.
     """
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     capabilities: tuple[str, ...] = ()
     action_interfaces: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class TaskSpec:
+class TaskSpec(BaseModel):
     """The private definition of one deterministic answer task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     instructions: str
@@ -68,7 +77,8 @@ class TaskSpec:
     permitted_answer_formats: tuple[AnswerFormat, ...] = (AnswerFormat.PLAIN,)
     schema_version: str = SCHEMA_VERSION
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_specification(self) -> "TaskSpec":
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
@@ -77,3 +87,4 @@ class TaskSpec:
             raise ValueError("At least one answer format must be permitted")
         if len(set(self.permitted_answer_formats)) != len(self.permitted_answer_formats):
             raise ValueError("Permitted answer formats must be unique")
+        return self

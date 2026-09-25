@@ -3,7 +3,6 @@
 
 """A pinned answer task through Harbor's custom-verifier trial lifecycle."""
 
-import dataclasses
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,7 +44,7 @@ def chat_endpoint():
             self.end_headers()
             self.wfile.write(endpoint.body)
 
-        def log_message(self, message_format, *args):
+        def log_message(self, format, *args):  # noqa: A002 - match BaseHTTPRequestHandler
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -65,8 +64,8 @@ def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
         instructions="What is 7 + 5?",
-        verifier=ExactAnswer("12"),
-        source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
+        verifier=ExactAnswer(expected="12"),
+        source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
         requirements=TaskRequirements(),
         permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
     )
@@ -77,6 +76,7 @@ def specification() -> TaskSpec:
     [
         (AnswerFormat.PLAIN, "12", 1.0, "graded"),
         (AnswerFormat.PLAIN, "13", 0.0, "graded"),
+        (AnswerFormat.PLAIN, r"\boxed{12}", 0.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"12"}', 1.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"13"}', 0.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"12"', None, "extraction_error"),
@@ -86,7 +86,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     tmp_path, specification, answer_format, response, reward, status
 ):
     binding = HarborTaskBinding()
-    rendering = Rendering(answer_format.value, answer_format)
+    rendering = Rendering(id=answer_format.value, answer_format=answer_format)
     task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
@@ -106,9 +106,29 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
         assert result.verifier_result.rewards == {"reward": reward}
 
 
+async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
+    specification = specification.model_copy(update={"verifier": ExactAnswer(expected="Straße Park")})
+    binding = HarborTaskBinding()
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
+
+    result = await run_trial(
+        task,
+        binding,
+        HarborLaunch("replay", agent_kwargs={"response": "STRASSE   PARK"}),
+        tmp_path / "trials",
+        "run",
+    )
+
+    assert result.verifier_result.rewards == {"reward": 1.0}
+
+
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
     (task / "rendering.json").write_text("{invalid")
 
     result = await run_trial(
@@ -122,24 +142,30 @@ async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_pat
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
-    specification = dataclasses.replace(specification, requirements=TaskRequirements(capabilities=("filesystem",)))
+    specification = specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))})
 
     with pytest.raises(ValueError, match="cannot satisfy"):
-        lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+        lower_to_harbor(
+            specification,
+            Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+            HarborTaskBinding(),
+            tmp_path / "task",
+        )
 
 
 def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specification):
-    specification = dataclasses.replace(
-        specification,
-        instructions="Return only the raw C++ program output.",
-        permitted_answer_formats=(AnswerFormat.PLAIN,),
+    specification = specification.model_copy(
+        update={
+            "instructions": "Return only the raw C++ program output.",
+            "permitted_answer_formats": (AnswerFormat.PLAIN,),
+        }
     )
     destination = tmp_path / "task"
 
     with pytest.raises(ValueError, match="does not permit the 'json' answer format"):
         lower_to_harbor(
             specification,
-            Rendering("json", AnswerFormat.JSON),
+            Rendering(id="json", answer_format=AnswerFormat.JSON),
             HarborTaskBinding(),
             destination,
         )
@@ -148,8 +174,11 @@ def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specificatio
 
 
 def test_selection_exports_only_compatible_answer_format(tmp_path, specification):
-    specification = dataclasses.replace(specification, permitted_answer_formats=(AnswerFormat.PLAIN,))
-    renderings = (Rendering("json", AnswerFormat.JSON), Rendering("plain", AnswerFormat.PLAIN))
+    specification = specification.model_copy(update={"permitted_answer_formats": (AnswerFormat.PLAIN,)})
+    renderings = (
+        Rendering(id="json", answer_format=AnswerFormat.JSON),
+        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+    )
     candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
 
     selected = select_lowerings(candidates, SelectionPolicy.FIRST)
@@ -159,7 +188,7 @@ def test_selection_exports_only_compatible_answer_format(tmp_path, specification
     assert json.loads((task / "rendering.json").read_text())["answer_format"] == "plain"
     assert (
         compatible_lowerings(
-            dataclasses.replace(specification, requirements=TaskRequirements(capabilities=("filesystem",))),
+            specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))}),
             renderings,
             (HarborTaskBinding(),),
         )
@@ -168,7 +197,10 @@ def test_selection_exports_only_compatible_answer_format(tmp_path, specification
 
 
 def test_selection_samples_reproducibly_from_compatible_renderings(specification):
-    renderings = (Rendering("plain", AnswerFormat.PLAIN), Rendering("json", AnswerFormat.JSON))
+    renderings = (
+        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+        Rendering(id="json", answer_format=AnswerFormat.JSON),
+    )
     candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
@@ -181,7 +213,9 @@ def test_selection_samples_reproducibly_from_compatible_renderings(specification
 
 async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
     (task / "binding.json").write_text('{"environment":"direct_chat","tools":["terminal"]}')
 
     with pytest.raises(ValueError, match="direct chat without tools"):
@@ -196,7 +230,9 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     secret = "taskcompendium-local-test-secret"
     monkeypatch.setenv("TASKCOMPENDIUM_TEST_API_KEY", secret)
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
     launch = HarborLaunch(
         "chat",
         model="fixture-model",
@@ -215,7 +251,9 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
 
 async def test_chat_launch_rejects_raw_key(tmp_path, specification, chat_endpoint):
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
     launch = HarborLaunch(
         "chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url, "api_key": "secret"}
     )
@@ -228,7 +266,9 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
     chat_endpoint.status = 400
     chat_endpoint.body = b'{"error":"model unavailable"}'
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
     launch = HarborLaunch("chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url})
 
     result = await run_trial(task, binding, launch, tmp_path / "trials", "run")
