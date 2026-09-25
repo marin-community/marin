@@ -9,8 +9,6 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Optional
 
-import wandb
-
 import jax
 from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
@@ -47,9 +45,7 @@ from levanter.data.mixture import MixtureDataset
 from levanter.schedule import BatchSchedule
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
-from levanter.tracker.wandb import WandbConfig
 from levanter.utils.jax_utils import barrier_sync
-from levanter.utils.logging import save_xla_dumps_to_wandb
 
 
 def eval_loss_loop(
@@ -139,21 +135,6 @@ def compute_validation_loss(
             return loss
 
     return compute_loss
-
-
-def wandb_xla_logger(config: WandbConfig):
-    last_mtime = wandb.run and wandb.run.start_time or time.time()
-
-    def log_xla_to_wandb(step: StepInfo):
-        nonlocal last_mtime
-        save_xla_dumps_to_wandb(last_mtime)
-        # update time to now
-        last_mtime = time.time()
-
-    if config.save_xla_dumps:
-        return log_xla_to_wandb
-    else:
-        return lambda x: None
 
 
 def mixture_weight_logging_hook(
@@ -281,7 +262,6 @@ def profile_ctx(
 __all__ = [
     "eval_loss_loop",
     "compute_validation_loss",
-    "wandb_xla_logger",
     "profile",
     "profile_ctx",
     "Callback",

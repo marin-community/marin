@@ -43,7 +43,14 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
+from marin.evaluation.eval_measurements import measurements_from_records
+from marin.evaluation.eval_stats import (
+    DEFAULT_MIN_COVERAGE,
+    Completeness,
+    MissingPolicy,
+    SelectionRequest,
+    declared_protocols,
+)
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -127,12 +134,16 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    declared: bool
     n_scored: int
+    n_benchmark: int | None
     n_attempted: int | None
     coverage: float | None
+    benchmark_rate: float | None
     errors: dict[str, int]
     item_cap: int | None
     flags: list[str]
+    num_fewshot: int | None
     run_id: str
     created_at: str
     version: str | None
@@ -167,10 +178,12 @@ class PanelRowResponse(BaseModel):
     missing: dict[str, MissingCellResponse]
     aggregate: PanelAggregateResponse | None
     covered: int
+    last_updated: str | None
 
 
 class PanelRequestResponse(BaseModel):
     min_coverage: float
+    min_benchmark_coverage: float
     cohort: str
     cohort_version: str | None
     completeness: str
@@ -179,9 +192,24 @@ class PanelRequestResponse(BaseModel):
     statuses: list[str]
 
 
+class PanelFamilyResponse(BaseModel):
+    """One leaderboard column: a benchmark, the settings it was run under, and the one to show."""
+
+    family: str
+    variants: list[str]
+    default: str
+
+
+class MetricProtocolResponse(BaseModel):
+    metric: str
+    kind: str
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
+    protocols: dict[str, MetricProtocolResponse]
     panel: list[str]
+    families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
     request: PanelRequestResponse
 
@@ -489,11 +517,12 @@ class RecordStore:
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
+        task_records = [record for record in records if record.model.name == model and record.evaluation.name == task]
+        protocol_records = [record for record in records if record.evaluation.name == task]
+        protocols = declared_protocols(measurements_from_records(protocol_records))
         points = []
-        for record in records:
-            if record.model.name != model or record.evaluation.name != task:
-                continue
-            headline = record_headline(record)
+        for record in task_records:
+            headline = record_headline(record, protocols.get(task))
             if headline is None:
                 continue
             points.append({**headline, "status": record.status.value})
@@ -957,16 +986,16 @@ def _parse_names(raw: str | None) -> tuple[str, ...] | None:
     return names or None
 
 
-def _parse_coverage(raw: str | None) -> float:
+def _parse_coverage(raw: str | None, name: str = "min_coverage") -> float:
     """The coverage floor a result must clear to be displayed."""
     if not raw:
         return DEFAULT_MIN_COVERAGE
     try:
         value = float(raw)
     except ValueError as exc:
-        raise BadRequest(f"min_coverage must be a number in [0, 1], got {raw!r}") from exc
+        raise BadRequest(f"{name} must be a number in [0, 1], got {raw!r}") from exc
     if not 0.0 <= value <= 1.0:
-        raise BadRequest(f"min_coverage must be in [0, 1], got {value}")
+        raise BadRequest(f"{name} must be in [0, 1], got {value}")
     return value
 
 
@@ -1171,6 +1200,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
+        typed_record = EvalRunRecord.model_validate(record)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
@@ -1179,6 +1209,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=correct or "all",
             extraction_filter=extraction_filter or None,
+            primary_metric_name=samples.declared_primary_metric(typed_record, task),
         )
         return payload
 
@@ -1248,6 +1279,7 @@ def _selection(params: Mapping[str, str]) -> SelectionRequest:
         cohort_version=params.get("cohort") or None,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
+        min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
         filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
         model_query=params.get("model") or None,
         include_flagged=_parse_flag(params.get("include_flagged")),
@@ -1279,6 +1311,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         cohort: str | None = None,
         complete: str | None = None,
         min_coverage: str | None = None,
+        min_benchmark_coverage: str | None = None,
         accelerator: str | None = None,
         platform: str | None = None,
         backend: str | None = None,
@@ -1296,6 +1329,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
                 "cohort": cohort,
                 "complete": complete,
                 "min_coverage": min_coverage,
+                "min_benchmark_coverage": min_benchmark_coverage,
                 "accelerator": accelerator,
                 "platform": platform,
                 "backend": backend,

@@ -20,6 +20,7 @@ pub mod interceptors;
 pub mod introspection;
 pub mod legacy_path;
 pub mod log_service;
+pub mod relay_status;
 pub mod spa;
 pub mod stats_service;
 pub mod telemetry;

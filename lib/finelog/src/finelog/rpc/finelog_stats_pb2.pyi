@@ -587,3 +587,75 @@ class AbortTableMigrationResponse(_message.Message):
     catalog_generation: int
     active_table_spec_version: int
     def __init__(self, catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ...) -> None: ...
+
+class ReportRelayNamespaceStatus(_message.Message):
+    __slots__ = ("namespace", "visible_high_water", "published_high_water", "settled_cursor")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    VISIBLE_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHED_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    SETTLED_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int
+    def __init__(self, namespace: _Optional[str] = ..., visible_high_water: _Optional[int] = ..., published_high_water: _Optional[int] = ..., settled_cursor: _Optional[int] = ...) -> None: ...
+
+class ReportRelayStatusRequest(_message.Message):
+    __slots__ = ("boot_id", "report_sequence", "target", "namespaces")
+    BOOT_ID_FIELD_NUMBER: _ClassVar[int]
+    REPORT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
+    boot_id: str
+    report_sequence: int
+    target: str
+    namespaces: _containers.RepeatedCompositeFieldContainer[ReportRelayNamespaceStatus]
+    def __init__(self, boot_id: _Optional[str] = ..., report_sequence: _Optional[int] = ..., target: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[ReportRelayNamespaceStatus, _Mapping]]] = ...) -> None: ...
+
+class ReportRelayStatusResponse(_message.Message):
+    __slots__ = ("received_at_ms",)
+    RECEIVED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    received_at_ms: int
+    def __init__(self, received_at_ms: _Optional[int] = ...) -> None: ...
+
+class RelayNamespaceStatus(_message.Message):
+    __slots__ = ("namespace", "visible_high_water", "published_high_water", "settled_cursor", "publication_progress_at_ms", "cursor_progress_at_ms")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    VISIBLE_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHED_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    SETTLED_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    PUBLICATION_PROGRESS_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_PROGRESS_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int
+    publication_progress_at_ms: int
+    cursor_progress_at_ms: int
+    def __init__(self, namespace: _Optional[str] = ..., visible_high_water: _Optional[int] = ..., published_high_water: _Optional[int] = ..., settled_cursor: _Optional[int] = ..., publication_progress_at_ms: _Optional[int] = ..., cursor_progress_at_ms: _Optional[int] = ...) -> None: ...
+
+class RelaySenderStatus(_message.Message):
+    __slots__ = ("cluster", "boot_id", "report_sequence", "target", "received_at_ms", "namespaces")
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
+    BOOT_ID_FIELD_NUMBER: _ClassVar[int]
+    REPORT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    RECEIVED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
+    cluster: str
+    boot_id: str
+    report_sequence: int
+    target: str
+    received_at_ms: int
+    namespaces: _containers.RepeatedCompositeFieldContainer[RelayNamespaceStatus]
+    def __init__(self, cluster: _Optional[str] = ..., boot_id: _Optional[str] = ..., report_sequence: _Optional[int] = ..., target: _Optional[str] = ..., received_at_ms: _Optional[int] = ..., namespaces: _Optional[_Iterable[_Union[RelayNamespaceStatus, _Mapping]]] = ...) -> None: ...
+
+class ListRelayStatusRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ListRelayStatusResponse(_message.Message):
+    __slots__ = ("senders",)
+    SENDERS_FIELD_NUMBER: _ClassVar[int]
+    senders: _containers.RepeatedCompositeFieldContainer[RelaySenderStatus]
+    def __init__(self, senders: _Optional[_Iterable[_Union[RelaySenderStatus, _Mapping]]] = ...) -> None: ...

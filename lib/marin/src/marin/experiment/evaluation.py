@@ -17,9 +17,9 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy.result import (
-    EvalchemyResult,
     EvalReport,
     EvalResult,
+    FineStoreEvalchemyResult,
     ReportEntry,
     compile_eval_report,
 )
@@ -127,6 +127,7 @@ class EvalGroup:
         default_factory=lambda: AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
     )
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     discover_latest_checkpoint: bool = True
 
 
@@ -139,9 +140,10 @@ def evaluate_evalchemy(
     accelerator: AcceleratorChoice,
     *,
     tokenizer: str | None = None,
+    tokenizer_revision: str | None = None,
     discover_latest_checkpoint: bool = True,
     version: str | None = None,
-) -> ArtifactStep[EvalchemyResult]:
+) -> ArtifactStep[FineStoreEvalchemyResult]:
     """Build one typed Evalchemy result artifact."""
     deps = (model,)
     name = f"evaluation/evalchemy/{model_name}/{config.name}"
@@ -155,6 +157,7 @@ def evaluate_evalchemy(
                 name=model_name,
                 location=model_path,
                 tokenizer=tokenizer,
+                tokenizer_revision=tokenizer_revision,
                 resource_hint=resource_hint,
                 serve=serve,
             ),
@@ -166,7 +169,7 @@ def evaluate_evalchemy(
     return ArtifactStep(
         name=name,
         version=resolve_version(name, version),
-        artifact_type=EvalchemyResult,
+        artifact_type=FineStoreEvalchemyResult,
         run=remote(
             run_served_evalchemy,
             resources=_orchestrator_resources(accelerator),
@@ -191,6 +194,7 @@ def eval_step(
         resource_hint=group.resource_hint,
         accelerator=group.accelerator,
         tokenizer=group.tokenizer,
+        tokenizer_revision=group.tokenizer_revision,
         discover_latest_checkpoint=group.discover_latest_checkpoint,
         version=version,
     )

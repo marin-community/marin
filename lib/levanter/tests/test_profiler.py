@@ -10,7 +10,14 @@ import levanter.callbacks as callbacks_module
 from levanter.callbacks import LambdaCallback
 from levanter.callbacks import profile_ctx
 from levanter.callbacks import profiler as profiler_module
-from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig, profile
+from levanter.callbacks.profiler import (
+    ProfileOptionsConfig,
+    ProfilerConfig,
+    XlaDumpUploadConfig,
+    XprofUploadConfig,
+    profile,
+    upload_xla_dumps,
+)
 
 
 def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
@@ -110,6 +117,45 @@ def test_upload_destination_uses_xprof_ttl_path(monkeypatch):
 
     assert XprofUploadConfig().destination_for_run("run-123") == "gs://marin-us-east5/tmp/ttl=30d/xprof/run-123"
     assert calls == [(30, "xprof/run-123")]
+
+
+def test_xla_dump_uploads_at_start_and_after_hooks(monkeypatch, tmp_path):
+    uploads = []
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_dump_to={tmp_path / 'dumps'}")
+    monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 2)
+    monkeypatch.setattr(profiler_module, "marin_temp_bucket", lambda _ttl_days, prefix: f"file://{tmp_path}/{prefix}")
+    monkeypatch.setattr(profiler_module, "upload_xla_dumps", lambda *args: uploads.append(args))
+
+    callback = XlaDumpUploadConfig(enabled=True).build("run-123")
+
+    assert callback is not None
+    callback(SimpleNamespace())
+    assert [upload[1] for upload in uploads] == [
+        f"file://{tmp_path}/xla-dumps/run-123/process-2",
+        f"file://{tmp_path}/xla-dumps/run-123/process-2",
+    ]
+
+
+def test_upload_xla_dumps_copies_initial_and_changed_files(tmp_path):
+    dump_path = tmp_path / "dumps"
+    dump_path.mkdir()
+    old_file = dump_path / "old.txt"
+    old_file.write_text("old")
+    current_file = dump_path / "nested" / "current.txt"
+    current_file.parent.mkdir()
+    current_file.write_text("current")
+
+    upload_root = tmp_path / "uploaded"
+    (upload_root / "nested").mkdir(parents=True)
+    upload_uri = str(upload_root)
+    uploaded_files = {}
+    upload_xla_dumps(dump_path, upload_uri, uploaded_files)
+    (tmp_path / "uploaded" / "old.txt").unlink()
+    current_file.write_text("updated-content")
+    upload_xla_dumps(dump_path, upload_uri, uploaded_files)
+
+    assert (upload_root / "nested" / "current.txt").read_text() == "updated-content"
+    assert not (upload_root / "old.txt").exists()
 
 
 def test_profiler_upload_can_be_disabled(monkeypatch, tmp_path):

@@ -24,6 +24,7 @@ dependencies = [
     "xxhash>=3.4",
     "polars>=1.41.0",
     "psutil>=7.2.2",
+    "starlette>=0.50.0",
 ]
 
 [dependency-groups]

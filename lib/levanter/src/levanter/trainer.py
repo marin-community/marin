@@ -10,7 +10,7 @@ import sys
 import typing
 import warnings
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from typing import (
     Any,
@@ -62,10 +62,16 @@ from levanter.callbacks import (
     StepInfo,
     progress_event_scope,
 )
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.checkpoint import (
+    Checkpointer,
+    CheckpointerConfig,
+    CheckpointRetention,
+    is_checkpoint_path,
+    load_checkpoint_or_initialize,
+)
 from levanter.config import JsonAtom
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
@@ -297,6 +303,7 @@ class Trainer:
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
+        self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -358,12 +365,14 @@ class Trainer:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
+        if self._xla_dump_upload is not None:
+            self._xla_dump_upload(info)
 
-    def request_checkpoint(self) -> None:
-        """Request a checkpoint after the current step, subject to the save policy."""
+    def request_checkpoint(self, retention: CheckpointRetention) -> None:
+        """Request a checkpoint after the current step with the given retention."""
         if self._checkpointer is None:
             raise RuntimeError("Checkpointing is not configured")
-        self._checkpointer.request_checkpoint()
+        self._checkpointer.request_checkpoint(retention)
 
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
@@ -612,7 +621,6 @@ class Trainer:
                 "No training steps were executed. The dataset may be empty or there are no steps left to run."
             )
 
-        # force hooks to run at the end
         self.run_hooks(info, force=True)
 
         return info
@@ -658,6 +666,8 @@ class Trainer:
                 ),
                 every=1,
             )
+
+        self._xla_dump_upload = self.config.xla_dump_upload.build(self.run_id)
 
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
@@ -779,7 +789,8 @@ class Trainer:
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
         # loss_fn always returns (loss, metrics), so has_aux=True
-        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        # Only batch inputs should be split; raw model dimensions can match the batch size.
+        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
 
         mbs = self.config.microbatch_size
         if mbs is not None:
@@ -792,7 +803,7 @@ class Trainer:
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
-            (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
+            (loss, metrics), grads = grad_fn(*batch, **batch_kwargs)
 
         return loss, grads, metrics
 
@@ -862,6 +873,7 @@ class TrainerConfig:
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
+    xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
     """Optional deadlines for training-step and whole-process progress events."""
 

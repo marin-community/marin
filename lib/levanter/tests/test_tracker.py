@@ -17,7 +17,13 @@ import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
 from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
 from levanter.tracker.tracker import NoopConfig
-from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
+from levanter.tracker.wandb import (
+    MAX_WANDB_ARTIFACT_BYTES,
+    WandbConfig,
+    WandbTracker,
+    _truncate_wandb_artifact_name,
+    truncate_wandb_run_name,
+)
 
 
 def test_tracker_plugin_stuff_works():
@@ -99,7 +105,7 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
     assert not caught
 
 
-def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
+def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
 
     class FakeRun:
@@ -112,14 +118,79 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     run = FakeRun()
     tracker = WandbTracker(run)
 
-    tracker.log_artifact("/tmp/some/deep/path/profile", type="jax_profile")
-    assert run.logged == [("/tmp/some/deep/path/profile", "profile", "jax_profile")]
+    artifact_path = tmp_path / "profile"
+    artifact_path.touch()
+    tracker.log_artifact(artifact_path, type="jax_profile")
+    assert run.logged == [(artifact_path, "profile", "jax_profile")]
 
     long_name = "run-" + "x" * 200
     truncated = _truncate_wandb_artifact_name(long_name)
     assert truncated is not None
     assert len(truncated) <= 128
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
+
+
+def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
+    class FakeRun:
+        def log_artifact(self, *args, **kwargs):
+            raise AssertionError("oversized artifacts must not reach W&B")
+
+    artifact_path = tmp_path / "oversized.bin"
+    artifact_path.touch()
+    with artifact_path.open("r+b") as artifact_file:
+        artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+
+    with pytest.raises(ValueError, match="20,000,000-byte limit"):
+        WandbTracker(FakeRun()).log_artifact(artifact_path)
+
+
+def test_wandb_config_skips_oversized_automatic_source_capture(tmp_path):
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    large_file = source_path / "oversized.bin"
+    large_file.touch()
+    with large_file.open("r+b") as artifact_file:
+        artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+
+    assert WandbConfig(save_code=str(source_path))._git_settings() == {}
+
+
+def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):
+    initialized = {}
+
+    class FakeRun:
+        step = 0
+
+    def fake_init(**kwargs):
+        initialized.update(kwargs)
+        return FakeRun()
+
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_count", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.wandb, "init", fake_init)
+
+    WandbConfig(
+        id="hero-ragged-a2a-ep-step54k",
+        fork_from="hero-12d8b6f0-dee637?_step=54000",
+        save_code=False,
+        background=False,
+    ).init(None)
+
+    assert initialized["id"] == "hero-ragged-a2a-ep-step54k"
+    assert initialized["fork_from"] == "hero-12d8b6f0-dee637?_step=54000"
+    assert "resume" not in initialized
+
+
+@pytest.mark.parametrize(
+    ("fork_from", "child_run_id"),
+    [
+        ("hero-12d8b6f0-dee637", "hero-ragged-a2a-ep-step54k"),
+        ("hero-12d8b6f0-dee637?_step=54000", "hero-12d8b6f0-dee637"),
+    ],
+)
+def test_wandb_config_rejects_invalid_fork_lineage(fork_from, child_run_id):
+    with pytest.raises(ValueError):
+        WandbConfig(id=child_run_id, fork_from=fork_from).init(None)
 
 
 def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):

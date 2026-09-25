@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import threading
 
 import pytest
 
@@ -71,6 +72,27 @@ def test_stop_event(max_capacity):
     with pytest.raises(StopIteration):
         next(iter1)
         next(iter1)
+
+
+def test_stop_does_not_hang_when_producer_raises_into_full_queue():
+    queue_filled = threading.Event()
+    release_error = threading.Event()
+
+    def producer():
+        yield 1
+        # resumed only after 1 is enqueued, so the capacity-1 queue is now full
+        queue_filled.set()
+        release_error.wait()
+        raise ValueError("producer failed after stop")
+
+    iterator = iter(BackgroundIterable(producer, max_capacity=1))
+    assert queue_filled.wait(timeout=10)
+    iterator.stop(wait=False)
+    release_error.set()
+
+    assert iterator.thread is not None
+    iterator.thread.join(timeout=10)
+    assert not iterator.thread.is_alive()
 
 
 @pytest.mark.asyncio
