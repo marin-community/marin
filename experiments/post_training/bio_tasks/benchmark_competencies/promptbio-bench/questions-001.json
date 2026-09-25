@@ -1590,14 +1590,11 @@
       "source_group": "",
       "workflow": "Fold RNA sequences and export structures and minimum free energies",
       "skills": [
-        "sequence-query",
         "rna-structure",
-        "image-analysis"
+        "visualization"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "bioimaging"
+        "rna-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1622,9 +1619,14 @@
           "id": "promptbio-design-rna-folding-uncertainty"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source question and input/output contract; rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "question-output",
+        "note": "Predict RNA secondary structures and render SVG diagrams. FASTA loading is incidental; producing diagrams is visualization rather than image analysis."
+      }
     },
     {
       "task_id": "a-3-12",
@@ -2102,11 +2104,9 @@
       "workflow": "Fit constrained two-peak ChIP segmentations and visualize them",
       "skills": [
         "chromatin",
-        "image-analysis",
         "visualization"
       ],
       "applications": [
-        "genome-variation",
         "epigenomics"
       ],
       "context_tags": [],
@@ -2133,9 +2133,14 @@
           "id": "promptbio-design-chip-segmentation"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source question and input/output contract; rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "question-output",
+        "note": "Segment ChIP-seq signals and plot the fitted peak model. Genomic signal segmentation is not image segmentation."
+      }
     },
     {
       "task_id": "a-4-9",
@@ -2350,8 +2355,7 @@
         "visualization"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell",
@@ -3453,8 +3457,7 @@
       "applications": [
         "genome-sequence",
         "proteomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -3500,8 +3503,7 @@
       "applications": [
         "genome-sequence",
         "proteomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -3641,8 +3643,7 @@
         "database-query"
       ],
       "applications": [
-        "metabolomics",
-        "biological-knowledge"
+        "metabolomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4482,8 +4483,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",

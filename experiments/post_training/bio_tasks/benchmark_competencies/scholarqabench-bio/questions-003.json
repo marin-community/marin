@@ -1815,8 +1815,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "From a frozen regulatory label collection and a declared anti-angiogenic mechanism list, enumerate approved oncology drugs and their labeled indications. Return product IDs, mechanism membership, indication text and evidence locations.",

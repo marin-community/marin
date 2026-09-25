@@ -2247,8 +2247,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "From a frozen regulatory product-label collection, enumerate approved intranasal drug products and their active ingredients, approval status and route. Return product IDs and the source fields supporting each inclusion.",

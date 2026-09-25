@@ -11,12 +11,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -43,9 +41,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:547",
@@ -58,11 +61,10 @@
       "source_group": "",
       "workflow": "restriction digest",
       "skills": [
-        "chromatin"
+        "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -90,9 +92,14 @@
           "id": "portfolio-biomni-eval1-restriction-digest"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:571",
@@ -105,11 +112,10 @@
       "source_group": "",
       "workflow": "restriction digest",
       "skills": [
-        "chromatin"
+        "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -137,9 +143,14 @@
           "id": "portfolio-biomni-eval1-restriction-digest"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:213",
@@ -182,9 +193,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:359",
@@ -197,12 +213,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -229,9 +243,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:171",
@@ -274,9 +293,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:98",
@@ -289,12 +313,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -321,9 +343,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:292",
@@ -366,9 +393,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:215",
@@ -381,12 +413,10 @@
       "source_group": "",
       "workflow": "gibson primer compatibility",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -413,9 +443,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:61",
@@ -428,12 +463,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -460,9 +493,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:406",
@@ -475,12 +513,10 @@
       "source_group": "",
       "workflow": "restriction cloning compatibility",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -507,9 +543,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:47",
@@ -522,12 +563,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -554,9 +593,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:32",
@@ -569,12 +613,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -601,9 +643,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:417",
@@ -646,9 +693,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:267",
@@ -691,9 +743,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:327",
@@ -706,12 +763,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -738,9 +793,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:200",
@@ -783,9 +843,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:134",
@@ -802,8 +867,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence"
+        "rna-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -819,7 +883,7 @@
         "A deterministic feature-only question remains component coverage. Full endpoint equivalence stays unresolved if a scientifically defensible prediction-and-measurement contract cannot be established."
       ],
       "scope_changes": [
-        "All four source endpoints remain limited by sequence-only efficiency claims. The proposed connected observed-data workflow is an adaptation, not automatic full equivalence. Ribo-seq source selection, exact estimand, possible model leakage, assay validation and <=30-minute runtime are unresolved."
+        "A sequence-context score is not measured translation efficiency. Before authoring, establish a validated reference tying the requested comparison to translation efficiency; otherwise set the question aside."
       ],
       "authoring_requirements": [
         "Preserve actual native input formats and coordinate conventions.",
@@ -831,9 +895,14 @@
           "id": "portfolio-biomni-eval1-translation-context"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:27",
@@ -846,12 +915,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -878,9 +945,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:524",
@@ -893,11 +965,10 @@
       "source_group": "",
       "workflow": "restriction digest",
       "skills": [
-        "chromatin"
+        "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -925,9 +996,14 @@
           "id": "portfolio-biomni-eval1-restriction-digest"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:505",
@@ -943,8 +1019,7 @@
         "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -971,9 +1046,14 @@
           "id": "portfolio-biomni-eval1-sequence-gc"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:230",
@@ -1016,9 +1096,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:489",
@@ -1061,9 +1146,14 @@
           "id": "portfolio-biomni-eval1-sequence-gc"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:260",
@@ -1106,9 +1196,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:378",
@@ -1121,12 +1216,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1153,9 +1246,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:288",
@@ -1198,9 +1296,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:418",
@@ -1213,12 +1316,10 @@
       "source_group": "",
       "workflow": "restriction cloning compatibility",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1245,9 +1346,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:391",
@@ -1260,12 +1366,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1292,9 +1396,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:498",
@@ -1310,8 +1419,7 @@
         "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1338,9 +1446,14 @@
           "id": "portfolio-biomni-eval1-sequence-gc"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:138",
@@ -1357,8 +1470,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence"
+        "rna-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1374,7 +1486,7 @@
         "A deterministic feature-only question remains component coverage. Full endpoint equivalence stays unresolved if a scientifically defensible prediction-and-measurement contract cannot be established."
       ],
       "scope_changes": [
-        "All four source endpoints remain limited by sequence-only efficiency claims. The proposed connected observed-data workflow is an adaptation, not automatic full equivalence. Ribo-seq source selection, exact estimand, possible model leakage, assay validation and <=30-minute runtime are unresolved."
+        "A sequence-context score is not measured translation efficiency. Before authoring, establish a validated reference tying the requested comparison to translation efficiency; otherwise set the question aside."
       ],
       "authoring_requirements": [
         "Preserve actual native input formats and coordinate conventions.",
@@ -1386,9 +1498,14 @@
           "id": "portfolio-biomni-eval1-translation-context"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:62",
@@ -1401,12 +1518,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1433,9 +1548,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:471",
@@ -1448,12 +1568,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1480,9 +1598,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:128",
@@ -1499,8 +1622,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence"
+        "rna-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1516,7 +1638,7 @@
         "A deterministic feature-only question remains component coverage. Full endpoint equivalence stays unresolved if a scientifically defensible prediction-and-measurement contract cannot be established."
       ],
       "scope_changes": [
-        "All four source endpoints remain limited by sequence-only efficiency claims. The proposed connected observed-data workflow is an adaptation, not automatic full equivalence. Ribo-seq source selection, exact estimand, possible model leakage, assay validation and <=30-minute runtime are unresolved."
+        "A sequence-context score is not measured translation efficiency. Before authoring, establish a validated reference tying the requested comparison to translation efficiency; otherwise set the question aside."
       ],
       "authoring_requirements": [
         "Preserve actual native input formats and coordinate conventions.",
@@ -1528,9 +1650,14 @@
           "id": "portfolio-biomni-eval1-translation-context"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:583",
@@ -1543,11 +1670,10 @@
       "source_group": "",
       "workflow": "restriction digest",
       "skills": [
-        "chromatin"
+        "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1575,9 +1701,14 @@
           "id": "portfolio-biomni-eval1-restriction-digest"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:520",
@@ -1590,11 +1721,10 @@
       "source_group": "",
       "workflow": "restriction digest",
       "skills": [
-        "chromatin"
+        "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1622,9 +1752,14 @@
           "id": "portfolio-biomni-eval1-restriction-digest"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:64",
@@ -1637,12 +1772,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1669,9 +1802,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:14",
@@ -1684,12 +1822,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1716,9 +1852,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:156",
@@ -1735,8 +1876,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence"
+        "rna-biology"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1752,7 +1892,7 @@
         "A deterministic feature-only question remains component coverage. Full endpoint equivalence stays unresolved if a scientifically defensible prediction-and-measurement contract cannot be established."
       ],
       "scope_changes": [
-        "All four source endpoints remain limited by sequence-only efficiency claims. The proposed connected observed-data workflow is an adaptation, not automatic full equivalence. Ribo-seq source selection, exact estimand, possible model leakage, assay validation and <=30-minute runtime are unresolved."
+        "A sequence-context score is not measured translation efficiency. Before authoring, establish a validated reference tying the requested comparison to translation efficiency; otherwise set the question aside."
       ],
       "authoring_requirements": [
         "Preserve actual native input formats and coordinate conventions.",
@@ -1764,9 +1904,14 @@
           "id": "portfolio-biomni-eval1-translation-context"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:40",
@@ -1779,12 +1924,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1811,9 +1954,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:492",
@@ -1856,9 +2004,14 @@
           "id": "portfolio-biomni-eval1-sequence-gc"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:379",
@@ -1871,12 +2024,10 @@
       "source_group": "",
       "workflow": "amplicon reconstruction",
       "skills": [
-        "chromatin",
         "sequence-design"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -1903,9 +2054,14 @@
           "id": "portfolio-biomni-eval1-amplicon-reconstruction"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:187",
@@ -1948,9 +2104,14 @@
           "id": "portfolio-biomni-eval1-restriction-cloning-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:216",
@@ -1993,9 +2154,14 @@
           "id": "portfolio-biomni-eval1-gibson-primer-compatibility"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "lab_bench_seqqa:52",
@@ -2008,12 +2174,10 @@
       "source_group": "",
       "workflow": "orf analysis",
       "skills": [
-        "sequence-query",
-        "chromatin"
+        "sequence-query"
       ],
       "applications": [
-        "genome-sequence",
-        "epigenomics"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -2040,9 +2204,14 @@
           "id": "portfolio-biomni-eval1-orf-analysis"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
+      }
     },
     {
       "task_id": "patient_gene_detection:212",

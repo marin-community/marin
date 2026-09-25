@@ -1,21 +1,27 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "purpose": "Find missing scientific capabilities and design realistic, executable Harbor workflows. Skills and biological applications are independent facets; they are not a hierarchy or a Cartesian task-generation grid.",
   "skills": [
     {
       "id": "normalization",
       "name": "Normalization",
-      "outcome": "Adjust measurement scale or composition using a declared normalization procedure."
+      "outcome": "Adjust measurement scale or composition using a declared normalization procedure.",
+      "include": "Rescale counts, library sizes or measurement distributions as a required operation.",
+      "exclude": "Reading normalized inputs; logarithms alone; normalization internal to a method without a separate required result."
     },
     {
       "id": "transformation",
       "name": "Data transformation",
-      "outcome": "Apply a defined mathematical transformation while preserving identities, missingness and units."
+      "outcome": "Apply a defined mathematical transformation while preserving identities, missingness and units.",
+      "include": "Apply an explicitly requested mathematical change of variables.",
+      "exclude": "Already transformed inputs; generic format conversion; incidental transformations internal to another skill."
     },
     {
       "id": "dimension-reduction",
       "name": "Dimensionality reduction",
-      "outcome": "Construct a reduced representation and check its fit, variance or neighborhood properties."
+      "outcome": "Construct a reduced representation and check its fit, variance or neighborhood properties.",
+      "include": "Compute or assess a low-dimensional representation or its variance.",
+      "exclude": "Using a supplied embedding; merely drawing coordinates; interpreting a plot without computing an embedding."
     },
     {
       "id": "feature-selection",
@@ -25,27 +31,37 @@
     {
       "id": "association",
       "name": "Association analysis",
-      "outcome": "Estimate or test an association on correctly matched observations with the stated unit of replication."
+      "outcome": "Estimate or test an association on correctly matched observations with the stated unit of replication.",
+      "include": "Estimate dependence or test an association between matched variables.",
+      "exclude": "A benchmark grader using correlation; retrieving an association record; claiming causation."
     },
     {
       "id": "regression",
       "name": "Regression modeling",
-      "outcome": "Fit a specified response model and report parameters, uncertainty or fit diagnostics."
+      "outcome": "Fit a specified response model and report parameters, uncertainty or fit diagnostics.",
+      "include": "Estimate response-model parameters, uncertainty, contrasts or fit diagnostics.",
+      "exclude": "Prediction-only submissions; regression used internally for differential expression without a separate model-analysis endpoint."
     },
     {
       "id": "group-comparison",
       "name": "Group comparison",
-      "outcome": "Estimate or test a group contrast with explicit sampling, pairing and effect direction."
+      "outcome": "Estimate or test a group contrast with explicit sampling, pairing and effect direction.",
+      "include": "Compare groups with an explicit contrast, unit of replication and test or effect estimate.",
+      "exclude": "Every specialized differential expression or abundance task; a supplied group contrast."
     },
     {
       "id": "multiple-testing",
       "name": "Multiple-testing correction",
-      "outcome": "Correct a declared family of hypothesis tests and retain its tested population."
+      "outcome": "Correct a declared family of hypothesis tests and retain its tested population.",
+      "include": "Choose, apply or audit a multiple-testing procedure as an explicit analysis requirement.",
+      "exclude": "Counting an already thresholded gene list; an internal default adjustment with no independent requirement."
     },
     {
       "id": "differential-expression",
       "name": "Differential expression analysis",
-      "outcome": "Estimate expression contrasts under an explicit design, measurement model and gene-selection rule."
+      "outcome": "Estimate expression contrasts under an explicit design, measurement model and gene-selection rule.",
+      "include": "Compute or audit gene/transcript expression contrasts and their significance or effect selection.",
+      "exclude": "Predicting supplied differential-expression values in unseen perturbations; looking up a published DEG list."
     },
     {
       "id": "enrichment",
@@ -65,17 +81,23 @@
     {
       "id": "classification",
       "name": "Predictive classification",
-      "outcome": "Predict labels or probabilities for withheld observations with a prespecified metric."
+      "outcome": "Predict labels or probabilities for withheld observations with a prespecified metric.",
+      "include": "Produce discrete labels or class probabilities for new observations.",
+      "exclude": "Selecting a multiple-choice answer; retrieving known labels; specialized cell annotation without a separate generic classification task."
     },
     {
       "id": "prediction",
       "name": "Predictive regression",
-      "outcome": "Predict continuous outcomes for withheld observations and evaluate all required predictions."
+      "outcome": "Predict continuous outcomes for withheld observations under the required split and leakage policy.",
+      "include": "Predict continuous scalar or vector measurements for unseen observations under an explicit split policy.",
+      "exclude": "Fitting coefficients for inference; generating molecular geometry; spatial pattern scoring without a supervised prediction requirement."
     },
     {
       "id": "model-evaluation",
       "name": "Model evaluation",
-      "outcome": "Evaluate complete predictions with a fixed metric and biological grouping or split policy."
+      "outcome": "Evaluate complete predictions with a fixed metric and biological grouping or split policy.",
+      "include": "The solver computes or compares predictive performance, calibration or generalization results.",
+      "exclude": "The benchmark grader computes a score on submitted predictions; merely supplying test predictions or out-of-fold predictions."
     },
     {
       "id": "survival",
@@ -95,12 +117,16 @@
     {
       "id": "sequence-query",
       "name": "Sequence and annotation analysis",
-      "outcome": "Extract or reconcile sequences with strand, coordinate, translation and annotation rules."
+      "outcome": "Extract or reconcile sequences with strand, coordinate, translation and annotation rules.",
+      "include": "Compute sequence properties or derive sequence, translation or annotation results under explicit reference conventions.",
+      "exclude": "A sequence is merely an input to an unrelated operation; parsing a FASTA as an incidental step."
     },
     {
       "id": "intervals",
       "name": "Genomic interval analysis",
-      "outcome": "Compute coordinate-aware overlap, distance, coverage or interval transformations."
+      "outcome": "Compute coordinate-aware overlap, distance, coverage or interval transformations.",
+      "include": "Compute genomic overlaps, distances, windows or interval mappings.",
+      "exclude": "A database lookup whose query mentions a promoter; intervals already resolved in the input."
     },
     {
       "id": "read-qc",
@@ -120,7 +146,9 @@
     {
       "id": "variant-consequence",
       "name": "Variant consequence annotation",
-      "outcome": "Connect alleles to transcript, protein or regulatory consequences under pinned references."
+      "outcome": "Connect alleles to transcript, protein or regulatory consequences under pinned references.",
+      "include": "Derive transcript, protein or regulatory consequences of alleles against reference annotations.",
+      "exclude": "Retrieving an existing ClinVar assertion; predicting protein assay fitness; generic mention of pathogenicity."
     },
     {
       "id": "population-genetics",
@@ -135,7 +163,9 @@
     {
       "id": "phylogeny",
       "name": "Phylogenetic inference and tree analysis",
-      "outcome": "Infer or measure trees with explicit topology, branch-length, rooting and taxon conventions."
+      "outcome": "Infer or measure trees with explicit topology, branch-length, rooting and taxon conventions.",
+      "include": "Infer a phylogeny or calculate an explicitly requested tree property.",
+      "exclude": "Lineage mentioned as biological context; a clustering dendrogram with no evolutionary interpretation."
     },
     {
       "id": "alignment-signal",
@@ -145,7 +175,9 @@
     {
       "id": "cell-annotation",
       "name": "Cell identity annotation",
-      "outcome": "Assign or compare cell identities against declared reference evidence and an abstention policy."
+      "outcome": "Assign or compare cell identities against declared reference evidence and an abstention policy.",
+      "include": "Assign or audit cell identity from expression, markers or labeled reference cells.",
+      "exclude": "Receiving cell types as metadata; interpreting changes within already annotated cell types."
     },
     {
       "id": "composition",
@@ -155,7 +187,9 @@
     {
       "id": "integration",
       "name": "Data integration",
-      "outcome": "Reconcile batches, studies or modalities and evaluate alignment without erasing the target variation."
+      "outcome": "Reconcile batches, studies or modalities and evaluate alignment without erasing the target variation.",
+      "include": "Align or reconcile batches/modalities and assess their correspondence.",
+      "exclude": "Predicting one modality from another; using pre-aligned tables or supplied integrated embeddings."
     },
     {
       "id": "deconvolution",
@@ -180,7 +214,9 @@
     {
       "id": "chromatin",
       "name": "Chromatin accessibility and binding analysis",
-      "outcome": "Analyze accessibility or binding signals using controls, replicates and reference-aware regions."
+      "outcome": "Analyze accessibility or binding signals using controls, replicates and reference-aware regions.",
+      "include": "Compute or interpret accessibility, chromatin occupancy or contact signals.",
+      "exclude": "DNA substrings spelling ATAC; general gene regulation; retrieving a stored binding-site assertion."
     },
     {
       "id": "motifs",
@@ -195,12 +231,16 @@
     {
       "id": "network",
       "name": "Network analysis",
-      "outcome": "Construct or evaluate typed networks, modules, paths or connectivity with traceable edges."
+      "outcome": "Construct or evaluate typed networks, modules, paths or connectivity with traceable edges.",
+      "include": "Infer edges or compute modules, paths, centrality or other relational structure.",
+      "exclude": "Looking up one stored edge; independent pair classification with supplied features and no graph operation."
     },
     {
       "id": "protein-structure",
       "name": "Molecular structure analysis",
-      "outcome": "Measure structural geometry, residue/atom identity, contacts or structural agreement."
+      "outcome": "Measure structural geometry, residue/atom identity, contacts or structural agreement.",
+      "include": "Measure or compare existing three-dimensional structures, contacts or geometry.",
+      "exclude": "A genomic binding site; sequence-only protein work; producing new poses, which is structure prediction."
     },
     {
       "id": "molecular-descriptors",
@@ -214,8 +254,10 @@
     },
     {
       "id": "image-analysis",
-      "name": "Image analysis",
-      "outcome": "Segment, quantify, reconstruct or classify images with calibrated spatial and sample identities."
+      "name": "Image measurement and reconstruction",
+      "outcome": "Measure or reconstruct image content with explicit calibration, pixel geometry and sample identity.",
+      "include": "Measure, reconstruct or process actual image pixels and geometry.",
+      "exclude": "Supplied image-derived tables; scientific plots; genomic segmentation; classification with no separate image-processing output."
     },
     {
       "id": "signal-analysis",
@@ -240,17 +282,23 @@
     {
       "id": "database-query",
       "name": "Biological database querying",
-      "outcome": "Resolve identifiers and retrieve versioned records under explicit query and evidence rules."
+      "outcome": "Resolve identifiers and retrieve versioned records under explicit query and evidence rules.",
+      "include": "Resolve identities and retrieve or reconcile records from a database snapshot.",
+      "exclude": "A database is merely the origin of already supplied data; biological inference performed by a predictive model."
     },
     {
       "id": "evidence-extraction",
       "name": "Structured evidence extraction",
-      "outcome": "Extract specified facts or measurements with source locations, units and a finite evidence scope."
+      "outcome": "Extract specified facts or measurements with source locations, units and a finite evidence scope.",
+      "include": "Extract an explicit fact or measurement with a supporting source location.",
+      "exclude": "A citation in background; unconstrained literature synthesis; simple structured database retrieval already covered by database querying."
     },
     {
       "id": "evidence-ranking",
       "name": "Evidence-based prioritization",
-      "outcome": "Rank candidates under declared evidence, eligibility and tie rules without asserting unmeasured causality."
+      "outcome": "Rank candidates under declared evidence, eligibility and tie rules without asserting unmeasured causality.",
+      "include": "Prioritize candidates by an explicit, scientifically justified evidence rule.",
+      "exclude": "The phrase most likely in an exact database query; a surrogate rule presented as proof of causality."
     },
     {
       "id": "simulation",
@@ -265,17 +313,23 @@
     {
       "id": "statistics",
       "name": "Statistical estimation",
-      "outcome": "Calculate an endpoint with correct observation units, aggregation, uncertainty and denominators."
+      "outcome": "Calculate an endpoint with correct observation units, aggregation, uncertainty and denominators.",
+      "include": "Estimate a standalone descriptive quantity or its uncertainty with explicit units and denominators.",
+      "exclude": "A mean, count or ratio that is internal to a separately labeled specialized analysis."
     },
     {
       "id": "data-management",
       "name": "Data preparation and reconciliation",
-      "outcome": "Join, filter, reshape or reconcile scientific records while preserving identity and provenance."
+      "outcome": "Join, filter, reshape or reconcile scientific records while preserving identity and provenance.",
+      "include": "Reconcile identities, missingness, schemas or joins as an explicit analytical deliverable.",
+      "exclude": "Routine file loading, incidental filtering, or saving results."
     },
     {
       "id": "visualization",
       "name": "Scientific visualization",
-      "outcome": "Produce a specified scientific view with checkable data, labels, scales and graphical elements."
+      "outcome": "Produce a specified scientific view with checkable data, labels, scales and graphical elements.",
+      "include": "Create a required figure with checkable plotted data, scales and labels.",
+      "exclude": "Input images; a grader inspecting a plot; optional diagnostic figures."
     },
     {
       "id": "taxonomic-profiling",
@@ -296,617 +350,151 @@
       "id": "model-inspection",
       "name": "Model inspection",
       "outcome": "Inspect architecture, parameter identity or uncertainty from an executable model and pinned checkpoint."
+    },
+    {
+      "id": "experimental-design",
+      "name": "Computational experiment design",
+      "outcome": "Select informative perturbations or queries to distinguish models within a fixed experimental budget.",
+      "include": "Choose observations or simulated experiments and submit the resulting design or model.",
+      "exclude": "Wet-lab execution; an unrestricted research plan judged for novelty or quality."
+    },
+    {
+      "id": "image-segmentation",
+      "name": "Image segmentation",
+      "outcome": "Assign pixel or voxel masks to structures under a specified label and geometry convention.",
+      "include": "Produce or audit segmentation masks from images.",
+      "exclude": "A supplied segmentation; genomic segmentation; image-level classification."
+    },
+    {
+      "id": "object-detection",
+      "name": "Image object detection",
+      "outcome": "Localize and label objects using boxes, points or equivalent spatial annotations.",
+      "include": "Produce labeled object locations and confidence scores from images.",
+      "exclude": "Image-level labels only; masks belong to image segmentation."
+    },
+    {
+      "id": "structure-prediction",
+      "name": "Molecular structure prediction",
+      "outcome": "Generate molecular conformations or binding poses with valid atom identity and geometry.",
+      "include": "Predict new three-dimensional coordinates or poses.",
+      "exclude": "Measure supplied structures; scalar affinity prediction; RNA secondary-structure inference already covered by RNA structure analysis."
+    },
+    {
+      "id": "chemical-image-recognition",
+      "name": "Chemical structure recognition",
+      "outcome": "Convert a chemical drawing to a machine-readable molecular structure.",
+      "include": "Recover molecular identity, connectivity and stereochemistry from a drawing.",
+      "exclude": "Calculate descriptors from a supplied SMILES; general image segmentation."
     }
   ],
   "applications": [
     {
       "id": "transcriptomics",
-      "name": "Transcriptomics"
+      "name": "Transcriptomics",
+      "scope": "Gene or transcript expression, abundance and expression-derived cell states. RNA biochemical stability alone is RNA biochemistry."
     },
     {
       "id": "genome-variation",
-      "name": "Genomic variation"
+      "name": "Genomic variation",
+      "scope": "Genetic alleles, genotypes, inheritance, genetic risk and variant evidence."
     },
     {
       "id": "genome-sequence",
-      "name": "Genome and sequence analysis"
+      "name": "Genome and sequence analysis",
+      "scope": "Nucleotide sequence content, annotation, assembly and construct identity."
     },
     {
       "id": "epigenomics",
-      "name": "Epigenomics"
+      "name": "Epigenomics",
+      "scope": "Chromatin accessibility, occupancy, contacts or DNA methylation. Gene regulation also occurs in other applications."
     },
     {
       "id": "proteomics",
-      "name": "Proteomics"
+      "name": "Proteomics",
+      "scope": "Proteome-scale abundance, modification or interaction measurements. A single protein sequence or structure does not establish proteomics."
     },
     {
       "id": "metabolomics",
-      "name": "Metabolomics"
+      "name": "Metabolomics",
+      "scope": "Metabolite identities and abundance measurements across samples."
     },
     {
       "id": "molecular-evolution",
-      "name": "Molecular evolution"
+      "name": "Molecular evolution",
+      "scope": "Evolutionary relationships, molecular conservation and divergence."
     },
     {
       "id": "molecular-structure",
-      "name": "Molecular structure"
+      "name": "Molecular structure",
+      "scope": "Three-dimensional biomolecular geometry, complexes and structural interactions."
     },
     {
       "id": "chemical-biology",
-      "name": "Chemical biology"
+      "name": "Chemical biology",
+      "scope": "Chemical entities, compound activity, affinity and chemical perturbation assays."
     },
     {
       "id": "functional-genomics",
-      "name": "Functional genomics"
+      "name": "Functional genomics",
+      "scope": "Gene function, regulatory relationships, pathways and gene perturbation responses."
     },
     {
       "id": "microbiology",
-      "name": "Microbiology"
+      "name": "Microbiology",
+      "scope": "Microorganisms and microbial communities as the biological objects of analysis."
     },
     {
       "id": "ecology",
-      "name": "Ecology"
+      "name": "Ecology",
+      "scope": "Populations, communities, habitats and environmental relationships."
     },
     {
       "id": "clinical",
-      "name": "Clinical and epidemiological analysis"
+      "name": "Clinical and epidemiological analysis",
+      "scope": "Patient-level outcomes, diagnosis, prognosis and epidemiological measurements. A drug-discovery motivation alone does not qualify."
     },
     {
       "id": "immunology",
-      "name": "Immunology"
+      "name": "Immunology",
+      "scope": "Immune cells, receptors and responses as the target of the scientific question."
     },
     {
       "id": "bioimaging",
-      "name": "Biological imaging"
+      "name": "Biological imaging",
+      "scope": "Biological or medical images and image-derived phenotype measurements. Chemical drawings and plots alone do not qualify."
     },
     {
       "id": "physiology",
-      "name": "Physiology"
+      "name": "Physiology",
+      "scope": "Organism, organ or cell physiological function, including recorded physiological signals."
     },
     {
       "id": "systems-biology",
-      "name": "Systems biology"
+      "name": "Systems biology",
+      "scope": "Mechanistic system behavior, kinetics and interactions modeled at the system level. The word system alone is insufficient."
     },
     {
-      "id": "biological-knowledge",
-      "name": "Biological knowledge resources"
+      "id": "protein-function",
+      "name": "Protein function and biochemistry",
+      "scope": "Protein sequence-to-function relationships and biochemical activities, including mutational scanning assays."
+    },
+    {
+      "id": "rna-biology",
+      "name": "RNA processing and biochemistry",
+      "scope": "RNA sequence-dependent processing, translation, stability and biochemical reactivity."
     }
   ],
-  "annotation_rule_version": "2026-09-25-draft-1",
-  "workflow_skill_rules": {
-    "replicate-aware-single-cell-contrast": [
-      "differential-expression"
-    ],
-    "compartment-expression-contrast": [
-      "differential-expression"
-    ],
-    "cell-type-condition-expression": [
-      "differential-expression"
-    ],
-    "perturbation-domain-expression": [
-      "differential-expression"
-    ],
-    "diet-by-domain-expression": [
-      "differential-expression"
-    ],
-    "cell-type-expression-to-pathways": [
-      "differential-expression",
-      "enrichment"
-    ],
-    "single-cell-contrast-enrichment": [
-      "differential-expression",
-      "enrichment"
-    ],
-    "single-cell-hierarchical-annotation": [
-      "cell-annotation"
-    ],
-    "single-cell-state-characterization": [
-      "cell-annotation"
-    ],
-    "subtype-marker-evidence": [
-      "cell-annotation"
-    ],
-    "cell-type-expression-localization": [
-      "cell-annotation",
-      "statistics"
-    ],
-    "state-characterization-and-composition": [
-      "cell-annotation",
-      "composition"
-    ],
-    "cell-state-characterization": [
-      "cell-annotation"
-    ],
-    "donor-aware-cell-composition": [
-      "composition"
-    ],
-    "sample-aware-cell-composition": [
-      "composition"
-    ],
-    "genotype-treatment-cell-composition": [
-      "composition",
-      "regression"
-    ],
-    "donor-level-clinical-association": [
-      "association"
-    ],
-    "cell-type-feature-coexpression": [
-      "association"
-    ],
-    "cell-type-genetic-risk-association": [
-      "association",
-      "enrichment"
-    ],
-    "cell-state-anatomical-context": [
-      "cell-annotation",
-      "spatial"
-    ],
-    "single-cell-gene-module": [
-      "network"
-    ],
-    "regulatory-module-evidence": [
-      "network"
-    ],
-    "cell-state-regulon-activity": [
-      "network"
-    ],
-    "sample-level-signal-detection": [
-      "statistics"
-    ],
-    "cross-dataset-cell-state-comparison": [
-      "cell-annotation",
-      "integration"
-    ],
-    "single-cell-trajectory-hypotheses": [
-      "trajectory"
-    ],
-    "developmental-cell-state-trajectory": [
-      "trajectory"
-    ],
-    "anatomical-gene-program-trajectories": [
-      "trajectory",
-      "spatial"
-    ],
-    "cell-communication-hypotheses": [
-      "communication"
-    ],
-    "compartment-conditioned-cell-communication": [
-      "communication"
-    ],
-    "lineage-potential-evidence": [
-      "trajectory",
-      "cell-annotation"
-    ],
-    "data-and-literature-evidence-synthesis": [
-      "evidence-extraction"
-    ],
-    "transcriptome-and-functional-assay": [
-      "differential-expression",
-      "dose-response"
-    ],
-    "mirna-target-query": [
-      "database-query"
-    ],
-    "sequence-gc": [
-      "sequence-query"
-    ],
-    "gwas-causal-gene-evidence": [
-      "evidence-ranking",
-      "database-query"
-    ],
-    "gwas-variant-evidence": [
-      "variant-analysis",
-      "database-query"
-    ],
-    "phenotype-gene-prioritization": [
-      "evidence-ranking",
-      "database-query"
-    ],
-    "rare-disease-evidence": [
-      "evidence-ranking",
-      "database-query"
-    ],
-    "clinical-variant-evidence": [
-      "variant-consequence",
-      "database-query"
-    ],
-    "delivery-method-selection": [
-      "evidence-ranking"
-    ],
-    "temporal-introduction-pathways": [
-      "statistics"
-    ],
-    "land-use-introduction-association": [
-      "association"
-    ],
-    "habitat-introduction-comparison": [
-      "group-comparison"
-    ],
-    "residence-time-invasion-model": [
-      "regression"
-    ],
-    "diversity-speciation-association": [
-      "association"
-    ],
-    "research-cohort-sampling": [
-      "statistics",
-      "data-management"
-    ],
-    "epidemiological-model-comparison": [
-      "model-evaluation"
-    ],
-    "perturbation-specific-latent-variation": [
-      "dimension-reduction"
-    ],
-    "sequence-model-uncertainty": [
-      "model-evaluation",
-      "statistics"
-    ],
-    "sequence-model-optimization": [
-      "sequence-design",
-      "model-evaluation"
-    ],
-    "identifier-resolution": [
-      "database-query"
-    ],
-    "alignment-inspection": [
-      "read-qc"
-    ],
-    "cell-composition": [
-      "composition"
-    ],
-    "regulatory-annotation": [
-      "chromatin",
-      "database-query"
-    ],
-    "transcript-structure-discovery": [
-      "sequence-alignment",
-      "sequence-query"
-    ],
-    "study-artifact-discovery": [
-      "evidence-extraction",
-      "data-management"
-    ],
-    "genomic-interval-composition": [
-      "intervals",
-      "sequence-query"
-    ],
-    "data-source-identification": [
-      "database-query",
-      "data-management"
-    ],
-    "resource-provenance-join": [
-      "database-query",
-      "data-management"
-    ],
-    "variant-evidence-integration": [
-      "variant-consequence",
-      "evidence-ranking"
-    ],
-    "biological-label-reconciliation": [
-      "data-management"
-    ],
-    "strand-aware-reference-query": [
-      "sequence-query",
-      "intervals"
-    ],
-    "differential-chromatin-contact": [
-      "chromatin",
-      "group-comparison"
-    ],
-    "genotype-demultiplexing": [
-      "variant-analysis",
-      "data-management"
-    ],
-    "atac-pipeline": [
-      "sequence-alignment",
-      "chromatin"
-    ],
-    "ortholog-sequence-comparison": [
-      "orthology",
-      "sequence-alignment"
-    ],
-    "splice-model-inference": [
-      "prediction"
-    ],
-    "genomic-track-prediction": [
-      "prediction"
-    ],
-    "motif-enrichment": [
-      "motifs",
-      "enrichment"
-    ],
-    "annotated-expression-query": [
-      "statistics",
-      "data-management"
-    ],
-    "read-to-expression-contrast": [
-      "sequence-alignment",
-      "differential-expression"
-    ],
-    "spatial-deconvolution": [
-      "deconvolution",
-      "spatial"
-    ],
-    "read-to-functional-variant": [
-      "sequence-alignment",
-      "variant-analysis",
-      "variant-consequence"
-    ],
-    "population-genotype-query": [
-      "variant-analysis",
-      "database-query"
-    ],
-    "regulatory-evidence-integration": [
-      "chromatin",
-      "evidence-ranking"
-    ],
-    "read-taxonomy": [
-      "sequence-alignment",
-      "taxonomic-profiling"
-    ],
-    "variant-model-evaluation": [
-      "variant-consequence",
-      "model-evaluation"
-    ],
-    "fragment-shift-inference": [
-      "read-qc",
-      "chromatin"
-    ],
-    "genomic-signal-query": [
-      "intervals",
-      "statistics"
-    ],
-    "biological-state-identification": [
-      "evidence-ranking"
-    ],
-    "cross-modality-matching": [
-      "integration"
-    ],
-    "variable-gene-comparison": [
-      "normalization",
-      "feature-selection"
-    ],
-    "population-genetics": [
-      "population-genetics"
-    ],
-    "assembly-contiguity": [
-      "assembly"
-    ],
-    "rna-folding": [
-      "rna-structure"
-    ],
-    "structure-projection": [
-      "sequence-alignment",
-      "protein-structure"
-    ],
-    "copy-number-discovery": [
-      "read-qc",
-      "variant-analysis"
-    ],
-    "transcript-annotation-query": [
-      "sequence-query",
-      "database-query"
-    ],
-    "genotype-metadata-matching": [
-      "variant-analysis",
-      "data-management"
-    ],
-    "single-cell-state-annotation": [
-      "cell-annotation"
-    ],
-    "chromatin-assay-identification": [
-      "chromatin",
-      "evidence-ranking"
-    ],
-    "single-cell-doublet-detection": [
-      "cell-qc"
-    ],
-    "multispecies-single-cell": [
-      "sequence-alignment",
-      "taxonomic-profiling",
-      "cell-qc"
-    ],
-    "mixture-identifiability": [
-      "deconvolution"
-    ],
-    "read-origin-abundance": [
-      "sequence-alignment",
-      "statistics"
-    ],
-    "longitudinal-contact-association": [
-      "association",
-      "chromatin"
-    ],
-    "read-backed-phasing": [
-      "sequence-alignment",
-      "population-genetics"
-    ],
-    "coding-region-inference": [
-      "sequence-query"
-    ],
-    "perturbation-signature-analysis": [
-      "differential-expression",
-      "evidence-ranking"
-    ],
-    "model-architecture-inspection": [
-      "model-inspection"
-    ],
-    "chromatin-perturbation-comparison": [
-      "chromatin",
-      "group-comparison"
-    ],
-    "sequence-localization": [
-      "sequence-alignment"
-    ],
-    "public-sparse-count-query": [
-      "database-query",
-      "data-management"
-    ],
-    "reference-build-inference": [
-      "variant-analysis",
-      "sequence-query"
-    ],
-    "tissue-expression-query": [
-      "statistics",
-      "database-query"
-    ],
-    "read-backed-genotype": [
-      "variant-analysis"
-    ],
-    "variant-consequence-annotation": [
-      "variant-consequence",
-      "database-query"
-    ],
-    "cross-model-rnaseq-enrichment": [
-      "differential-expression",
-      "enrichment"
-    ],
-    "orthology-and-phylogeny": [
-      "orthology",
-      "sequence-alignment",
-      "phylogeny"
-    ],
-    "inherited-variant-prioritization": [
-      "variant-analysis",
-      "variant-consequence",
-      "evidence-ranking"
-    ],
-    "reads-to-differential-expression": [
-      "sequence-alignment",
-      "expression-quantification",
-      "differential-expression"
-    ],
-    "read-mapping-and-variant-comparison": [
-      "sequence-alignment",
-      "variant-analysis",
-      "variant-consequence"
-    ],
-    "variant-calling-and-truth-comparison": [
-      "sequence-alignment",
-      "variant-analysis",
-      "model-evaluation"
-    ],
-    "metagenomic-taxonomic-profile": [
-      "taxonomic-profiling",
-      "composition"
-    ],
-    "single-cell-condition-comparison": [
-      "clustering",
-      "cell-annotation",
-      "differential-expression"
-    ],
-    "transcript-abundance": [
-      "expression-quantification"
-    ],
-    "metagenomic-assembly-and-classification": [
-      "assembly",
-      "taxonomic-profiling"
-    ],
-    "mirna-cell-type-comparison": [
-      "group-comparison",
-      "statistics"
-    ],
-    "rnaseq-target-effects": [
-      "differential-expression"
-    ],
-    "essential-gene-ranking": [
-      "evidence-ranking"
-    ],
-    "drug-target-affinity-transfer": [
-      "prediction",
-      "model-evaluation"
-    ],
-    "bioactivity-selection": [
-      "database-query",
-      "evidence-ranking"
-    ]
-  },
-  "recognition_rules": {
-    "skills": {
-      "normalization": "normaliz|normalis|sctransform|variance.stabili|size.factor",
-      "transformation": "log10|log1p|log2.transfor|log.transfor|logarithm|variance.stabili",
-      "dimension-reduction": "\\bpca\\b|principal.component|dimensionality.reduction|\\bumap\\b|t.sne|latent.space|latent.representation|embedding|matrix.factorization|\\bnmf\\b",
-      "feature-selection": "highly.variable|variable.gene|feature.selection|select.{0,20}(?:features|genes)|\\bhvg",
-      "association": "correlat|spearman|pearson|chi.square|association.test|test.{0,20}association|co.expression",
-      "regression": "regression|logistic|log.odds|mixed.effect|linear.model|\\bglm\\b|\\bgam\\b|quadratic|cubic|spline",
-      "group-comparison": "mann.whitney|wilcoxon|\\banova\\b|t.test|compare.{0,45}(?:groups|conditions|cohorts)|group.comparison|paired.test",
-      "multiple-testing": "benjamini|bonferroni|multiple.test|multi.test|false.discovery",
-      "differential-expression": "differential.{0,20}express|\\bdeseq2?\\b|\\bedger\\b|\\bdeg[s]?\\b|pseudobulk|\\blimma\\b|rna.seq.contrast|shrunken.effects",
-      "enrichment": "enrich|over.represent|\\bgsea\\b|\\bora\\b",
-      "sensitivity": "sensitivity.analysis|repeat.{0,50}(?:exclud|without)|excluding.the.third|robustness|sensitivity.and",
-      "clustering": "cluster|leiden|louvain|dendrogram|community.detect",
-      "classification": "(?:train|fit|build|evaluate).{0,60}classif|predict.{0,25}(?:label|class|diagnos|probabil)|label.projection|cell.type.projection",
-      "prediction": "predict.{0,45}(?:affinity|response|activity|measurement|expression|value)|imput|forecast|held.out.assay|property.regression",
-      "model-evaluation": "\\bauc\\b|auroc|auprc|accuracy|f1.score|cross.validation|test.set|held.out|performance|evaluate.{0,25}(?:model|predict)|calibration",
-      "survival": "survival|cox.model|hazard.ratio|kaplan.meier|time.to.event",
-      "causal-inference": "mendelian.random|mediation|causal.effect|causal.inference",
-      "sequence-alignment": "(?:perform|build|compute|generate).{0,25}alignment|align.{0,20}(?:reads|sequences)|bwa.mem|bowtie|\\bhisat|mapping.read|map.{0,20}reads",
-      "sequence-query": "fasta|genbank|coding.sequence|reverse.complement|strand|open.reading.frame|\\borf\\b|translat|transcript.annotation|sequence.extraction|gc.content|percent.gc|alternative.splic|rmats",
-      "intervals": "\\bbed\\b|interval|genomic.coordinate|promoter|transcription.start|\\btss\\b",
-      "read-qc": "coverage.depth|read.depth|quality.control|\\bqc\\b|cigar|read.length|base.quality|zero.depth|fastq",
-      "assembly": "de.novo.assembl|assemble.{0,20}(?:reads|genome|contig)|\\bn50\\b|assembly.contiguity",
-      "variant-analysis": "variant|\\bvcf\\b|\\bbcf\\b|genotyp|zygosity|transition|transversion|ts/tv|mutation.burden",
-      "variant-consequence": "consequence|pathogenic|clinvar|missense|synonymous|nonsynonymous|variant.effect|coding.variant",
-      "population-genetics": "population.genet|hardy.weinberg|\\bfst\\b|ancestry|allele.frequency|pedigree|phasing|haplotype|relatedness|heritab",
-      "orthology": "ortholog|orthologue|\\bbusco\\b|single.copy",
-      "phylogeny": "phylogen|treeness|patristic|long.branch|root.to.tip|tree.length|evolutionary.rate|newick",
-      "alignment-signal": "parsimony.informative|\\brcv\\b|composition.variability|informative.site",
-      "cell-annotation": "annotat.{0,30}cell|identify.{0,30}cell.typ|marker.gene|annotation.of.cells|cell.identity",
-      "composition": "cell.composition|cell.proportion|cell.fraction|cell.abundance|proportion.{0,25}cell|composition.of|population.fraction",
-      "integration": "integrat|batch.correct|batch.remov|harmoniz|harmonis|cross.modality|multi.omics|multiomic|multimodal",
-      "deconvolution": "deconvol|mixture.weight|cell2location|destvi|tangram",
-      "trajectory": "pseudotime|trajector|rna.velocity|fate|lineage|\\bpaga\\b|cellrank",
-      "communication": "ligand.receptor|cell.cell|cellchat|cellphone|nichenet|sender.receiver|communication",
-      "spatial": "spatial|colocal|co.local|neighborhood|proximity|distance.to|anatomical.region",
-      "chromatin": "atac|chip.seq|cut.?run|cut.?tag|peak.call|chromatin|accessibility|histone|differential.binding",
-      "motifs": "motif",
-      "methylation": "methyl|\\bcpg",
-      "network": "network|\\bgraph\\b|regulon|wgcna|gene.module|connectivity",
-      "protein-structure": "protein.structur|molecular.structur|\\bpdb\\b|binding.site|pocket|rmsd|contact.geometry|docking|protein.fold",
-      "molecular-descriptors": "smiles|\\bsdf\\b|rdkit|descriptor|molecular.weight|charge|protonat|substructure|fingerprint|stereochem",
-      "rna-structure": "rna.fold|rna.structur|transcript.folding|dot.bracket",
-      "image-analysis": "image|imaging|microscop|segment|histolog|radiograph|mammograph|tomograph|morphometr|circularity|colony.area",
-      "signal-analysis": "\\beeg\\b|\\becg\\b|time.series|physiolog|waveform|signal.process|longitudinal",
-      "dose-response": "dose.response|ic50|ec50|dose.response.curve|screen.hit|drug.response",
-      "abundance": "proteomic|metabolomic|protein.abundance|differential.abundance",
-      "repertoire": "repertoire|clonotyp|tcr|bcr|cdr3|airr",
-      "database-query": "database|uniprot|ensembl|disgenet|omim|mirbase|biomart|dbsnp|cytoband|gene.symbol|identifier|accession",
-      "evidence-extraction": "publication|published|paper|literature|supplement|patent|fda|approved|clinical.trial|source.evidence",
-      "evidence-ranking": "priorit|top.candidate|most.promising|causal.gene|most.likely",
-      "simulation": "sbml|run.{0,20}simulat|build.{0,20}model|ordinary.differential|reaction.model",
-      "sequence-design": "primer|amplicon|gibson|restriction|cloning|construct|digest|sequence.design",
-      "statistics": "mean|median|percentage|fraction|ratio|proportion|variance|standard.deviation|confidence.interval|statistic|count|summary|summariz|skewness|entropy",
-      "data-management": "merge|join|filter|deduplicat|convert|reshape|reconcil|missing|tidy|tabular",
-      "visualization": "visualiz|visualis|\\bplot\\b|heatmap|figure|chart",
-      "taxonomic-profiling": "taxonomic|classify.microb|microbial.taxa",
-      "expression-quantification": "transcript.quant|quantify.{0,20}express|salmon|kallisto",
-      "cell-qc": "doublet|mitochondrial.fraction|cell.quality",
-      "model-inspection": "trainable.parameter|model.architecture"
-    },
-    "applications": {
-      "transcriptomics": "express|transcript|rna.seq|pseudobulk|scrna|single.cell|mirna",
-      "genome-variation": "variant|genotyp|mutation|haplotyp|ancestry|genomic|gwas|vcf|snp|allele",
-      "genome-sequence": "sequence|genome|assembly|read.mapping|fasta|fastq|primer|coding.region|annotation",
-      "epigenomics": "chromatin|methyl|atac|chip.seq|epigen|histone|enhancer",
-      "proteomics": "proteomic|protein.abundance|phospho|protein.set|proteome",
-      "metabolomics": "metabolom|metabolite",
-      "molecular-evolution": "phylogen|ortholog|evolut|treeness|patristic|fungi|fungal|busco",
-      "molecular-structure": "protein.struct|binding.site|pocket|pdb|rmsd|docking|conformation|structural",
-      "chemical-biology": "molecule|molecular|chemical|compound|smiles|ligand|rdkit|drug|toxicity|pharma",
-      "functional-genomics": "crispr|perturb|essential|dependency|regulatory|pathway|gene.function|gene.set",
-      "microbiology": "microb|bacter|metagenom|microbiome|colony|swarm|p..aeruginosa",
-      "ecology": "ecolog|invasion|non.native|habitat|environmental|speciation|introduction.pathway",
-      "clinical": "patient|clinical|cohort|survival|disease|diagnos|risk|treatment.response|bmi|epidemiolog",
-      "immunology": "immune|t.cell|b.cell|antibod|immun|repertoire|tcr|bcr|cdr3|airr",
-      "bioimaging": "image|imaging|microscop|radiograph|mammograph|histolog|tomograph|morphometr|colony.area",
-      "physiology": "physiolog|eeg|ecg|breath|pulmonary|calcium|neuronal",
-      "systems-biology": "sbml|system|dynamics|kinetic|metabolic.network|reaction",
-      "biological-knowledge": "database|literature|publication|paper|source.evidence|identifier|provenance|graph"
-    }
-  },
+  "annotation_rule_version": "2026-09-25-operation-boundaries-2",
   "references": [
     "https://edamontologydocs.readthedocs.io/en/latest/editors_guide.html",
     "https://github.com/marin-community/marin/issues/8879"
+  ],
+  "annotation_policy": [
+    "Assign a skill only when the question or its explicit faithful adaptation requires the solver to perform that operation. Background, supplied results, available tools and grader metrics do not earn labels.",
+    "Use the most specific operation that describes the required result. Do not add generic statistics, regression, classification or data preparation for steps internal to a specialized operation unless a separate deliverable requires them.",
+    "Split skills when their inputs, scientific decisions or checkable outputs require different task designs. Algorithm names, file formats, organisms and packages remain context metadata.",
+    "Assign applications from the biological objects and endpoints actually analyzed. Clinical motivation, a cited publication, or an incidental gene name is insufficient. Leave unresolved applications empty.",
+    "A category frequency counts a requirement at most once per question record. Repeated studies and overlapping releases must be considered before using frequency to plan tasks.",
+    "Eligibility requires a faithful executable result contract. Pinning a method or reference can resolve ambiguity; a deterministic proxy alone does not validate a causal, clinical or experimental claim."
   ]
 }

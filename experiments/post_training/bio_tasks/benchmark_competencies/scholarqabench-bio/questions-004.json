@@ -2487,8 +2487,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "From a frozen set of trial registry and linked result records, enumerate trials meeting a declared NK-cell/cancer eligibility rule and extract the specified primary outcomes, populations, timepoints and uncertainty. Mark unreported results explicitly.",
@@ -3031,8 +3030,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "From a frozen set of trial registry and linked result records, enumerate trials meeting a declared T-cell-immunotherapy eligibility rule and extract primary efficacy results with outcome definitions and uncertainty. Apply a prespecified success criterion without a free-form assessment of therapeutic promise.",
@@ -3911,8 +3909,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "molecular-structure",
-        "biological-knowledge"
+        "molecular-structure"
       ],
       "context_tags": [],
       "reframed_question": "Query a pinned PDB archive release for the experimental methods represented in its structures. Return the distinct method identifiers, their definitions and counts of entries per method, preserving multi-method entries explicitly.",

@@ -475,9 +475,7 @@
         "model-evaluation",
         "visualization"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1014,9 +1012,7 @@
         "clustering",
         "visualization"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1063,9 +1059,7 @@
       "skills": [
         "statistics"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1161,15 +1155,12 @@
       "source_group": "",
       "workflow": "paired receptor chain qc",
       "skills": [
-        "read-qc",
-        "image-analysis",
         "repertoire",
         "visualization"
       ],
       "applications": [
-        "transcriptomics",
         "immunology",
-        "bioimaging"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -1198,9 +1189,14 @@
           "id": "portfolio-scienceagentbench-paired-receptor-chain-qc"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source question and input/output contract; rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "question-output",
+        "note": "Classify receptor-chain pairing quality from single-cell receptor data and plot counts. No sequencing-read quality or input-image analysis is requested."
+      }
     },
     {
       "task_id": "99",
@@ -1270,9 +1266,7 @@
         "statistics",
         "visualization"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [
         "spatial"
       ],

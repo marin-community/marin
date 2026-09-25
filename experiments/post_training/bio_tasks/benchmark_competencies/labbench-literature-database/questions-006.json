@@ -14,8 +14,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -54,8 +53,7 @@
       ],
       "applications": [
         "chemical-biology",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -92,9 +90,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -130,9 +126,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -168,9 +162,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -207,8 +199,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -246,8 +237,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -286,9 +276,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -326,8 +314,7 @@
       ],
       "applications": [
         "genome-variation",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -365,8 +352,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -403,9 +389,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -441,9 +425,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -479,9 +461,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -517,9 +497,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -555,9 +533,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -594,8 +570,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -633,8 +608,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "functional-genomics",
-        "biological-knowledge"
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -671,9 +645,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -709,9 +681,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -747,9 +717,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -785,9 +753,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -824,8 +790,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -862,9 +827,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -900,9 +863,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -939,8 +900,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -977,9 +937,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1015,9 +973,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1054,8 +1010,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1092,9 +1047,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1131,8 +1084,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1169,9 +1121,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1207,9 +1157,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1245,9 +1193,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1283,9 +1229,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1323,8 +1267,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "molecular-evolution",
-        "biological-knowledge"
+        "molecular-evolution"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1362,8 +1305,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1403,8 +1345,7 @@
       "applications": [
         "transcriptomics",
         "epigenomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "molecular-structure"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1442,8 +1383,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1480,9 +1420,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1519,8 +1457,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1560,8 +1497,7 @@
       "applications": [
         "genome-variation",
         "molecular-evolution",
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1600,8 +1536,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1639,8 +1574,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1678,8 +1612,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1717,8 +1650,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1756,8 +1688,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1794,9 +1725,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1832,9 +1761,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1870,9 +1797,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1908,9 +1833,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1946,9 +1869,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1985,8 +1906,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2023,9 +1943,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2061,9 +1979,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2099,9 +2015,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2137,9 +2051,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2175,9 +2087,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2213,9 +2123,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2252,8 +2160,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2290,9 +2197,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2329,8 +2234,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2368,8 +2272,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2406,9 +2309,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2444,9 +2345,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2483,8 +2382,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2522,8 +2420,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "bioimaging",
-        "biological-knowledge"
+        "bioimaging"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2560,9 +2457,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2598,9 +2493,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2636,9 +2529,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2676,8 +2567,7 @@
       ],
       "applications": [
         "molecular-structure",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2714,9 +2604,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2754,8 +2642,7 @@
       ],
       "applications": [
         "genome-variation",
-        "molecular-structure",
-        "biological-knowledge"
+        "molecular-structure"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2792,9 +2679,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2830,9 +2715,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2869,8 +2752,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2907,9 +2789,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2945,9 +2825,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2983,9 +2861,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3023,8 +2899,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3061,9 +2936,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3099,9 +2972,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3140,8 +3011,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "molecular-evolution",
-        "biological-knowledge"
+        "molecular-evolution"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3180,8 +3050,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "microbiology",
-        "biological-knowledge"
+        "microbiology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3218,9 +3087,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3256,9 +3123,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3294,9 +3159,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3333,8 +3196,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3372,8 +3234,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "microbiology",
-        "biological-knowledge"
+        "microbiology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3410,9 +3271,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3449,8 +3308,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3487,9 +3345,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3525,9 +3381,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3565,8 +3419,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3605,8 +3458,7 @@
       ],
       "applications": [
         "functional-genomics",
-        "microbiology",
-        "biological-knowledge"
+        "microbiology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3644,8 +3496,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3683,8 +3534,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3721,9 +3571,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3759,9 +3607,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3797,9 +3643,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3836,8 +3680,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3876,8 +3719,7 @@
       ],
       "applications": [
         "genome-variation",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3915,8 +3757,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3954,8 +3795,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3992,9 +3832,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4030,9 +3868,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4069,8 +3905,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4108,8 +3943,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4146,9 +3980,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4184,9 +4016,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4223,8 +4053,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4261,9 +4090,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4300,8 +4127,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4339,8 +4165,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4379,8 +4204,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4417,9 +4241,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4455,9 +4277,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4494,8 +4314,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4534,8 +4353,7 @@
       ],
       "applications": [
         "genome-variation",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4574,8 +4392,7 @@
       ],
       "applications": [
         "genome-variation",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4613,8 +4430,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4652,8 +4468,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4692,8 +4507,7 @@
       ],
       "applications": [
         "genome-variation",
-        "microbiology",
-        "biological-knowledge"
+        "microbiology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4731,8 +4545,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4770,8 +4583,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4808,9 +4620,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4846,9 +4656,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4884,9 +4692,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4924,8 +4730,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4963,8 +4768,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5001,9 +4805,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5041,8 +4843,7 @@
       ],
       "applications": [
         "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "bioimaging"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5080,8 +4881,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5118,9 +4918,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5156,9 +4954,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5194,9 +4990,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5232,9 +5026,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5271,8 +5063,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5311,8 +5102,7 @@
       ],
       "applications": [
         "clinical",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5350,8 +5140,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "functional-genomics",
-        "biological-knowledge"
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5388,9 +5177,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5427,8 +5214,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5466,8 +5252,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5505,8 +5290,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "molecular-evolution",
-        "biological-knowledge"
+        "molecular-evolution"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5544,8 +5328,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5583,8 +5366,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5621,9 +5403,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5659,9 +5439,7 @@
       "skills": [
         "evidence-extraction"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [

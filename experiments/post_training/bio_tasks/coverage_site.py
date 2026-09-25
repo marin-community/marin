@@ -91,7 +91,12 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
                 for facet in ("skills", "applications"):
                     labels = annotation[facet]
                     allowed = {row["id"] for row in definitions[facet]}
-                    if len(labels) != len(set(labels)) or not set(labels) <= allowed or bool(labels) != eligible:
+                    if (
+                        len(labels) != len(set(labels))
+                        or not set(labels) <= allowed
+                        or (labels and not eligible)
+                        or (eligible and facet == "skills" and not labels)
+                    ):
                         raise ValueError(f"Invalid {facet} assignment: {identity}")
                 if eligible and not all(
                     annotation[key] for key in ("source_question", "reframed_question", "outputs", "verification")
@@ -246,6 +251,8 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
         "inventoried_releases": len(reviewed),
         "source_records": sum(len(benchmark["questions"]) for benchmark in reviewed),
         "eligible_records": sum(len(questions) for questions in eligible.values()),
+        "unresolved_applications": sum(not q["applications"] for rows in eligible.values() for q in rows),
+        "operation_reviewed_records": sum(bool(q.get("category_review")) for rows in eligible.values() for q in rows),
         "missing_inventories": [benchmark["id"] for benchmark in id_benchmarks if not benchmark["review"]],
         "facets": facets,
     }
@@ -268,6 +275,11 @@ def category_markdown(statistics: dict) -> str:
         "",
         "Use these counts to find candidate workflows for review, alongside scientific decisions, "
         "available observed inputs and an executable reward. They are not generation quotas.",
+        "",
+        f"{statistics['operation_reviewed_records']:,} records have a source-protocol or output-contract "
+        "review of operation boundaries. This is not an individual verifier audit. "
+        f"{statistics['unresolved_applications']:,} records have no resolved biological application; "
+        "they remain in the eligible denominator and skill counts.",
     ]
     for facet, title in (("skills", "Analytical skills"), ("applications", "Biological applications")):
         lines += [

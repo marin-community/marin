@@ -11,13 +11,11 @@
       "source_group": "BioML-bench/proteingym-dms/NCAP_I34A1_Doud_2015",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -42,9 +40,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NKX31_HUMAN_Tsuboyama_2023_2L9R",
@@ -57,13 +60,11 @@
       "source_group": "BioML-bench/proteingym-dms/NKX31_HUMAN_Tsuboyama_2023_2L9R",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -88,9 +89,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NKX31_HUMAN_Tsuboyama_2023_2L9R_indels",
@@ -103,13 +109,11 @@
       "source_group": "BioML-bench/proteingym-dms/NKX31_HUMAN_Tsuboyama_2023_2L9R_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -134,9 +138,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NPC1_HUMAN_Erwood_2022_HEK293T",
@@ -149,14 +158,11 @@
       "source_group": "BioML-bench/proteingym-dms/NPC1_HUMAN_Erwood_2022_HEK293T",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -181,9 +187,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NPC1_HUMAN_Erwood_2022_RPE1",
@@ -196,14 +207,11 @@
       "source_group": "BioML-bench/proteingym-dms/NPC1_HUMAN_Erwood_2022_RPE1",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -228,9 +236,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NRAM_I33A0_Jiang_2016",
@@ -243,14 +256,11 @@
       "source_group": "BioML-bench/proteingym-dms/NRAM_I33A0_Jiang_2016",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -275,9 +285,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NUD15_HUMAN_Suiter_2020",
@@ -290,15 +305,11 @@
       "source_group": "BioML-bench/proteingym-dms/NUD15_HUMAN_Suiter_2020",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -323,9 +334,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NUSA_ECOLI_Tsuboyama_2023_1WCL",
@@ -338,14 +354,11 @@
       "source_group": "BioML-bench/proteingym-dms/NUSA_ECOLI_Tsuboyama_2023_1WCL",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -370,9 +383,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NUSA_ECOLI_Tsuboyama_2023_1WCL_indels",
@@ -385,14 +403,11 @@
       "source_group": "BioML-bench/proteingym-dms/NUSA_ECOLI_Tsuboyama_2023_1WCL_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -417,9 +432,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NUSG_MYCTU_Tsuboyama_2023_2MI6",
@@ -432,15 +452,11 @@
       "source_group": "BioML-bench/proteingym-dms/NUSG_MYCTU_Tsuboyama_2023_2MI6",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "microbiology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -465,9 +481,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/NUSG_MYCTU_Tsuboyama_2023_2MI6_indels",
@@ -480,15 +501,11 @@
       "source_group": "BioML-bench/proteingym-dms/NUSG_MYCTU_Tsuboyama_2023_2MI6_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "microbiology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -513,9 +530,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OBSCN_HUMAN_Tsuboyama_2023_1V1C",
@@ -528,13 +550,11 @@
       "source_group": "BioML-bench/proteingym-dms/OBSCN_HUMAN_Tsuboyama_2023_1V1C",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -559,9 +579,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OBSCN_HUMAN_Tsuboyama_2023_1V1C_indels",
@@ -574,13 +599,11 @@
       "source_group": "BioML-bench/proteingym-dms/OBSCN_HUMAN_Tsuboyama_2023_1V1C_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -605,9 +628,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ODP2_GEOSE_Tsuboyama_2023_1W4G",
@@ -620,13 +648,11 @@
       "source_group": "BioML-bench/proteingym-dms/ODP2_GEOSE_Tsuboyama_2023_1W4G",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -651,9 +677,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ODP2_GEOSE_Tsuboyama_2023_1W4G_indels",
@@ -666,13 +697,11 @@
       "source_group": "BioML-bench/proteingym-dms/ODP2_GEOSE_Tsuboyama_2023_1W4G_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -697,9 +726,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OPSD_HUMAN_Wan_2019",
@@ -712,14 +746,11 @@
       "source_group": "BioML-bench/proteingym-dms/OPSD_HUMAN_Wan_2019",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -744,9 +775,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OTC_HUMAN_Lo_2023",
@@ -759,13 +795,11 @@
       "source_group": "BioML-bench/proteingym-dms/OTC_HUMAN_Lo_2023",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -790,9 +824,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OTU7A_HUMAN_Tsuboyama_2023_2L2D",
@@ -805,13 +844,11 @@
       "source_group": "BioML-bench/proteingym-dms/OTU7A_HUMAN_Tsuboyama_2023_2L2D",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -836,9 +873,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OTU7A_HUMAN_Tsuboyama_2023_2L2D_indels",
@@ -851,13 +893,11 @@
       "source_group": "BioML-bench/proteingym-dms/OTU7A_HUMAN_Tsuboyama_2023_2L2D_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -882,9 +922,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OXDA_RHOTO_Vanella_2023_activity",
@@ -897,13 +942,11 @@
       "source_group": "BioML-bench/proteingym-dms/OXDA_RHOTO_Vanella_2023_activity",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -928,9 +971,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/OXDA_RHOTO_Vanella_2023_expression",
@@ -943,14 +991,11 @@
       "source_group": "BioML-bench/proteingym-dms/OXDA_RHOTO_Vanella_2023_expression",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -975,9 +1020,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P53_HUMAN_Giacomelli_2018_Null_Etoposide",
@@ -990,14 +1040,11 @@
       "source_group": "BioML-bench/proteingym-dms/P53_HUMAN_Giacomelli_2018_Null_Etoposide",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1022,9 +1069,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P53_HUMAN_Giacomelli_2018_Null_Nutlin",
@@ -1037,14 +1089,11 @@
       "source_group": "BioML-bench/proteingym-dms/P53_HUMAN_Giacomelli_2018_Null_Nutlin",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1069,9 +1118,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P53_HUMAN_Giacomelli_2018_WT_Nutlin",
@@ -1084,14 +1138,11 @@
       "source_group": "BioML-bench/proteingym-dms/P53_HUMAN_Giacomelli_2018_WT_Nutlin",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1116,9 +1167,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P53_HUMAN_Kotler_2018",
@@ -1131,15 +1187,11 @@
       "source_group": "BioML-bench/proteingym-dms/P53_HUMAN_Kotler_2018",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "systems-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1164,9 +1216,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P53_HUMAN_Kotler_2018_indels",
@@ -1179,15 +1236,11 @@
       "source_group": "BioML-bench/proteingym-dms/P53_HUMAN_Kotler_2018_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "systems-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1212,9 +1265,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/P84126_THETH_Chan_2017",
@@ -1227,14 +1285,11 @@
       "source_group": "BioML-bench/proteingym-dms/P84126_THETH_Chan_2017",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1259,9 +1314,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PABP_YEAST_Melamed_2013",
@@ -1274,14 +1334,11 @@
       "source_group": "BioML-bench/proteingym-dms/PABP_YEAST_Melamed_2013",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1306,9 +1363,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PAI1_HUMAN_Huttinger_2021",
@@ -1321,13 +1383,11 @@
       "source_group": "BioML-bench/proteingym-dms/PAI1_HUMAN_Huttinger_2021",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1352,9 +1412,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PA_I34A1_Wu_2015",
@@ -1367,14 +1432,11 @@
       "source_group": "BioML-bench/proteingym-dms/PA_I34A1_Wu_2015",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1399,9 +1461,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PHOT_CHLRE_Chen_2023",
@@ -1414,13 +1481,11 @@
       "source_group": "BioML-bench/proteingym-dms/PHOT_CHLRE_Chen_2023",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1445,9 +1510,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PIN1_HUMAN_Tsuboyama_2023_1I6C",
@@ -1460,13 +1530,11 @@
       "source_group": "BioML-bench/proteingym-dms/PIN1_HUMAN_Tsuboyama_2023_1I6C",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1491,9 +1559,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PIN1_HUMAN_Tsuboyama_2023_1I6C_indels",
@@ -1506,13 +1579,11 @@
       "source_group": "BioML-bench/proteingym-dms/PIN1_HUMAN_Tsuboyama_2023_1I6C_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1537,9 +1608,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PITX2_HUMAN_Tsuboyama_2023_2L7M",
@@ -1552,13 +1628,11 @@
       "source_group": "BioML-bench/proteingym-dms/PITX2_HUMAN_Tsuboyama_2023_2L7M",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1583,9 +1657,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PITX2_HUMAN_Tsuboyama_2023_2L7M_indels",
@@ -1598,13 +1677,11 @@
       "source_group": "BioML-bench/proteingym-dms/PITX2_HUMAN_Tsuboyama_2023_2L7M_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1629,9 +1706,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PKN1_HUMAN_Tsuboyama_2023_1URF",
@@ -1644,13 +1726,11 @@
       "source_group": "BioML-bench/proteingym-dms/PKN1_HUMAN_Tsuboyama_2023_1URF",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1675,9 +1755,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PKN1_HUMAN_Tsuboyama_2023_1URF_indels",
@@ -1690,13 +1775,11 @@
       "source_group": "BioML-bench/proteingym-dms/PKN1_HUMAN_Tsuboyama_2023_1URF_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1721,9 +1804,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/POLG_CXB3N_Mattenberger_2021",
@@ -1736,13 +1824,11 @@
       "source_group": "BioML-bench/proteingym-dms/POLG_CXB3N_Mattenberger_2021",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1767,9 +1853,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/POLG_DEN26_Suphatrakul_2023",
@@ -1782,13 +1873,11 @@
       "source_group": "BioML-bench/proteingym-dms/POLG_DEN26_Suphatrakul_2023",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1813,9 +1902,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/POLG_HCVJF_Qi_2014",
@@ -1828,14 +1922,11 @@
       "source_group": "BioML-bench/proteingym-dms/POLG_HCVJF_Qi_2014",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1860,9 +1951,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/POLG_PESV_Tsuboyama_2023_2MXD",
@@ -1875,13 +1971,11 @@
       "source_group": "BioML-bench/proteingym-dms/POLG_PESV_Tsuboyama_2023_2MXD",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1906,9 +2000,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/POLG_PESV_Tsuboyama_2023_2MXD_indels",
@@ -1921,13 +2020,11 @@
       "source_group": "BioML-bench/proteingym-dms/POLG_PESV_Tsuboyama_2023_2MXD_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1952,9 +2049,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PPARG_HUMAN_Majithia_2016",
@@ -1967,14 +2069,11 @@
       "source_group": "BioML-bench/proteingym-dms/PPARG_HUMAN_Majithia_2016",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1999,9 +2098,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PPM1D_HUMAN_Miller_2022",
@@ -2014,14 +2118,11 @@
       "source_group": "BioML-bench/proteingym-dms/PPM1D_HUMAN_Miller_2022",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2046,9 +2147,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PR40A_HUMAN_Tsuboyama_2023_1UZC",
@@ -2061,13 +2167,11 @@
       "source_group": "BioML-bench/proteingym-dms/PR40A_HUMAN_Tsuboyama_2023_1UZC",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2092,9 +2196,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PR40A_HUMAN_Tsuboyama_2023_1UZC_indels",
@@ -2107,13 +2216,11 @@
       "source_group": "BioML-bench/proteingym-dms/PR40A_HUMAN_Tsuboyama_2023_1UZC_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2138,9 +2245,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PRKN_HUMAN_Clausen_2023",
@@ -2153,14 +2265,11 @@
       "source_group": "BioML-bench/proteingym-dms/PRKN_HUMAN_Clausen_2023",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2185,9 +2294,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/PSAE_PICP2_Tsuboyama_2023_1PSE",
@@ -2200,14 +2314,11 @@
       "source_group": "BioML-bench/proteingym-dms/PSAE_PICP2_Tsuboyama_2023_1PSE",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "systems-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2232,9 +2343,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     }
   ]
 }

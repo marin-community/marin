@@ -11,14 +11,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-reg-v2",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -43,9 +39,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-posebusters-v1",
@@ -58,8 +59,7 @@
       "source_group": "BioML-bench/polaris/polaris/posebusters-v1",
       "workflow": "molecular conformation prediction",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "structure-prediction"
       ],
       "applications": [
         "molecular-structure",
@@ -88,9 +88,14 @@
           "id": "portfolio-biomlbench-molecular-conformation-prediction"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/recursion-rxrx-compound-gene-activity-benchmark",
@@ -103,13 +108,11 @@
       "source_group": "",
       "workflow": "compound gene activity prediction",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
         "chemical-biology",
-        "clinical",
+        "functional-genomics",
         "bioimaging"
       ],
       "context_tags": [],
@@ -135,9 +138,14 @@
           "id": "portfolio-biomlbench-compound-gene-activity-prediction"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-ames",
@@ -150,16 +158,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/ames",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "microbiology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -184,9 +186,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-bbb-martins",
@@ -199,13 +206,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/bbb-martins",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -230,9 +234,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-bioavailability-ma",
@@ -245,13 +254,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/bioavailability-ma",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -276,9 +282,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-caco2-wang",
@@ -291,13 +302,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/caco2-wang",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -322,9 +330,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-clearance-hepatocyte-az",
@@ -337,14 +350,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/clearance-hepatocyte-az",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -369,9 +378,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-clearance-microsome-az",
@@ -384,14 +398,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/clearance-microsome-az",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -416,9 +426,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2c9-substrate-carbonmangels",
@@ -431,14 +446,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp2c9-substrate-carbonmangels",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -463,9 +474,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2c9-veith",
@@ -478,13 +494,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp2c9-veith",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -509,9 +522,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2d6-substrate-carbonmangels",
@@ -524,15 +542,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp2d6-substrate-carbonmangels",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -557,9 +570,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2d6-veith",
@@ -572,14 +590,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp2d6-veith",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -604,9 +618,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp3a4-substrate-carbonmangels",
@@ -619,14 +638,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp3a4-substrate-carbonmangels",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -651,9 +666,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp3a4-veith",
@@ -666,13 +686,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp3a4-veith",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -697,9 +714,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-dili",
@@ -712,13 +734,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/dili",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -743,9 +762,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-half-life-obach",
@@ -758,14 +782,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/half-life-obach",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -790,9 +810,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-herg",
@@ -805,13 +830,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/herg",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -836,9 +858,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-hia-hou",
@@ -851,13 +878,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/hia-hou",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -882,9 +906,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-ld50-zhu",
@@ -897,13 +926,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/ld50-zhu",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -928,9 +954,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-lipophilicity-astrazeneca",
@@ -943,13 +974,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/lipophilicity-astrazeneca",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -974,9 +1002,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-pgp-broccatelli",
@@ -989,13 +1022,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/pgp-broccatelli",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1020,9 +1050,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-ppbr-az",
@@ -1035,14 +1070,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/ppbr-az",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1067,9 +1098,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-solubility-aqsoldb",
@@ -1082,13 +1118,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/solubility-aqsoldb",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1113,9 +1146,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/tdcommons-vdss-lombardo",
@@ -1128,13 +1166,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/vdss-lombardo",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1159,9 +1194,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/vishrut64-cho-dna-expression-prediction-dataset-task",
@@ -1174,14 +1214,10 @@
       "source_group": "BioML-bench/polaris/vishrut64/cho-dna-expression-prediction-dataset-task",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1206,9 +1242,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/vishrut64-rna-expression-prediction-dataset-task",
@@ -1221,15 +1262,10 @@
       "source_group": "BioML-bench/polaris/vishrut64/rna-expression-prediction-dataset-task",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1254,9 +1290,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A140D2T1_ZIKV_Sourisseau_2019",
@@ -1269,14 +1310,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A140D2T1_ZIKV_Sourisseau_2019",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "immunology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1301,9 +1339,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A192B1T2_9HIV1_Haddox_2018",
@@ -1316,15 +1359,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A192B1T2_9HIV1_Haddox_2018",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "immunology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1349,9 +1388,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A1I9GEU1_NEIME_Kennouche_2019",
@@ -1364,13 +1408,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A1I9GEU1_NEIME_Kennouche_2019",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1395,9 +1437,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A247D711_LISMN_Stadelmann_2021",
@@ -1410,14 +1457,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A247D711_LISMN_Stadelmann_2021",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1442,9 +1486,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A2Z5U3Z0_9INFA_Doud_2016",
@@ -1457,13 +1506,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A2Z5U3Z0_9INFA_Doud_2016",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1488,9 +1535,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A0A2Z5U3Z0_9INFA_Wu_2014",
@@ -1503,13 +1555,11 @@
       "source_group": "BioML-bench/proteingym-dms/A0A2Z5U3Z0_9INFA_Wu_2014",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1534,9 +1584,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A4D664_9INFA_Soh_2019",
@@ -1549,13 +1604,11 @@
       "source_group": "BioML-bench/proteingym-dms/A4D664_9INFA_Soh_2019",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1580,9 +1633,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A4GRB6_PSEAI_Chen_2020",
@@ -1595,14 +1653,11 @@
       "source_group": "BioML-bench/proteingym-dms/A4GRB6_PSEAI_Chen_2020",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1627,9 +1682,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A4_HUMAN_Seuma_2022",
@@ -1642,13 +1702,11 @@
       "source_group": "BioML-bench/proteingym-dms/A4_HUMAN_Seuma_2022",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1673,9 +1731,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/A4_HUMAN_Seuma_2022_indels",
@@ -1688,13 +1751,11 @@
       "source_group": "BioML-bench/proteingym-dms/A4_HUMAN_Seuma_2022_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1719,9 +1780,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/AACC1_PSEAI_Dandage_2018",
@@ -1734,14 +1800,11 @@
       "source_group": "BioML-bench/proteingym-dms/AACC1_PSEAI_Dandage_2018",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1766,9 +1829,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ACE2_HUMAN_Chan_2020",
@@ -1781,13 +1849,11 @@
       "source_group": "BioML-bench/proteingym-dms/ACE2_HUMAN_Chan_2020",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1812,9 +1878,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ADRB2_HUMAN_Jones_2020",
@@ -1827,15 +1898,11 @@
       "source_group": "BioML-bench/proteingym-dms/ADRB2_HUMAN_Jones_2020",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1860,9 +1927,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/AICDA_HUMAN_Gajula_2014_3cycles",
@@ -1875,13 +1947,11 @@
       "source_group": "BioML-bench/proteingym-dms/AICDA_HUMAN_Gajula_2014_3cycles",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1906,9 +1976,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O",
@@ -1921,13 +1996,11 @@
       "source_group": "BioML-bench/proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1952,9 +2025,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O_indels",
@@ -1967,13 +2045,11 @@
       "source_group": "BioML-bench/proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1998,9 +2074,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/AMIE_PSEAE_Wrenbeck_2017",
@@ -2013,13 +2094,11 @@
       "source_group": "BioML-bench/proteingym-dms/AMIE_PSEAE_Wrenbeck_2017",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2044,9 +2123,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ANCSZ_Hobbs_2022",
@@ -2059,14 +2143,11 @@
       "source_group": "BioML-bench/proteingym-dms/ANCSZ_Hobbs_2022",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "proteomics",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2091,9 +2172,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY",
@@ -2106,13 +2192,11 @@
       "source_group": "BioML-bench/proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2137,9 +2221,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY_indels",
@@ -2152,13 +2241,11 @@
       "source_group": "BioML-bench/proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2183,9 +2270,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/B1LPA6_ECOSM_Russ_2020_indels",
@@ -2198,14 +2290,11 @@
       "source_group": "BioML-bench/proteingym-dms/B1LPA6_ECOSM_Russ_2020_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2230,9 +2319,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/B2L11_HUMAN_Dutta_2010_binding-Mcl-1",
@@ -2245,14 +2339,11 @@
       "source_group": "BioML-bench/proteingym-dms/B2L11_HUMAN_Dutta_2010_binding-Mcl-1",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "immunology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2277,9 +2368,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0",
@@ -2292,13 +2388,11 @@
       "source_group": "BioML-bench/proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2323,9 +2417,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0_indels",
@@ -2338,13 +2437,11 @@
       "source_group": "BioML-bench/proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2369,9 +2466,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU",
@@ -2384,13 +2486,11 @@
       "source_group": "BioML-bench/proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2415,9 +2515,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU_indels",
@@ -2430,13 +2535,11 @@
       "source_group": "BioML-bench/proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2461,9 +2564,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Deng_2012",
@@ -2476,14 +2584,11 @@
       "source_group": "BioML-bench/proteingym-dms/BLAT_ECOLX_Deng_2012",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "systems-biology",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2508,9 +2613,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Firnberg_2014",
@@ -2523,13 +2633,11 @@
       "source_group": "BioML-bench/proteingym-dms/BLAT_ECOLX_Firnberg_2014",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2554,9 +2662,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Gonzalez_2019_indels",
@@ -2569,13 +2682,11 @@
       "source_group": "BioML-bench/proteingym-dms/BLAT_ECOLX_Gonzalez_2019_indels",
       "workflow": "held out assay ranking indels",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2600,9 +2711,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-indels"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Jacquier_2013",
@@ -2615,13 +2731,11 @@
       "source_group": "BioML-bench/proteingym-dms/BLAT_ECOLX_Jacquier_2013",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2646,9 +2760,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Stiffler_2015",
@@ -2661,13 +2780,11 @@
       "source_group": "BioML-bench/proteingym-dms/BLAT_ECOLX_Stiffler_2015",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2692,9 +2809,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     },
     {
       "task_id": "proteingym-dms/BRCA1_HUMAN_Findlay_2018",
@@ -2707,13 +2829,11 @@
       "source_group": "BioML-bench/proteingym-dms/BRCA1_HUMAN_Findlay_2018",
       "workflow": "held out assay ranking substitutions",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "protein-function",
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2738,9 +2858,14 @@
           "id": "portfolio-biomlbench-held-out-assay-ranking-substitutions"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
+      }
     }
   ]
 }

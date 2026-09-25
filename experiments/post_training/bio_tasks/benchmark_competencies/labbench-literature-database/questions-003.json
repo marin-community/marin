@@ -14,9 +14,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -45,9 +44,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:16113bd0-2f47-4d52-83a9-e5483f914e34",
@@ -63,9 +67,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -94,9 +97,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:96cf6ff2-9c5f-4d37-acf3-a50a57924201",
@@ -112,9 +120,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -143,9 +150,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:95f7986e-9b14-404e-a246-ba7d53c24f38",
@@ -161,9 +173,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -192,9 +203,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:3810349a-26e8-4b37-95ba-2d404d8f69ba",
@@ -210,9 +226,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -241,9 +256,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:29485c1c-1294-4216-9b2d-bbac307b700f",
@@ -259,9 +279,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -290,9 +309,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:433dd2d0-2b16-46eb-9a2e-6c9f85de15e4",
@@ -308,9 +332,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -339,9 +362,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:7fe95be7-f5db-42e2-b9e5-18117ede2225",
@@ -357,9 +385,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -388,9 +415,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:0ba177da-1c35-452b-9034-4e571942d3dd",
@@ -406,9 +438,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -437,9 +468,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:8e95d62a-4a9d-4339-bde4-c88bd092037d",
@@ -455,9 +491,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -486,9 +521,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:18e25cde-27b3-42b5-bca6-f640ec4dcfc7",
@@ -504,9 +544,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -535,9 +574,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:7b595f71-2133-4691-905f-8bb1c0a8bde5",
@@ -553,9 +597,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -584,9 +627,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:655d5d09-4f96-4fdc-8a00-ee2af7133389",
@@ -602,9 +650,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -633,9 +680,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:52faaa3b-41e8-45ae-8ac5-f6aac47d7c44",
@@ -651,9 +703,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -682,9 +733,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:c4e25859-460d-44da-88be-011a816384ee",
@@ -700,9 +756,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -731,9 +786,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:b661abfd-1b7f-479e-a536-77671c4f62da",
@@ -749,9 +809,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -780,9 +839,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:4156c91d-0031-4d3d-890b-777ab3e3c90b",
@@ -798,9 +862,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -829,9 +892,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:ac7fddde-2631-467a-a32d-3db9d02c94d4",
@@ -847,9 +915,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -878,9 +945,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:1e57d4e5-0dea-44cb-b9d2-30272d72545b",
@@ -896,9 +968,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -927,9 +998,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:a571bd8e-5672-40b7-9fb1-bff854a907d9",
@@ -945,9 +1021,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -976,9 +1051,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:92cfec0f-5300-4311-a2ef-0ebc313bf9fd",
@@ -994,9 +1074,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1025,9 +1104,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:8b59edb8-14d4-4e28-85de-bdb249e545ed",
@@ -1043,9 +1127,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1074,9 +1157,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:a6fe3ca5-08d0-4bf9-b194-1d294cfbd721",
@@ -1092,9 +1180,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1123,9 +1210,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:a7ad2fbc-9f27-48ff-b6f0-c57db7b764da",
@@ -1141,9 +1233,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1172,9 +1263,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:197bc5f3-c18c-484c-bb39-82a05bd97000",
@@ -1190,9 +1286,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1221,9 +1316,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:36d77484-d7f6-40be-acff-197d2e707267",
@@ -1239,9 +1339,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1270,9 +1369,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:90ac1d77-4de2-44ad-ac46-74ac04b9f533",
@@ -1288,9 +1392,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1319,9 +1422,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:cb292df4-a287-42ca-9cdc-7cc2440ac05e",
@@ -1337,9 +1445,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1368,9 +1475,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:6524228a-8271-40d7-bf54-47158334a038",
@@ -1386,9 +1498,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1417,9 +1528,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:b453d7f3-382d-4afa-8416-dd3042312ee0",
@@ -1435,9 +1551,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1466,9 +1581,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:c0d1c448-9fc5-4744-8488-9cc0a0eac541",
@@ -1484,9 +1604,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1515,9 +1634,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e8848740-f0f0-42a7-aa9a-afb7fcca6bc1",
@@ -1533,9 +1657,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1564,9 +1687,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:efe293dd-d66d-4da5-af22-f0c1f97d0d07",
@@ -1582,9 +1710,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1613,9 +1740,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:7fac2a20-be30-4777-b1d7-924291bcf880",
@@ -1631,9 +1763,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1662,9 +1793,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:ce5d6351-dbdf-4640-a33a-e1186a823d2b",
@@ -1680,9 +1816,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1711,9 +1846,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e3b2bf60-4c4c-4051-bd93-bdd161038012",
@@ -1729,9 +1869,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1760,9 +1899,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e04e7c93-19be-4e5c-9592-716bdc23b935",
@@ -1778,9 +1922,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1809,9 +1952,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:5d950021-0eab-4b3b-8874-5077df87a7ff",
@@ -1824,12 +1972,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -1859,9 +2005,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:289abf35-5574-4a4a-bb65-f920e821f5f2",
@@ -1874,12 +2025,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -1909,9 +2058,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:76be0435-266d-4a10-a2e2-c9bbf195d26f",
@@ -1924,12 +2078,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -1959,9 +2111,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:c74f3c6d-7389-4921-8332-c20a7fa42e2d",
@@ -1974,14 +2131,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2010,9 +2164,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:9b4c9356-ad11-4ac2-92ff-db36a294c100",
@@ -2025,12 +2184,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2060,9 +2217,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:140e393f-699e-4741-a6f2-e4c85b093baa",
@@ -2075,12 +2237,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2110,9 +2270,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:fa57ad0e-5fb7-4a5f-9032-f3eb8d130f03",
@@ -2125,12 +2290,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2160,9 +2323,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:73e01496-252b-402f-b9e9-28ac153e9df3",
@@ -2175,12 +2343,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2210,9 +2376,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:f0fb3cd5-f6e2-4c90-9c41-013380f75d58",
@@ -2225,14 +2396,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2261,9 +2429,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:214c0f76-f6ca-4fb3-8ed5-8c02f8e09cfb",
@@ -2276,14 +2449,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2312,9 +2482,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e9491b16-8f4a-4b6d-9268-7d8f1ed3d026",
@@ -2327,14 +2502,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2363,9 +2535,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:6caa5ca6-8a2a-4180-8013-235edcbd2964",
@@ -2378,14 +2555,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "immunology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2414,9 +2588,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:8f36dac2-0b5b-4c2c-a03c-ad7d59332963",
@@ -2429,12 +2608,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2464,9 +2641,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:be44d167-98fb-4054-b264-fb3e680d9b2c",
@@ -2479,12 +2661,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2514,9 +2694,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:3d0d8005-def1-4a08-be64-8a591c724a22",
@@ -2529,12 +2714,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2564,9 +2747,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:df504c20-cd0c-4c2e-9676-4240370eccec",
@@ -2579,12 +2767,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2614,9 +2800,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:aad74a4d-e7a7-49f9-ba93-06d48209f3d1",
@@ -2629,12 +2820,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2664,9 +2853,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:bb4cc318-3fd8-4791-a366-91acce695751",
@@ -2679,14 +2873,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2715,9 +2906,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:c27d5255-af7c-405b-8a19-ca552c29e5f4",
@@ -2730,12 +2926,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2765,9 +2959,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:247ef768-ddb9-4f83-b5ce-7d3af1d16d60",
@@ -2780,12 +2979,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2815,9 +3012,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:cb9692fb-e95d-469e-8c2e-146a118628af",
@@ -2830,12 +3032,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -2865,9 +3065,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:989bd239-7181-4a99-b242-8751238023a9",
@@ -2880,14 +3085,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "immunology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2916,9 +3118,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:272fb8c8-de01-47db-ac2a-75b5ff52529a",
@@ -2931,14 +3138,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "immunology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2967,9 +3171,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:68cf6789-dbda-4e2d-9f30-990c1b200792",
@@ -2982,12 +3191,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3017,9 +3224,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:5b918be3-3f47-44f3-9ea6-a6d59ea3a707",
@@ -3032,12 +3244,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3067,9 +3277,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:1d5c9e4b-3518-4108-a79c-f647357b6f47",
@@ -3082,12 +3297,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3117,9 +3330,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:5a8c9b86-cad2-47e1-bcaf-814fea5481fe",
@@ -3132,12 +3350,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3167,9 +3383,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:fc4820d6-a265-4b36-96db-f1eff9d54285",
@@ -3182,12 +3403,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3217,9 +3436,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:ece9ffa0-164c-4c01-8ba2-33d7f0e78878",
@@ -3232,12 +3456,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3267,9 +3489,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:f7e89dca-8e6b-44bc-be94-7374bd2998f0",
@@ -3282,12 +3509,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3317,9 +3542,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e3e34e49-7b37-4eea-b5ce-ce2add88b87c",
@@ -3332,14 +3562,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3368,9 +3595,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:d7a4a578-ffd2-4942-8ee1-a2aefd97ab1c",
@@ -3383,14 +3615,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3419,9 +3648,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:d87811ce-87d9-4913-9d1b-174d53a9303e",
@@ -3434,14 +3668,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3470,9 +3701,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:6c17a828-aaac-483c-802d-c642794b6a56",
@@ -3485,14 +3721,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3521,9 +3754,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:38bfcf80-97cc-4719-989a-2696214f8c29",
@@ -3536,14 +3774,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3572,9 +3807,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:ad9f4c0c-d817-4489-9e65-3536e35e47e4",
@@ -3587,14 +3827,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3623,9 +3860,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:865dc378-03a0-4c28-9df9-1c9adeeedba8",
@@ -3638,14 +3880,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3674,9 +3913,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:f9fbb979-2584-4980-be8c-a13696d45ed1",
@@ -3689,12 +3933,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3724,9 +3966,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:784d6fb9-ae2a-4e29-8a6d-90f4ce784e65",
@@ -3739,14 +3986,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3775,9 +4019,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:81eb4056-86e4-4c06-b281-e70e2e33fe68",
@@ -3790,14 +4039,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3826,9 +4072,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:edc3e57c-05c5-45d5-af72-7d92f7d2714a",
@@ -3841,12 +4092,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3876,9 +4125,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:1af3a7be-a3e1-46ef-a619-3f605a285f54",
@@ -3891,12 +4145,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3926,9 +4178,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:b36b062d-92b7-43f3-895b-bb8fd54c8a0d",
@@ -3941,12 +4198,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -3976,9 +4231,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:19a65cd6-6338-439e-95e3-d15d0f1efc0b",
@@ -3991,12 +4251,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4026,9 +4284,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:fda787ca-bf13-4855-a567-e6afb4e9914e",
@@ -4041,12 +4304,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4076,9 +4337,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:624d0437-1c22-42ef-a3bc-ce8e00aee6a2",
@@ -4091,12 +4357,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4126,9 +4390,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:9bf8851f-21b8-448a-8b44-f5e7d31d4809",
@@ -4141,12 +4410,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4176,9 +4443,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:d7aa4134-3dcf-4130-8596-041af2f3ed5b",
@@ -4191,12 +4463,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4226,9 +4496,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:4f2bda61-b275-409b-8213-6c4c494f3630",
@@ -4241,14 +4516,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "immunology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4277,9 +4549,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:52f0845f-c9cf-42dd-8ab7-61d0a99489f1",
@@ -4292,12 +4569,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4327,9 +4602,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:503491fc-862d-41cf-81e5-9ebe929a30ca",
@@ -4342,12 +4622,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4377,9 +4655,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:a1dff7a6-d6d4-4130-9742-44d8ec39392d",
@@ -4392,12 +4675,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4427,9 +4708,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:85c455a0-af91-4031-829a-355b4dd744b9",
@@ -4442,12 +4728,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4477,9 +4761,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:f116e36e-a926-46af-b970-47a182d2680d",
@@ -4492,114 +4781,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
-        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
-        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
-      ],
-      "scope_changes": [
-        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
-        }
-      ],
-      "annotation_basis": "workflow-family draft",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "DbQA:22ddb8a8-1f09-424b-87ff-20c6b242b586",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MPAMPSSGPGDTSSSAAEREEDRKDGEEQEEPRGKEERQEPSTTARKVGRPGRKRKHPPVESGDTPKDPAVISKSPSMAQDSGASELLPNGDLEKRSEPQPEEGSPAGGQKGGAPAEGEGAAETLPEASRAVENGCCTPKEGRGAPAEAGKEQKETNIESMKMEGSRGRLRGGLGWESSLRQRPMPRLTFQAGDPYYISKRKRDEWLARWKREAEKKAKVIAGMNAVEENQGPGESQKVEEASPPAVQQPTDPASPTVATTPEPVGSDAGDKNATKAGDDEPEYEDGRGFGIGELVWGKLRGFSWWPGRIVSWWMTGRSRAAEGTRWVMWFGDGKFSVVCVEKLMPLSSFCSAFHQATYNKQPMYRKAIYEVLQVASSRAGKLFPVCHDSDESDTAKAVEVQNKPMIEWALGGFQPSGPKGLEPPEEEKNPYKEVYTDMWVEPEAAAYAPPPPAKKPRKSTAEKPKVKEIIDERTRERLVYEVRQKCRNIEDICISCGSLNVTLEHPLFVGGMCQNCKNCFLECAYQYDDDGYQSYCTICCGGREVLMCGNNNCCRCFCVECVDLLVGPGAAQAAIKEDPWNCYMCGHKGTYGLLRRREDWPSRLQMFFANNHDQEFDPPKVYPPVPAEKRKPIRVLSLFDGIATGLLVLKDLGIQVDRYIASEVCEDSITVGMVRHQGKIMYVGDVRSVTQKHIQEWGPFDLVIGGSPCNDLSIVNPARKGLYEGTGRLFFEFYRLLHDARPKEGDDRPFFWLFENVVAMGVSDKRDISRFLESNPVMIDAKEVSAAHRARYFWGNLPGMNRPLASTVNDKLELQECLEHGRIAKFSKVRTITTRSNSIKQGKDQHFPVFMNEKEDILWCTEMERVFGFPVHYTDVSNMSRLARQRLLGRSWSVPVIRHLFAPLKEYFACV</sequence> ",
-      "source_question_kind": "original-question-stem; options not retained",
-      "source_question_sha256": "d5ada9ed6246b18a5d8778b9c997b08c5650a47a7dd2ba402fbb8d4abfdd342a",
-      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
-      "source_group": "",
-      "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query",
-        "variant-consequence"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
-        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
-        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
-      ],
-      "scope_changes": [
-        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
-        }
-      ],
-      "annotation_basis": "workflow-family draft",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "DbQA:53d0ad27-3c83-4baa-95a3-c6930607d3a5",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MPLAFCGSENHSAAYRVDQGVLNNGCFVDALNVVPHVFLLFITFPILFIGWGSQSSKVHIHHSTWLHFPGHNLRWILTFMLLFVLVCEIAEGILSDGVTESHHLHLYMPAGMAFMAAVTSVVYYHNIETSNFPKLLIALLVYWTLAFITKTIKFVKFLDHAIGFSQLRFCLTGLLVILYGMLLLVEVNVIRVRRYIFFKTPREVKPPEDLQDLGVRFLQPFVNLLSKGTYWWMNAFIKTAHKKPIDLRAIGKLPIAMRALTNYQRLCEAFDAQVRKDIQGTQGARAIWQALSHAFGRRLVLSSTFRILADLLGFAGPLCIFGIVDHLGKENDVFQPKTQFLGVYFVSSQEFLANAYVLAVLLFLALLLQRTFLQASYYVAIETGINLRGAIQTKIYNKIMHLSTSNLSMGEMTAGQICNLVAIDTNQLMWFFFLCPNLWAMPVQIIVGVILLYYILGVSALIGAAVIILLAPVQYFVATKLSQAQRSTLEYSNERLKQTNEMLRGIKLLKLYAWENIFRTRVETTRRKEMTSLRAFAIYTSISIFMNTAIPIAAVLITFVGHVSFFKEADFSPSVAFASLSLFHILVTPLFLLSSVVRSTVKALVSVQKLSEFLSSAEIREEQCAPHEPTPQGPASKYQAVPLRVVNRKRPAREDCRGLTGPLQSLVPSADGDADNCCVQIMGGYFTWTPDGIPTLSNITIRIPRGQLTMIVGQVGCGKSSLLLAALGEMQKVSGAVFWSSLPDSEIGEDPSPERETATDLDIRKRGPVAYASQKPWLLNATVEENIIFESPFNKQRYKMVIEACSLQPDIDILPHGDQTQIGERGINLSGGQRQRISVARALYQHANVVFLDDPFSALDIHLSDHLMQAGILELLRDDKRTVVLVTHKLQYLPHADWIIAMKDGTIQREGTLKDFQRSECQLFEHWKTLMNRQDQELEKETVTERKATEPPQGLSRAMSSRDGLLQDEEEEEEEAAESEEDDNLSSMLHQRAEIPWRACAKYLSSAGILLLSLLVFSQLLKHMVLVAIDYWLAKWTDSALTLTPAARNCSLSQECTLDQTVYAMVFTVLCSLGIVLCLVTSVTVEWTGLKVAKRLHRSLLNRIILAPMRFFETTPLGSILNRFSSDCNTIDQHIPSTLECLSRSTLLCVSALAVISYVTPVFLVALLPLAIVCYFIQKYFRVASRDLQQLDDTTQLPLLSHFAETVEGLTTIRAFRYEARFQQKLLEYTDSNNIASLFLTAANRWLEVRMEYIGACVVLIAAVTSISNSLHRELSAGLVGLGLTYALMVSNYLNWMVRNLADMELQLGAVKRIHGLLKTEAESYEGLLAPSLIPKNWPDQGKIQIQNLSVRYDSSLKPVLKHVNALIAPGQKIGICGRTGSGKSSFSLAFFRMVDTFEGHIIIDGIDIAKLPLHTLRSRLSIILQDPVLFSGTIRFNLDPERKCSDSTLWEALEIAQLKLVVKALPGGLDAIITEGGENFSQGQRQLFCLARAFVRKTSIFIMDEATASIDMATENILQKVVMTAFADRTVVTIAHRVHTILSADLVIVLKRGAILEFDKPEKLLSRKDSVFASFVRADK</sequence> ",
-      "source_question_kind": "original-question-stem; options not retained",
-      "source_question_sha256": "1de33476857a739611ad4cadcc294891d2f6d1acc5c9f93229238ad745da398a",
-      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
-      "source_group": "",
-      "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query",
-        "variant-consequence"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -4629,9 +4814,120 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "DbQA:22ddb8a8-1f09-424b-87ff-20c6b242b586",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MPAMPSSGPGDTSSSAAEREEDRKDGEEQEEPRGKEERQEPSTTARKVGRPGRKRKHPPVESGDTPKDPAVISKSPSMAQDSGASELLPNGDLEKRSEPQPEEGSPAGGQKGGAPAEGEGAAETLPEASRAVENGCCTPKEGRGAPAEAGKEQKETNIESMKMEGSRGRLRGGLGWESSLRQRPMPRLTFQAGDPYYISKRKRDEWLARWKREAEKKAKVIAGMNAVEENQGPGESQKVEEASPPAVQQPTDPASPTVATTPEPVGSDAGDKNATKAGDDEPEYEDGRGFGIGELVWGKLRGFSWWPGRIVSWWMTGRSRAAEGTRWVMWFGDGKFSVVCVEKLMPLSSFCSAFHQATYNKQPMYRKAIYEVLQVASSRAGKLFPVCHDSDESDTAKAVEVQNKPMIEWALGGFQPSGPKGLEPPEEEKNPYKEVYTDMWVEPEAAAYAPPPPAKKPRKSTAEKPKVKEIIDERTRERLVYEVRQKCRNIEDICISCGSLNVTLEHPLFVGGMCQNCKNCFLECAYQYDDDGYQSYCTICCGGREVLMCGNNNCCRCFCVECVDLLVGPGAAQAAIKEDPWNCYMCGHKGTYGLLRRREDWPSRLQMFFANNHDQEFDPPKVYPPVPAEKRKPIRVLSLFDGIATGLLVLKDLGIQVDRYIASEVCEDSITVGMVRHQGKIMYVGDVRSVTQKHIQEWGPFDLVIGGSPCNDLSIVNPARKGLYEGTGRLFFEFYRLLHDARPKEGDDRPFFWLFENVVAMGVSDKRDISRFLESNPVMIDAKEVSAAHRARYFWGNLPGMNRPLASTVNDKLELQECLEHGRIAKFSKVRTITTRSNSIKQGKDQHFPVFMNEKEDILWCTEMERVFGFPVHYTDVSNMSRLARQRLLGRSWSVPVIRHLFAPLKEYFACV</sequence> ",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "d5ada9ed6246b18a5d8778b9c997b08c5650a47a7dd2ba402fbb8d4abfdd342a",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "clinical variant evidence",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
+        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
+        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
+      ],
+      "scope_changes": [
+        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "DbQA:53d0ad27-3c83-4baa-95a3-c6930607d3a5",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MPLAFCGSENHSAAYRVDQGVLNNGCFVDALNVVPHVFLLFITFPILFIGWGSQSSKVHIHHSTWLHFPGHNLRWILTFMLLFVLVCEIAEGILSDGVTESHHLHLYMPAGMAFMAAVTSVVYYHNIETSNFPKLLIALLVYWTLAFITKTIKFVKFLDHAIGFSQLRFCLTGLLVILYGMLLLVEVNVIRVRRYIFFKTPREVKPPEDLQDLGVRFLQPFVNLLSKGTYWWMNAFIKTAHKKPIDLRAIGKLPIAMRALTNYQRLCEAFDAQVRKDIQGTQGARAIWQALSHAFGRRLVLSSTFRILADLLGFAGPLCIFGIVDHLGKENDVFQPKTQFLGVYFVSSQEFLANAYVLAVLLFLALLLQRTFLQASYYVAIETGINLRGAIQTKIYNKIMHLSTSNLSMGEMTAGQICNLVAIDTNQLMWFFFLCPNLWAMPVQIIVGVILLYYILGVSALIGAAVIILLAPVQYFVATKLSQAQRSTLEYSNERLKQTNEMLRGIKLLKLYAWENIFRTRVETTRRKEMTSLRAFAIYTSISIFMNTAIPIAAVLITFVGHVSFFKEADFSPSVAFASLSLFHILVTPLFLLSSVVRSTVKALVSVQKLSEFLSSAEIREEQCAPHEPTPQGPASKYQAVPLRVVNRKRPAREDCRGLTGPLQSLVPSADGDADNCCVQIMGGYFTWTPDGIPTLSNITIRIPRGQLTMIVGQVGCGKSSLLLAALGEMQKVSGAVFWSSLPDSEIGEDPSPERETATDLDIRKRGPVAYASQKPWLLNATVEENIIFESPFNKQRYKMVIEACSLQPDIDILPHGDQTQIGERGINLSGGQRQRISVARALYQHANVVFLDDPFSALDIHLSDHLMQAGILELLRDDKRTVVLVTHKLQYLPHADWIIAMKDGTIQREGTLKDFQRSECQLFEHWKTLMNRQDQELEKETVTERKATEPPQGLSRAMSSRDGLLQDEEEEEEEAAESEEDDNLSSMLHQRAEIPWRACAKYLSSAGILLLSLLVFSQLLKHMVLVAIDYWLAKWTDSALTLTPAARNCSLSQECTLDQTVYAMVFTVLCSLGIVLCLVTSVTVEWTGLKVAKRLHRSLLNRIILAPMRFFETTPLGSILNRFSSDCNTIDQHIPSTLECLSRSTLLCVSALAVISYVTPVFLVALLPLAIVCYFIQKYFRVASRDLQQLDDTTQLPLLSHFAETVEGLTTIRAFRYEARFQQKLLEYTDSNNIASLFLTAANRWLEVRMEYIGACVVLIAAVTSISNSLHRELSAGLVGLGLTYALMVSNYLNWMVRNLADMELQLGAVKRIHGLLKTEAESYEGLLAPSLIPKNWPDQGKIQIQNLSVRYDSSLKPVLKHVNALIAPGQKIGICGRTGSGKSSFSLAFFRMVDTFEGHIIIDGIDIAKLPLHTLRSRLSIILQDPVLFSGTIRFNLDPERKCSDSTLWEALEIAQLKLVVKALPGGLDAIITEGGENFSQGQRQLFCLARAFVRKTSIFIMDEATASIDMATENILQKVVMTAFADRTVVTIAHRVHTILSADLVIVLKRGAILEFDKPEKLLSRKDSVFASFVRADK</sequence> ",
+      "source_question_kind": "original-question-stem; options not retained",
+      "source_question_sha256": "1de33476857a739611ad4cadcc294891d2f6d1acc5c9f93229238ad745da398a",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_group": "",
+      "workflow": "clinical variant evidence",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
+        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
+        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
+      ],
+      "scope_changes": [
+        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:95241b62-f8bf-4336-b160-2d51f2491413",
@@ -4644,14 +4940,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4680,9 +4973,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "DbQA:e7ddadc7-576d-477b-b334-5445e1527182",
@@ -4695,14 +4993,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "database-query",
-        "variant-consequence"
+        "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4731,9 +5026,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     }
   ]
 }

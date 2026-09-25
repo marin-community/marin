@@ -11,10 +11,9 @@
       "source_group": "",
       "workflow": "gene set membership",
       "skills": [
-        "evidence-ranking"
+        "database-query"
       ],
       "applications": [
-        "transcriptomics",
         "functional-genomics"
       ],
       "context_tags": [],
@@ -43,9 +42,14 @@
           "id": "portfolio-biomni-eval1-gene-set-membership"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:401",
@@ -58,112 +62,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
-        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
-        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
-      ],
-      "scope_changes": [
-        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
-        }
-      ],
-      "annotation_basis": "workflow-family draft",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "lab_bench_dbqa:190",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is most likely contained in the gene set MP_INCREASED_SMALL_INTESTINE_ADENOCARCINOMA_INCIDENCE, which contains mouse genes annotated to increased small intestine adenocarcinoma incidence (MP:0009309) retrieved from the Mouse Genome Informatics database via MouseMine \nOptions:\nA.Tes\nB.Tnfrsf1a\nC.Insufficient information to answer the question.\nD.Rnf8\nE.Smurf2\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
-      "source_question_kind": "original-question",
-      "source_question_sha256": "4d9f267c7f3b99f34a072739d1cd8fe7b5bcd63a4bb602ceea912f2d0835ff3c",
-      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
-      "source_group": "",
-      "workflow": "gene set membership",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "Set identity overrides neither conflicting collection metadata nor species; resolve those conflicts before authoring.",
-        "Define exact membership versus ontology-descendant membership, synonym ambiguity, duplicate normalization and whether the supplied export is complete for each requested set."
-      ],
-      "scope_changes": [
-        "The source asks for resource membership, not de novo differential expression, enrichment or factorization. The Biomni records span curated mouse phenotype sets and study-derived signatures; one family-level card does not make their biological contexts equivalent."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-gene-set-membership"
-        }
-      ],
-      "annotation_basis": "rule-assisted draft; review required",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "lab_bench_dbqa:309",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MAAPILKDVVAYVEVWSSNGTENYSKTFTTQLVDMGAKVSKTFNKQVTHVIFKDGYQSTWDKAQKRGVKLVSVLWVEKCRTAGAHIDESLFPAANMNEHLSSLIKKKRKCMQPKDFNFKTPENDKRFQKKFEKMAKELQRQKTNLDDDVPILLFESNGSLIYTPTIEINSRHHSAMEKRLQEMKEKRENLSPTSSQMIQQSHDNPSNSLCEAPLNISRDTLCSDEYFAGGLHSSFDDLCGNSGCGNQERKLEGSINDIKSDVCISSLVLKANNIHSSPSFTHLDKSSPQKFLSNLSKEEINLQRNIAGKVVTPDQKQAAGMSQETFEEKYRLSPTLSSTKGHLLIHSRPRSSSVKRKRVSHGSHSPPKEKCKRKRSTRRSIMPRLQLCRSEDRLQHVAGPALEALSCGESSYDDYFSPDNLKERYSENLPPESQLPSSPAQLSCRSLSKKERTSIFEMSDFSCVGKKTRTVDITNFTAKTISSPRKTGNGEGRATSSCVTSAPEEALRCCRQAGKEDACPEGNGFSYTIEDPALPKGHDDDLTPLEGSLEEMKEAVGLKSTQNKGTTSKISNSSEGEAQSEHEPCFIVDCNMETSTEEKENLPGGYSGSVKNRPTRHDVLDDSCDGFKDLIKPHEELKKSGRGKKPTRTLVMTSMPSEKQNVVIQVVDKLKGFSIAPDVCETTTHVLSGKPLRTLNVLLGIARGCWVLSYDWVLWSLELGHWISEEPFELSHHFPAAPLCRSECHLSAGPYRGTLFADQPAMFVSPASSPPVAKLCELVHLCGGRVSQVPRQASIVIGPYSGKKKATVKYLSEKWVLDGVSLCHQAGVCSDEISAHCNLHLLGSSDSSASAFPVAGITGPATMPRFHHPAQGLCP</sequence> \nOptions:\nA.D224G\nB.I264V\nC.A93E\nD.Insufficient information to answer the question.\nE.S496L\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
-      "source_question_kind": "original-question",
-      "source_question_sha256": "8d80403effdf5ae30e98b91316b13f31d9af4df0ee799b1062ffe0b9048677a9",
-      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
-      "source_group": "",
-      "workflow": "clinical variant evidence",
-      "skills": [
-        "variant-consequence",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -193,9 +95,118 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "lab_bench_dbqa:190",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is most likely contained in the gene set MP_INCREASED_SMALL_INTESTINE_ADENOCARCINOMA_INCIDENCE, which contains mouse genes annotated to increased small intestine adenocarcinoma incidence (MP:0009309) retrieved from the Mouse Genome Informatics database via MouseMine \nOptions:\nA.Tes\nB.Tnfrsf1a\nC.Insufficient information to answer the question.\nD.Rnf8\nE.Smurf2\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "4d9f267c7f3b99f34a072739d1cd8fe7b5bcd63a4bb602ceea912f2d0835ff3c",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gene set membership",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Set identity overrides neither conflicting collection metadata nor species; resolve those conflicts before authoring.",
+        "Define exact membership versus ontology-descendant membership, synonym ambiguity, duplicate normalization and whether the supplied export is complete for each requested set."
+      ],
+      "scope_changes": [
+        "The source asks for resource membership, not de novo differential expression, enrichment or factorization. The Biomni records span curated mouse phenotype sets and study-derived signatures; one family-level card does not make their biological contexts equivalent."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gene-set-membership"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "lab_bench_dbqa:309",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MAAPILKDVVAYVEVWSSNGTENYSKTFTTQLVDMGAKVSKTFNKQVTHVIFKDGYQSTWDKAQKRGVKLVSVLWVEKCRTAGAHIDESLFPAANMNEHLSSLIKKKRKCMQPKDFNFKTPENDKRFQKKFEKMAKELQRQKTNLDDDVPILLFESNGSLIYTPTIEINSRHHSAMEKRLQEMKEKRENLSPTSSQMIQQSHDNPSNSLCEAPLNISRDTLCSDEYFAGGLHSSFDDLCGNSGCGNQERKLEGSINDIKSDVCISSLVLKANNIHSSPSFTHLDKSSPQKFLSNLSKEEINLQRNIAGKVVTPDQKQAAGMSQETFEEKYRLSPTLSSTKGHLLIHSRPRSSSVKRKRVSHGSHSPPKEKCKRKRSTRRSIMPRLQLCRSEDRLQHVAGPALEALSCGESSYDDYFSPDNLKERYSENLPPESQLPSSPAQLSCRSLSKKERTSIFEMSDFSCVGKKTRTVDITNFTAKTISSPRKTGNGEGRATSSCVTSAPEEALRCCRQAGKEDACPEGNGFSYTIEDPALPKGHDDDLTPLEGSLEEMKEAVGLKSTQNKGTTSKISNSSEGEAQSEHEPCFIVDCNMETSTEEKENLPGGYSGSVKNRPTRHDVLDDSCDGFKDLIKPHEELKKSGRGKKPTRTLVMTSMPSEKQNVVIQVVDKLKGFSIAPDVCETTTHVLSGKPLRTLNVLLGIARGCWVLSYDWVLWSLELGHWISEEPFELSHHFPAAPLCRSECHLSAGPYRGTLFADQPAMFVSPASSPPVAKLCELVHLCGGRVSQVPRQASIVIGPYSGKKKATVKYLSEKWVLDGVSLCHQAGVCSDEISAHCNLHLLGSSDSSASAFPVAGITGPATMPRFHHPAQGLCP</sequence> \nOptions:\nA.D224G\nB.I264V\nC.A93E\nD.Insufficient information to answer the question.\nE.S496L\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "8d80403effdf5ae30e98b91316b13f31d9af4df0ee799b1062ffe0b9048677a9",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "clinical variant evidence",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
+        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
+        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
+      ],
+      "scope_changes": [
+        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:259",
@@ -208,14 +219,11 @@
       "source_group": "",
       "workflow": "promoter binding query",
       "skills": [
-        "intervals",
-        "protein-structure",
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -242,9 +250,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:105",
@@ -260,7 +273,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics"
+        "rna-biology",
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -288,9 +302,14 @@
           "id": "portfolio-biomni-eval1-mirna-target-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:53",
@@ -306,7 +325,7 @@
         "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -334,9 +353,14 @@
           "id": "portfolio-biomni-eval1-cytoband-gene-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:389",
@@ -349,12 +373,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -384,9 +406,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:1",
@@ -402,8 +429,8 @@
         "database-query"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "genome-variation",
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -431,9 +458,14 @@
           "id": "portfolio-biomni-eval1-disease-database-difference"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:460",
@@ -446,7 +478,7 @@
       "source_group": "",
       "workflow": "gene set membership",
       "skills": [
-        "evidence-ranking"
+        "database-query"
       ],
       "applications": [
         "functional-genomics"
@@ -477,9 +509,14 @@
           "id": "portfolio-biomni-eval1-gene-set-membership"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:505",
@@ -495,7 +532,7 @@
         "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -524,9 +561,14 @@
           "id": "portfolio-biomni-eval1-interaction-database-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:49",
@@ -542,7 +584,7 @@
         "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -570,9 +612,14 @@
           "id": "portfolio-biomni-eval1-cytoband-gene-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:419",
@@ -585,12 +632,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -620,9 +665,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:80",
@@ -638,7 +688,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics"
+        "rna-biology",
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -666,9 +717,14 @@
           "id": "portfolio-biomni-eval1-mirna-target-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:205",
@@ -681,7 +737,7 @@
       "source_group": "",
       "workflow": "gene set membership",
       "skills": [
-        "evidence-ranking"
+        "database-query"
       ],
       "applications": [
         "functional-genomics"
@@ -712,9 +768,14 @@
           "id": "portfolio-biomni-eval1-gene-set-membership"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:34",
@@ -730,8 +791,8 @@
         "database-query"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "genome-variation",
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -759,9 +820,14 @@
           "id": "portfolio-biomni-eval1-disease-database-difference"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:430",
@@ -774,12 +840,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -809,9 +873,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:263",
@@ -824,14 +893,11 @@
       "source_group": "",
       "workflow": "promoter binding query",
       "skills": [
-        "intervals",
-        "protein-structure",
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -858,9 +924,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:427",
@@ -873,12 +944,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -908,9 +977,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:493",
@@ -923,12 +997,10 @@
       "source_group": "",
       "workflow": "interaction database query",
       "skills": [
-        "variant-analysis",
         "database-query"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -957,9 +1029,14 @@
           "id": "portfolio-biomni-eval1-interaction-database-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:366",
@@ -972,14 +1049,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1008,9 +1082,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:91",
@@ -1026,7 +1105,8 @@
         "database-query"
       ],
       "applications": [
-        "transcriptomics"
+        "rna-biology",
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1054,9 +1134,14 @@
           "id": "portfolio-biomni-eval1-mirna-target-query"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:339",
@@ -1069,14 +1154,11 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1105,9 +1187,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:495",
@@ -1123,7 +1210,7 @@
         "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1152,9 +1239,14 @@
           "id": "portfolio-biomni-eval1-interaction-database-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:52",
@@ -1170,7 +1262,7 @@
         "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1198,9 +1290,14 @@
           "id": "portfolio-biomni-eval1-cytoband-gene-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:345",
@@ -1213,12 +1310,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -1248,9 +1343,14 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:264",
@@ -1263,14 +1363,11 @@
       "source_group": "",
       "workflow": "promoter binding query",
       "skills": [
-        "intervals",
-        "protein-structure",
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -1297,9 +1394,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:241",
@@ -1312,14 +1414,11 @@
       "source_group": "",
       "workflow": "promoter binding query",
       "skills": [
-        "intervals",
-        "protein-structure",
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
+        "functional-genomics",
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -1346,9 +1445,14 @@
           "id": "portfolio-biomni-eval1-promoter-binding-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:13",
@@ -1364,8 +1468,8 @@
         "database-query"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "genome-variation",
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1393,9 +1497,14 @@
           "id": "portfolio-biomni-eval1-disease-database-difference"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:315",
@@ -1408,109 +1517,10 @@
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "physiology"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
-        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
-        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
-      ],
-      "scope_changes": [
-        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
-        }
-      ],
-      "annotation_basis": "workflow-family draft",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "lab_bench_dbqa:88",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is a computationally predicted human gene target of the miRNA MIR29B_1_5P according to miRDB v6.0? \nOptions:\nA.ZNF280A\nB.PNISR\nC.ZNF571\nD.B4GALT7\nE.Insufficient information to answer the question.\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
-      "source_question_kind": "original-question",
-      "source_question_sha256": "5c079764ac323875dd30c08dba9845751904c34c90124a4ee355ccf0e0b00b12",
-      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
-      "source_group": "",
-      "workflow": "mirna target query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
-      "context_tags": [],
-      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
-      "outputs": [
-        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
-        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
-        "query_spec.json: population, matching and selection rules"
-      ],
-      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
-      "decisions": [
-        "The four source questions name miRDB v6.0. Freeze version and membership rule; do not introduce a stricter score threshold merely because it seems preferable.",
-        "Preserve mature arms and one-to-many target mappings; document missing identifiers independently of missing predictions."
-      ],
-      "scope_changes": [
-        "Predicted membership is distinct from observed regulation. An observed perturbation/expression task cannot replace these lookup endpoints without retaining the original prediction query and an explicit fidelity assessment."
-      ],
-      "authoring_requirements": [
-        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
-        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
-        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-mirna-target-query"
-        }
-      ],
-      "annotation_basis": "workflow-family draft",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "lab_bench_dbqa:387",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following sequences is most likely to be benign? \nOptions:\nA.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nB.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIRGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nC.MADEKTFWIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nD.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQLYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nE.Insufficient information to answer the question.\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
-      "source_question_kind": "original-question",
-      "source_question_sha256": "98947e9b4a63141ab258d896034d1284d131af5f15038d6faabec05bcaa32426",
-      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
-      "source_group": "",
-      "workflow": "clinical variant evidence",
-      "skills": [
-        "variant-consequence",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
         "clinical"
       ],
       "context_tags": [],
@@ -1540,77 +1550,31 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
-      "task_id": "lab_bench_dbqa:273",
+      "task_id": "lab_bench_dbqa:88",
       "disposition": "reframe",
       "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes has a ZNF282 binding site located within its promoter region (-1000,+100 bp around its TSS) according to the Gene Transcription Regulation Database? \nOptions:\nA.BSG\nB.Insufficient information to answer the question.\nC.TRIM6\nD.S100A6\nE.KIAA0825\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is a computationally predicted human gene target of the miRNA MIR29B_1_5P according to miRDB v6.0? \nOptions:\nA.ZNF280A\nB.PNISR\nC.ZNF571\nD.B4GALT7\nE.Insufficient information to answer the question.\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
       "source_question_kind": "original-question",
-      "source_question_sha256": "196a1dc7e2552c54a194e74407aeac3792923e052e7b54a573c2e5f48059e35d",
+      "source_question_sha256": "5c079764ac323875dd30c08dba9845751904c34c90124a4ee355ccf0e0b00b12",
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
-      "workflow": "promoter binding query",
+      "workflow": "mirna target query",
       "skills": [
-        "intervals",
-        "protein-structure",
         "database-query"
       ],
       "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "biological-knowledge"
-      ],
-      "context_tags": [],
-      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
-      "outputs": [
-        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
-        "selection.tsv: candidate eligibility, scores, ranks and ties"
-      ],
-      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
-      "decisions": [
-        "The seven source questions specify -1000,+100 around TSS. Freeze whether endpoints are inclusive, BED conversion, chromosome clipping and transcript selection.",
-        "Select the GTRD release and actual track type; a motif match, individual peak and merged cluster are distinct evidence.",
-        "Do not silently substitute a new live annotation or guess a factor from an ambiguous symbol."
-      ],
-      "scope_changes": [
-        "A recorded promoter overlap is not proof of regulation or a condition-specific effect. GTRD track schemas and permitted independent inputs still need inspection; the original review covers seven Biomni stems and the additional schema audit covers forty LAB-Bench stems; biological records remain uninspected."
-      ],
-      "authoring_requirements": [
-        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
-        "Keep measured assay comparisons separate from geometry-only predictions."
-      ],
-      "review_sources": [
-        {
-          "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-promoter-binding-query"
-        }
-      ],
-      "annotation_basis": "rule-assisted draft; review required",
-      "existing_mapping_status": "unmapped",
-      "recipes": []
-    },
-    {
-      "task_id": "lab_bench_dbqa:166",
-      "disposition": "reframe",
-      "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is most likely contained in the gene set MP_INCREASED_MELANOMA_INCIDENCE, which contains mouse genes annotated to increased melanoma incidence (MP:0010275) retrieved from the Mouse Genome Informatics database via MouseMine \nOptions:\nA.Pgr\nB.Insufficient information to answer the question.\nC.Cav2\nD.Cd1d1\nE.Braf\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
-      "source_question_kind": "original-question",
-      "source_question_sha256": "76cd6539d9183e1f8ef1bffc6d950eb7670761a478aa52f9c39aaace3e939aa5",
-      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
-      "source_group": "",
-      "workflow": "gene set membership",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "rna-biology",
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1621,11 +1585,11 @@
       ],
       "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
       "decisions": [
-        "Set identity overrides neither conflicting collection metadata nor species; resolve those conflicts before authoring.",
-        "Define exact membership versus ontology-descendant membership, synonym ambiguity, duplicate normalization and whether the supplied export is complete for each requested set."
+        "The four source questions name miRDB v6.0. Freeze version and membership rule; do not introduce a stricter score threshold merely because it seems preferable.",
+        "Preserve mature arms and one-to-many target mappings; document missing identifiers independently of missing predictions."
       ],
       "scope_changes": [
-        "The source asks for resource membership, not de novo differential expression, enrichment or factorization. The Biomni records span curated mouse phenotype sets and study-derived signatures; one family-level card does not make their biological contexts equivalent."
+        "Predicted membership is distinct from observed regulation. An observed perturbation/expression task cannot replace these lookup endpoints without retaining the original prediction query and an explicit fidelity assessment."
       ],
       "authoring_requirements": [
         "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
@@ -1635,32 +1599,34 @@
       "review_sources": [
         {
           "path": "workflow_designs/biomni-eval1.json",
-          "id": "portfolio-biomni-eval1-gene-set-membership"
+          "id": "portfolio-biomni-eval1-mirna-target-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
-      "task_id": "lab_bench_dbqa:328",
+      "task_id": "lab_bench_dbqa:387",
       "disposition": "reframe",
       "reason": "",
-      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MIVFVRFNSSHGFPVEVDSDTSIFQLKEVVAKRQGVPADQLRVIFAGKELRNDWTVQNCDLDQQSIVHIVQRPWRKGQEMNATGGDDPRNAAGGCEREPQSLTRVDLSSSVLPGDSVGLAVILHTDSRKDSPPAGSPAGRSIYNSFYVYCKGPCQRVQPGKLRVQCSTCRQATLTLTQGPSCWDDVLIPNRMSGECQSPHCPGTSAEFFFKCGAHPTSDKETSVALHLIATNSRNITCITCTDVRSPVLVFQCNSRHVICLDCFHLYCVTRLNDRQFVHDPQLGYSLPCVAGCPNSLIKELHHFRILGEEQYNRYQQYGAEECVLQMGGVLCPRPGCGAGLLPEPDQRKVTCEGGNGLGCGFAFCRECKEAYHEGECSAVFEASGTTTQAYRVDERAAEQARWEAASKETIKKTTKPCPRCHVPVEKNGGCMHMKCPQPQCRLEWCWNCGCEWNRVCMGDHWFDV</sequence> \nOptions:\nA.V56E\nB.Q34R\nC.Insufficient information to answer the question.\nD.A46T\nE.V380L\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following sequences is most likely to be benign? \nOptions:\nA.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nB.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIRGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nC.MADEKTFWIGFIVLGLFLLALGTFLMSHDRPQVYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nD.MADEKTFRIGFIVLGLFLLALGTFLMSHDRPQLYGTFYAMGSVMVIGGIIWSMCQCYPKITFVPADSDFQGILSPKAMGLLENGLAAEMKSPSPQPPYVRLWEEAAYDQSLPDFSHIQMKVMSYSEDHRSLLAPEMGQPKLGTSDGGEGGPGDVQAWMEAAVVIHKGSDESEGERRLTQSWPGPLACPQGPAPLASFQDDLDMDSSEGSSPNASPHDREEACSPQQEPQGCRCPLDRFQDFALIDAPTLEDEPQEGQQWEIALPNNWQRYPRTKVEEKEASDTGGEEPEKEEEDLYYGLPDGAGDLLPDKELGFEPDTQG\nE.Insufficient information to answer the question.\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
       "source_question_kind": "original-question",
-      "source_question_sha256": "a6bb71d771e6743a911074093427b08b5893a97f2202e0b2d44b145e32a4636c",
+      "source_question_sha256": "98947e9b4a63141ab258d896034d1284d131af5f15038d6faabec05bcaa32426",
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
       "skills": [
-        "variant-consequence",
         "database-query"
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "clinical",
-        "immunology"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1689,9 +1655,169 @@
           "id": "portfolio-biomni-eval1-clinical-variant-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "lab_bench_dbqa:273",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes has a ZNF282 binding site located within its promoter region (-1000,+100 bp around its TSS) according to the Gene Transcription Regulation Database? \nOptions:\nA.BSG\nB.Insufficient information to answer the question.\nC.TRIM6\nD.S100A6\nE.KIAA0825\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "196a1dc7e2552c54a194e74407aeac3792923e052e7b54a573c2e5f48059e35d",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "promoter binding query",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
+      "outputs": [
+        "measurements.tsv: structure/compound ID, atom/residue or feature identity, value and units",
+        "selection.tsv: candidate eligibility, scores, ranks and ties"
+      ],
+      "verification": "Use native structure or chemistry parsers to recompute descriptors, atom/residue correspondence and geometric constraints. For rankings freeze the scoring function; structure scores are not experimental affinity evidence.",
+      "decisions": [
+        "The seven source questions specify -1000,+100 around TSS. Freeze whether endpoints are inclusive, BED conversion, chromosome clipping and transcript selection.",
+        "Select the GTRD release and actual track type; a motif match, individual peak and merged cluster are distinct evidence.",
+        "Do not silently substitute a new live annotation or guess a factor from an ambiguous symbol."
+      ],
+      "scope_changes": [
+        "A recorded promoter overlap is not proof of regulation or a condition-specific effect. GTRD track schemas and permitted independent inputs still need inspection; the original review covers seven Biomni stems and the additional schema audit covers forty LAB-Bench stems; biological records remain uninspected."
+      ],
+      "authoring_requirements": [
+        "Declare alternate conformers, missing atoms, protonation, stereochemistry and units as relevant.",
+        "Keep measured assay comparisons separate from geometry-only predictions."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-promoter-binding-query"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "lab_bench_dbqa:166",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: Which of the following genes is most likely contained in the gene set MP_INCREASED_MELANOMA_INCIDENCE, which contains mouse genes annotated to increased melanoma incidence (MP:0010275) retrieved from the Mouse Genome Informatics database via MouseMine \nOptions:\nA.Pgr\nB.Insufficient information to answer the question.\nC.Cav2\nD.Cd1d1\nE.Braf\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "76cd6539d9183e1f8ef1bffc6d950eb7670761a478aa52f9c39aaace3e939aa5",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "gene set membership",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "functional-genomics"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Set identity overrides neither conflicting collection metadata nor species; resolve those conflicts before authoring.",
+        "Define exact membership versus ontology-descendant membership, synonym ambiguity, duplicate normalization and whether the supplied export is complete for each requested set."
+      ],
+      "scope_changes": [
+        "The source asks for resource membership, not de novo differential expression, enrichment or factorization. The Biomni records span curated mouse phenotype sets and study-derived signatures; one family-level card does not make their biological contexts equivalent."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-gene-set-membership"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
+    },
+    {
+      "task_id": "lab_bench_dbqa:328",
+      "disposition": "reframe",
+      "reason": "",
+      "source_question": "The following is a multiple choice question about biology.\nPlease answer by responding with the letter of the correct answer.\n\nQuestion: According to ClinVar, which of the following variants to the following sequence (bracketed by xml tags) is most likely to be pathogenic? <sequence>MIVFVRFNSSHGFPVEVDSDTSIFQLKEVVAKRQGVPADQLRVIFAGKELRNDWTVQNCDLDQQSIVHIVQRPWRKGQEMNATGGDDPRNAAGGCEREPQSLTRVDLSSSVLPGDSVGLAVILHTDSRKDSPPAGSPAGRSIYNSFYVYCKGPCQRVQPGKLRVQCSTCRQATLTLTQGPSCWDDVLIPNRMSGECQSPHCPGTSAEFFFKCGAHPTSDKETSVALHLIATNSRNITCITCTDVRSPVLVFQCNSRHVICLDCFHLYCVTRLNDRQFVHDPQLGYSLPCVAGCPNSLIKELHHFRILGEEQYNRYQQYGAEECVLQMGGVLCPRPGCGAGLLPEPDQRKVTCEGGNGLGCGFAFCRECKEAYHEGECSAVFEASGTTTQAYRVDERAAEQARWEAASKETIKKTTKPCPRCHVPVEKNGGCMHMKCPQPQCRLEWCWNCGCEWNRVCMGDHWFDV</sequence> \nOptions:\nA.V56E\nB.Q34R\nC.Insufficient information to answer the question.\nD.A46T\nE.V380L\n\nYou MUST include the letter of the correct answer within the following tags:\n[ANSWER] and [/ANSWER]. For example, '[ANSWER]<answer>[/ANSWER]',\nwhere <answer> is the correct letter. Always answer in exactly this format\nof a single letter between the two tags, even if you are unsure.\nWe require this because we use automatic parsing.\n            ",
+      "source_question_kind": "original-question",
+      "source_question_sha256": "a6bb71d771e6743a911074093427b08b5893a97f2202e0b2d44b145e32a4636c",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "source_group": "",
+      "workflow": "clinical variant evidence",
+      "skills": [
+        "database-query"
+      ],
+      "applications": [
+        "genome-variation",
+        "clinical"
+      ],
+      "context_tags": [],
+      "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
+      "outputs": [
+        "answer.tsv or answer.json: complete requested identifiers, values and decisions",
+        "evidence.tsv: query/result ID, source release, record or page/table location and extracted field",
+        "query_spec.json: population, matching and selection rules"
+      ],
+      "verification": "Resolve identities and recompute the query or declared ranking from the supplied database snapshots or an independently checked extraction manifest. Compare the complete expected result set, units and evidence locations. Free-form entailment or the quality of prose is not scored.",
+      "decisions": [
+        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
+        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
+        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
+      ],
+      "scope_changes": [
+        "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs."
+      ],
+      "authoring_requirements": [
+        "Freeze source versions, candidate universe and unavailable/ambiguous-result handling.",
+        "A ranked evidence score does not establish biological causality or a clinical diagnosis.",
+        "Where source retrieval is part of the workflow, preserve retrieval over the pinned collection."
+      ],
+      "review_sources": [
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "id": "portfolio-biomni-eval1-clinical-variant-evidence"
+        }
+      ],
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
+      "existing_mapping_status": "unmapped",
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:514",
@@ -1707,8 +1833,7 @@
         "database-query"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1737,9 +1862,14 @@
           "id": "portfolio-biomni-eval1-interaction-database-query"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "lab_bench_dbqa:134",
@@ -1752,13 +1882,10 @@
       "source_group": "",
       "workflow": "gene set membership",
       "skills": [
-        "database-query",
-        "evidence-ranking"
+        "database-query"
       ],
       "applications": [
-        "genome-sequence",
-        "functional-genomics",
-        "biological-knowledge"
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1786,9 +1913,14 @@
           "id": "portfolio-biomni-eval1-gene-set-membership"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
+      }
     },
     {
       "task_id": "gwas_causal_gene_opentargets:767",

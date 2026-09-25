@@ -290,9 +290,7 @@
         "statistics",
         "visualization"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -428,8 +426,7 @@
         "statistics"
       ],
       "applications": [
-        "bioimaging",
-        "biological-knowledge"
+        "bioimaging"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -473,9 +470,7 @@
       "skills": [
         "visualization"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -565,8 +560,7 @@
         "statistics"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -745,9 +739,7 @@
       "skills": [
         "statistics"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -790,9 +782,7 @@
       "skills": [
         "statistics"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -932,9 +922,7 @@
         "model-evaluation",
         "network"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -977,9 +965,7 @@
       "skills": [
         "statistics"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1071,9 +1057,7 @@
       "skills": [
         "data-management"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [

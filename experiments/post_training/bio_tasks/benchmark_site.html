@@ -10,7 +10,7 @@
 </head>
 <body>
 <nav class="site-links" aria-label="Benchmark site">
-<a data-route="statistics">Categories</a><a data-route="benchmarks">Benchmarks</a><a data-route="sources">Sources</a>
+<a data-route="statistics">Categories</a><a data-route="benchmarks">Benchmarks</a>
 </nav>
 <main>
 <noscript>This site needs JavaScript to display its embedded benchmark inventories.</noscript>
@@ -24,28 +24,13 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp
 const link = (path, label) => `<a href="${esc(D.github + path)}">${esc(label)}</a>`;
 function tab(id) { document.querySelectorAll('.tab').forEach(section => section.classList.toggle('hidden', section.id !== id)); }
 __BENCHMARK_PAGES__
-function renderSourceRegister() {
-  el('benchmark-page').innerHTML = `<h2 tabindex="-1">Benchmark sources</h2><p>ID sources inform the category review. OOD sources retain their exclusions; their question content is not imported.</p>
-    <div class="toolbar"><label for="source-filter">Distribution</label><select id="source-filter"><option value="all">All sources</option><option value="ID">Provisional ID</option><option value="OOD">OOD · excluded</option></select></div>
-    <div id="source-table" class="table-scroll"></div>`;
-  const render = () => {
-    const filter = el('source-filter').value;
-    const sources = D.benchmarks.filter(source => filter === 'all' || source.distribution === filter);
-    el('source-table').innerHTML = `<table><thead><tr><th>Benchmark release</th><th>Distribution</th><th>Source access</th></tr></thead><tbody>${sources.map(source => `<tr><td><a href="${benchmarkHref(source.id)}">${esc(source.name)}</a><br><a href="${esc(source.source_url)}">Original source</a></td><td>${esc(source.distribution)}</td><td>${esc(source.inspection)}</td></tr>`).join('')}</tbody></table>`;
-  };
-  el('source-filter').onchange = render;
-  render();
-  tab('benchmark-page');
-  document.title = 'Sources · Biology benchmarks';
-}
 function routePage() {
   let parts;
   try { parts = location.hash.slice(1).split('/').map(decodeURIComponent); }
   catch { showPageError('The page link contains an invalid identifier.'); return; }
   if (!parts[0]) parts[0] = 'statistics';
   const kind = parts[0];
-  if (kind === 'sources') renderSourceRegister();
-  else if (['statistics', 'benchmarks', 'benchmark', 'question'].includes(kind)) renderBenchmarkRoute(parts);
+  if (['statistics', 'benchmarks', 'benchmark', 'question'].includes(kind)) renderBenchmarkRoute(parts);
   else { showPageError('This page is not available.'); return; }
   const selected = ['benchmark', 'question'].includes(kind) ? 'benchmarks' : kind;
   document.querySelectorAll('.site-links a').forEach(anchor => {

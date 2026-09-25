@@ -11,11 +11,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -43,9 +42,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-001",
@@ -58,11 +62,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -90,9 +93,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-002",
@@ -105,11 +113,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -137,9 +144,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-003",
@@ -152,11 +164,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -184,9 +195,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-004",
@@ -199,11 +215,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -231,9 +246,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-005",
@@ -246,11 +266,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -278,9 +297,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-006",
@@ -293,11 +317,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -325,9 +348,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-007",
@@ -340,11 +368,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -372,9 +399,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-008",
@@ -387,11 +419,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -419,9 +450,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-009",
@@ -434,11 +470,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -466,9 +501,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-010",
@@ -482,11 +522,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -513,9 +552,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-011",
@@ -529,11 +573,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -560,9 +603,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-012",
@@ -576,11 +624,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -607,9 +654,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-013",
@@ -623,11 +675,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -654,9 +705,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-014",
@@ -670,11 +726,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -701,9 +756,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-015",
@@ -717,11 +777,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -748,9 +807,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-016",
@@ -764,11 +828,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -795,9 +858,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-017",
@@ -811,11 +879,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -842,9 +909,14 @@
           "id": "portfolio-biokgbench-protein-cellular-localization-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-018",
@@ -858,11 +930,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -889,9 +960,14 @@
           "id": "portfolio-biokgbench-protein-cellular-localization-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-dev-019",
@@ -905,11 +981,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -936,9 +1011,14 @@
           "id": "portfolio-biokgbench-protein-cellular-localization-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-000",
@@ -951,11 +1031,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -983,9 +1062,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-001",
@@ -998,11 +1082,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1030,9 +1113,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-002",
@@ -1045,11 +1133,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1077,9 +1164,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-003",
@@ -1092,11 +1184,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1124,9 +1215,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-004",
@@ -1139,11 +1235,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1171,9 +1266,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-005",
@@ -1186,11 +1286,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1218,9 +1317,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-006",
@@ -1233,11 +1337,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1265,9 +1368,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-007",
@@ -1280,11 +1388,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1312,9 +1419,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-008",
@@ -1327,11 +1439,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1359,9 +1470,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-009",
@@ -1374,11 +1490,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1406,9 +1521,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-010",
@@ -1421,11 +1541,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1453,9 +1572,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-011",
@@ -1468,11 +1592,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1500,9 +1623,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-012",
@@ -1515,11 +1643,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1547,9 +1674,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-013",
@@ -1562,11 +1694,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1594,9 +1725,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-014",
@@ -1609,11 +1745,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1641,9 +1776,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-015",
@@ -1656,11 +1796,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1688,9 +1827,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-016",
@@ -1703,11 +1847,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1735,9 +1878,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-017",
@@ -1750,11 +1898,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1782,9 +1929,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-018",
@@ -1797,11 +1949,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1829,9 +1980,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-019",
@@ -1844,11 +2000,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1876,9 +2031,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-020",
@@ -1891,11 +2051,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1923,9 +2082,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-021",
@@ -1938,11 +2102,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -1970,9 +2133,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-022",
@@ -1985,11 +2153,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2017,9 +2184,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-023",
@@ -2032,11 +2204,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2064,9 +2235,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-024",
@@ -2079,11 +2255,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2111,9 +2286,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-025",
@@ -2126,11 +2306,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2158,9 +2337,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-026",
@@ -2173,11 +2357,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2205,9 +2388,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-027",
@@ -2220,11 +2408,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2252,9 +2439,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-028",
@@ -2267,11 +2459,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2299,9 +2490,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-029",
@@ -2314,11 +2510,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2346,9 +2541,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-030",
@@ -2361,11 +2561,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2393,9 +2592,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-031",
@@ -2408,11 +2612,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2440,9 +2643,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-032",
@@ -2455,11 +2663,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2487,9 +2694,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-033",
@@ -2502,11 +2714,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2534,9 +2745,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-034",
@@ -2549,11 +2765,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2581,9 +2796,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-035",
@@ -2596,11 +2816,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2628,9 +2847,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-036",
@@ -2643,11 +2867,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2675,9 +2898,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-037",
@@ -2690,11 +2918,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2722,9 +2949,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-038",
@@ -2737,11 +2969,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2769,9 +3000,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-039",
@@ -2784,11 +3020,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2816,9 +3051,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-040",
@@ -2831,11 +3071,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2863,9 +3102,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-041",
@@ -2878,11 +3122,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2910,9 +3153,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-042",
@@ -2925,11 +3173,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2957,9 +3204,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-043",
@@ -2972,11 +3224,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3004,9 +3255,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-044",
@@ -3019,11 +3275,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3051,9 +3306,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-045",
@@ -3066,11 +3326,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3098,9 +3357,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-046",
@@ -3113,11 +3377,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3145,9 +3408,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-047",
@@ -3160,11 +3428,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3192,9 +3459,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-048",
@@ -3207,11 +3479,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3239,9 +3510,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-049",
@@ -3254,11 +3530,10 @@
       "source_group": "",
       "workflow": "protein attribute reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3286,9 +3561,14 @@
           "id": "portfolio-biokgbench-protein-attribute-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-050",
@@ -3301,11 +3581,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3333,9 +3612,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-051",
@@ -3348,11 +3632,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3380,9 +3663,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-052",
@@ -3395,11 +3683,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3427,9 +3714,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-053",
@@ -3442,11 +3734,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3474,9 +3765,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-054",
@@ -3489,11 +3785,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3521,9 +3816,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-055",
@@ -3536,11 +3836,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3568,9 +3867,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-056",
@@ -3583,11 +3887,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3615,9 +3918,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-057",
@@ -3630,11 +3938,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3662,9 +3969,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-058",
@@ -3677,11 +3989,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3709,9 +4020,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-059",
@@ -3724,11 +4040,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3756,9 +4071,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-060",
@@ -3771,11 +4091,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3803,9 +4122,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-061",
@@ -3818,11 +4142,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3850,9 +4173,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-062",
@@ -3865,11 +4193,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3897,9 +4224,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-063",
@@ -3912,11 +4244,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3944,9 +4275,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-064",
@@ -3959,11 +4295,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3991,9 +4326,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-065",
@@ -4006,11 +4346,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4038,9 +4377,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-066",
@@ -4053,11 +4397,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4085,9 +4428,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-067",
@@ -4100,11 +4448,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4132,9 +4479,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-068",
@@ -4147,11 +4499,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4179,9 +4530,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-069",
@@ -4194,11 +4550,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4226,9 +4581,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-070",
@@ -4241,11 +4601,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4273,9 +4632,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-071",
@@ -4288,11 +4652,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4320,9 +4683,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-072",
@@ -4335,11 +4703,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4367,9 +4734,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-073",
@@ -4382,11 +4754,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4414,9 +4785,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-074",
@@ -4429,11 +4805,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4461,9 +4836,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-075",
@@ -4476,11 +4856,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4508,9 +4887,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-076",
@@ -4523,11 +4907,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4555,9 +4938,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-077",
@@ -4570,11 +4958,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4602,9 +4989,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-078",
@@ -4617,11 +5009,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4649,9 +5040,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-079",
@@ -4664,11 +5060,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4696,9 +5091,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-080",
@@ -4711,11 +5111,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4743,9 +5142,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-081",
@@ -4758,11 +5162,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4790,9 +5193,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-082",
@@ -4805,11 +5213,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4837,9 +5244,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-083",
@@ -4852,11 +5264,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4884,9 +5295,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-084",
@@ -4899,11 +5315,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4931,9 +5346,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-085",
@@ -4946,11 +5366,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4978,9 +5397,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-086",
@@ -4993,11 +5417,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5025,9 +5448,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-087",
@@ -5040,11 +5468,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5072,9 +5499,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-088",
@@ -5087,11 +5519,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5119,9 +5550,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-089",
@@ -5134,11 +5570,10 @@
       "source_group": "",
       "workflow": "database entry reconciliation",
       "skills": [
-        "database-query",
-        "evidence-extraction"
+        "database-query"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5166,9 +5601,14 @@
           "id": "portfolio-biokgbench-database-entry-reconciliation"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-090",
@@ -5182,11 +5622,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5213,9 +5652,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-091",
@@ -5229,11 +5673,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5260,9 +5703,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-092",
@@ -5276,11 +5724,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5307,9 +5754,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-093",
@@ -5323,11 +5775,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5354,9 +5805,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     },
     {
       "task_id": "kgcheck-test-094",
@@ -5370,11 +5826,10 @@
       "workflow": "directed relation evidence",
       "skills": [
         "database-query",
-        "evidence-extraction",
-        "network"
+        "evidence-extraction"
       ],
       "applications": [
-        "biological-knowledge"
+        "protein-function"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -5401,9 +5856,14 @@
           "id": "portfolio-biokgbench-protein-interaction-evidence"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
+      }
     }
   ]
 }

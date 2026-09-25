@@ -223,8 +223,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",

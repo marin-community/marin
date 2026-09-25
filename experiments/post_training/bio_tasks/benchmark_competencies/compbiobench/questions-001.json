@@ -15,8 +15,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -251,8 +250,7 @@
       ],
       "applications": [
         "genome-variation",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -346,8 +344,7 @@
       "applications": [
         "genome-variation",
         "genome-sequence",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -627,8 +624,7 @@
       ],
       "applications": [
         "genome-variation",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -916,8 +912,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1199,8 +1194,7 @@
         "data-management"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -1626,8 +1620,7 @@
         "data-management"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -2194,8 +2187,7 @@
         "data-management"
       ],
       "applications": [
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -2293,8 +2285,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -2626,8 +2617,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [
         "single-cell"
@@ -3007,9 +2997,7 @@
       "skills": [
         "model-inspection"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3284,8 +3272,7 @@
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4042,8 +4029,7 @@
       "applications": [
         "genome-variation",
         "genome-sequence",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -4182,8 +4168,7 @@
       ],
       "applications": [
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -4323,8 +4308,7 @@
       ],
       "applications": [
         "genome-variation",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -4368,9 +4352,7 @@
       "skills": [
         "model-inspection"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4646,8 +4628,7 @@
       "applications": [
         "transcriptomics",
         "genome-sequence",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -4693,8 +4674,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-variation",
-        "biological-knowledge"
+        "genome-variation"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",

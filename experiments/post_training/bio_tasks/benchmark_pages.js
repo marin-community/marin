@@ -23,6 +23,7 @@ function renderGlobalStatistics(facet = 'skills', categoryId = '') {
   const statistics = D.category_statistics;
   const counts = statistics.facets[facet];
   const selected = categoryId ? counts.find(row => row.id === categoryId) : null;
+  const definition = categoryId ? D.review_taxonomy[facet].find(row => row.id === categoryId) : null;
   if (categoryId && !selected) { showPageError('Unknown category.'); return; }
   const total = statistics.eligible_records;
   const max = Math.max(1, ...counts.map(row => row.count));
@@ -31,12 +32,15 @@ function renderGlobalStatistics(facet = 'skills', categoryId = '') {
     <h2 tabindex="-1">${selected ? esc(selected.name) : 'Categories across ID benchmarks'}</h2>
     <p>${total.toLocaleString()} candidate verifiable records · ${statistics.inventoried_releases} inventoried ID releases. Each record counts once per assigned category; categories overlap.</p>
     <p class="reference-note">Provisional annotations. Raw counts include overlapping releases and repeated protocols; they measure requirements, not validated tasks or independent scientific demand.</p>
+    ${facet === 'applications' ? `<p class="reference-note">${statistics.unresolved_applications} eligible records have no resolved application and remain in the denominator.</p>` : ''}
     ${selected ? `<p><strong>${selected.count.toLocaleString()}</strong> records (${pct(selected.count)} of eligible records) across <strong>${selected.benchmarks}</strong> ID releases.</p>
+      <p>${esc(definition.outcome || definition.scope)}</p>${definition.include ? `<p><strong>Include:</strong> ${esc(definition.include)}</p><p><strong>Exclude:</strong> ${esc(definition.exclude)}</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>Benchmark</th><th>Records with category</th><th>Eligible records</th><th>Within-benchmark share</th></tr></thead><tbody>${selected.sources.map(source => `<tr><td><a href="${benchmarkHref(source.benchmark)}">${esc(source.benchmark)}</a></td><td>${source.count}</td><td>${source.eligible}</td><td>${(100 * source.count / source.eligible).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` :
       `<div class="toolbar"><label for="global-facet">Categories</label><select id="global-facet"><option value="skills" ${facet === 'skills' ? 'selected' : ''}>Analytical skills</option><option value="applications" ${facet === 'applications' ? 'selected' : ''}>Biological applications</option></select>
         <label for="global-category-search">Search</label><input id="global-category-search" type="search"></div>
       <p class="reference-note">Ranked by question-record count. Select a category to inspect its benchmark contributions.</p><div id="global-category-table" class="table-scroll"></div>`}
     <details class="set-aside"><summary>${statistics.missing_inventories.length} ID sources without task inventories</summary><p>These sources are absent from the numerical denominator. Their unknown counts are not evidence of zero demand.</p>${listItems(statistics.missing_inventories)}</details>
+    <details><summary>Assignment rules and review scope</summary>${listItems(D.review_taxonomy.annotation_policy)}<p>${statistics.operation_reviewed_records.toLocaleString()} records have a source-protocol or output-contract review of operation boundaries. This does not certify individual verifier feasibility. Other assignments remain first-pass drafts.</p></details>
     <p class="reference-note">${link('docs/experiments/bio-benchmark-categories.md', 'Rankings as Markdown')}</p>`;
   if (!selected) {
     el('global-facet').onchange = () => { location.hash = 'statistics/' + el('global-facet').value; };
@@ -60,7 +64,7 @@ function renderBenchmarkDirectory() {
     <p>Many assignments are rule-assisted drafts. The question page identifies their basis and preserves the original instruction for correction. A proposed verifier does not establish that the whole source question is already solved or validated.</p></details>
     <div class="toolbar"><label for="benchmark-search">Search benchmarks</label><input id="benchmark-search" type="search"></div>
     <div id="benchmark-list" class="table-scroll"></div>
-    <p class="reference-note"><a href="${routeHref('sources')}">Source register including OOD exclusions</a></p>`;
+    <details class="set-aside"><summary>OOD benchmarks · excluded</summary><p>Their question content is not used for category assignments.</p><ul>${D.benchmarks.filter(b => b.distribution === 'OOD').map(b => `<li><a href="${benchmarkHref(b.id)}">${esc(b.name)}</a></li>`).join('')}</ul></details>`;
   const render = () => {
     const query = el('benchmark-search').value.toLowerCase().trim();
     el('benchmark-list').innerHTML = `<table><thead><tr><th>Benchmark</th><th>Proposed</th><th>Set aside</th><th>Missing instructions</th></tr></thead><tbody>${benchmarks.filter(b => b.name.toLowerCase().includes(query)).map(b => {
@@ -100,7 +104,7 @@ function renderBenchmark(benchmark) {
       <p id="question-count" class="reference-note" aria-live="polite"></p><div id="question-table" class="table-scroll"></div>` : ''}
     ${excluded.length ? `<details class="set-aside"><summary>${excluded.length} questions set aside</summary><p>No faithful executable framing established. No skill labels or frequency credit.</p>${asideTable(benchmark, excluded)}</details>` : ''}
     ${unavailable.length ? `<details class="set-aside"><summary>${unavailable.length} original instructions unavailable</summary>${asideTable(benchmark, unavailable)}</details>` : ''}
-    ${benchmark.review ? `<details class="set-aside"><summary>Review method and counting</summary><p>${esc(benchmark.review.method)}</p><p>${esc(benchmark.review.counting)}</p><p>Shared instructions are labeled explicitly. A source record can be a question, dataset instance or protocol; it is not necessarily an independent workflow.</p></details>` : ''}`;
+    ${benchmark.review ? `<details class="set-aside"><summary>Source, review method and counting</summary><p>${esc(benchmark.inspection)}</p><p>${esc(benchmark.review.method)}</p><p>${esc(benchmark.review.counting)}</p><p>Shared instructions are labeled explicitly. A source record can be a question, dataset instance or protocol; it is not necessarily an independent workflow.</p></details>` : ''}`;
   if (benchmark.review) {
     el('facet-select').onchange = () => { renderFacetBars(benchmark); renderQuestionTable(benchmark); };
     el('question-search').oninput = () => renderQuestionTable(benchmark);
@@ -145,7 +149,7 @@ function renderQuestionTable(benchmark) {
   el('question-table').innerHTML = `<table><thead><tr><th>Question</th><th>Analytical skills</th><th>Applications</th></tr></thead><tbody>${questions.map(question =>
     `<tr><td><a href="${questionHref(benchmark.id, question.id)}">${esc(question.id)}</a><br>${esc(questionTitle(question))}</td>
     <td>${question.annotation.skills.map(id => esc(skillById.get(id).name)).join('<br>')}</td>
-    <td>${question.annotation.applications.map(id => esc(applicationById.get(id).name)).join('<br>')}</td></tr>`).join('')}</tbody></table>`;
+    <td>${question.annotation.applications.map(id => esc(applicationById.get(id).name)).join('<br>') || 'Application not resolved'}</td></tr>`).join('')}</tbody></table>`;
 }
 
 function renderQuestion(benchmark, question) {
@@ -162,8 +166,9 @@ function renderQuestion(benchmark, question) {
     ${included ? `<h3>Proposed verifiable framing</h3><p>${esc(a.reframed_question)}</p>
       ${a.scope_changes.length ? `<div class="scope-note"><h4>Scope of the adaptation</h4>${listItems(a.scope_changes)}</div>` : ''}
       <h3>Analytical skills</h3><p class="reference-note">${esc(a.annotation_basis)} · Required operations, not demonstrated competence.</p>
-      <div class="competency-cards">${a.skills.map(id => {const skill = skillById.get(id);return `<div class="competency-card"><h4>${esc(skill.name)}</h4><p>${esc(skill.outcome)}</p></div>`;}).join('')}</div>
-      <p><strong>Biological applications:</strong> ${a.applications.map(id => esc(applicationById.get(id).name)).join(' · ')}${a.context_tags.length ? '<br><strong>Context:</strong> ' + esc(a.context_tags.join(' · ')) : ''}</p>
+      <div class="competency-cards">${a.skills.map(id => {const skill = skillById.get(id);return `<div class="competency-card"><h4><a href="${routeHref('statistics/skills/' + id)}">${esc(skill.name)}</a></h4><p>${esc(skill.outcome)}</p></div>`;}).join('')}</div>
+      ${a.category_review ? `<details><summary>Why these categories</summary><p>${esc(a.category_review.note)}</p><p class="reference-note">Review scope: ${esc(a.category_review.scope)}. Category review does not certify the proposed verifier.</p></details>` : ''}
+      <p><strong>Biological applications:</strong> ${a.applications.map(id => esc(applicationById.get(id).name)).join(' · ') || 'Application not resolved'}${a.context_tags.length ? '<br><strong>Context:</strong> ' + esc(a.context_tags.join(' · ')) : ''}</p>
       <h3>Outputs to check</h3>${listItems(a.outputs)}<h3>Executable reward</h3><p>${esc(a.verification)}</p>
       ${a.decisions.length ? `<details><summary>Scientific decisions to specify</summary>${listItems(a.decisions)}</details>` : ''}
       <details><summary>What authoring still requires</summary>${listItems(a.authoring_requirements)}<p>This page proposes a contract. It does not certify a runnable task or passing oracle.</p></details>` :

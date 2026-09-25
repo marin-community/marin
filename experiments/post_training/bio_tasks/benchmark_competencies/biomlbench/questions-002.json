@@ -11,14 +11,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -43,9 +39,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-bbb-martins",
@@ -58,13 +59,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/bbb-martins",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -89,9 +87,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-bioavailability-ma",
@@ -104,13 +107,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/bioavailability-ma",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -135,9 +135,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-caco2-wang",
@@ -150,13 +155,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/caco2-wang",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -181,9 +183,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-clearance-hepatocyte-az",
@@ -196,14 +203,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/clearance-hepatocyte-az",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -228,9 +231,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-cyp2d6-substrate-carbonmangels",
@@ -243,15 +251,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/cyp2d6-substrate-carbonmangels",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -276,9 +279,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-herg",
@@ -291,13 +299,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/herg",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -322,9 +327,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-hia-hou",
@@ -337,13 +347,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/hia-hou",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -368,9 +375,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-lipophilicity-astrazeneca",
@@ -383,13 +395,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/lipophilicity-astrazeneca",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -414,9 +423,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub/tdcommons-pgp-broccatelli",
@@ -429,13 +443,10 @@
       "source_group": "BioML-bench/polaris/tdcommons/pgp-broccatelli",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -460,9 +471,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/adaptyv-bio-egfr-binders-binary-cls-v0",
@@ -475,17 +491,10 @@
       "source_group": "BioML-bench/polaris/adaptyv-bio/egfr-binders-binary-cls-v0",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology",
-        "clinical",
-        "immunology",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -510,9 +519,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-hclint-reg-v1",
@@ -525,14 +539,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-hclint-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -557,9 +567,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-hppb-reg-v1",
@@ -572,14 +587,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-hppb-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -604,9 +615,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-perm-reg-v1",
@@ -619,14 +635,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-perm-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -651,9 +663,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-rclint-reg-v1",
@@ -666,14 +683,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-rclint-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -698,9 +711,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-reg-v1",
@@ -713,15 +731,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "bioimaging",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -746,9 +759,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-rppb-reg-v1",
@@ -761,14 +779,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-rppb-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -793,9 +807,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-solu-reg-v1",
@@ -808,14 +827,10 @@
       "source_group": "BioML-bench/polaris/biogen/adme-fang-solu-reg-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -840,9 +855,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-l1000-mcf7-v1",
@@ -855,16 +875,10 @@
       "source_group": "BioML-bench/polaris/graphium/l1000-mcf7-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -889,9 +903,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-l1000-vcap-v1",
@@ -904,16 +923,10 @@
       "source_group": "BioML-bench/polaris/graphium/l1000-vcap-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -938,9 +951,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-pcba-1328-1564k-v1",
@@ -953,14 +971,10 @@
       "source_group": "BioML-bench/polaris/graphium/pcba-1328-1564k-v1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -985,9 +999,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-qm9-v1",
@@ -1000,14 +1019,10 @@
       "source_group": "BioML-bench/polaris/graphium/qm9-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "molecular-structure",
-        "chemical-biology",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1032,9 +1047,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-tox21-v1",
@@ -1047,12 +1067,10 @@
       "source_group": "BioML-bench/polaris/graphium/tox21-v1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "functional-genomics"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1077,9 +1095,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/graphium-zinc12k-v1",
@@ -1092,14 +1115,10 @@
       "source_group": "BioML-bench/polaris/graphium/zinc12k-v1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1124,9 +1143,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/novartis-adme-novartis-cyp3a4-cls",
@@ -1139,15 +1163,10 @@
       "source_group": "BioML-bench/polaris/novartis/adme-novartis-cyp3a4-cls",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1172,9 +1191,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/novartis-adme-novartis-cyp3a4-reg",
@@ -1187,15 +1211,10 @@
       "source_group": "BioML-bench/polaris/novartis/adme-novartis-cyp3a4-reg",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1220,9 +1239,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-hclint-1",
@@ -1235,14 +1259,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-hclint-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1267,9 +1287,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-hppb-1",
@@ -1282,14 +1307,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-hppb-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1314,9 +1335,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-perm-1",
@@ -1329,14 +1355,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-perm-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1361,9 +1383,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-r-1",
@@ -1376,13 +1403,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1407,9 +1431,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-rclint-1",
@@ -1422,14 +1451,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-rclint-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1454,9 +1479,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-rppb-1",
@@ -1469,14 +1499,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-rppb-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "bioimaging",
-        "systems-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1501,9 +1527,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-solu-1",
@@ -1516,14 +1547,10 @@
       "source_group": "BioML-bench/polaris/polaris/adme-fang-solu-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "bioimaging",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1548,9 +1575,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-hello-world-benchmark",
@@ -1563,13 +1595,10 @@
       "source_group": "BioML-bench/polaris/polaris/hello-world-benchmark",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1594,9 +1623,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-leadlike-r-1",
@@ -1609,11 +1643,9 @@
       "source_group": "BioML-bench/polaris/polaris/molprop-250k-leadlike-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "molecular-structure",
         "chemical-biology"
       ],
       "context_tags": [],
@@ -1639,9 +1671,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-r-1",
@@ -1654,8 +1691,7 @@
       "source_group": "BioML-bench/polaris/polaris/molprop-250k-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
         "chemical-biology"
@@ -1683,9 +1719,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-reg-v2",
@@ -1698,8 +1739,7 @@
       "source_group": "BioML-bench/polaris/polaris/molprop-250k-reg-v2",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
         "chemical-biology"
@@ -1727,9 +1767,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-leadlike-250k-reg-v2",
@@ -1742,11 +1787,9 @@
       "source_group": "BioML-bench/polaris/polaris/molprop-leadlike-250k-reg-v2",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "molecular-structure",
         "chemical-biology"
       ],
       "context_tags": [],
@@ -1772,9 +1815,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-egfr-wt-mut-c-1",
@@ -1787,14 +1835,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-egfr-wt-mut-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1819,9 +1863,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-egfr-wt-mut-r-1",
@@ -1834,14 +1883,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-egfr-wt-mut-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1866,9 +1911,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-kit-wt-mut-c-1",
@@ -1881,16 +1931,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-kit-wt-mut-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1915,9 +1959,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-kit-wt-mut-r-1",
@@ -1930,16 +1979,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-kit-wt-mut-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -1964,9 +2007,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-ret-wt-mut-c-1",
@@ -1979,16 +2027,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-ret-wt-mut-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "genome-variation",
-        "proteomics",
-        "molecular-structure",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2013,9 +2055,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-ret-wt-mut-r-1",
@@ -2028,16 +2075,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis1-ret-wt-mut-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "proteomics",
-        "molecular-structure",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2062,9 +2103,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-c-1",
@@ -2077,15 +2123,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-egfr-wt-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "clinical",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2110,9 +2151,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-r-1",
@@ -2125,15 +2171,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-egfr-wt-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "clinical",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2158,9 +2199,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-reg-v2",
@@ -2173,15 +2219,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-egfr-wt-reg-v2",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "clinical",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2206,9 +2247,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-c-1",
@@ -2221,15 +2267,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2254,9 +2295,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-cls-v2",
@@ -2269,16 +2315,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-cls-v2",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "bioimaging"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2303,9 +2343,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-r-1",
@@ -2318,15 +2363,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2351,9 +2391,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-reg-v2",
@@ -2366,16 +2411,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-reg-v2",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2400,9 +2439,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-c-1",
@@ -2415,15 +2459,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-lok-slk-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2448,9 +2487,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-cls-v2",
@@ -2463,15 +2507,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-lok-slk-cls-v2",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2496,9 +2535,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-r-1",
@@ -2511,15 +2555,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-lok-slk-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2544,9 +2583,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-c-1",
@@ -2559,14 +2603,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-c-1",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2591,9 +2631,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-cls-v2",
@@ -2606,16 +2651,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-cls-v2",
       "workflow": "molecular property classification",
       "skills": [
-        "classification",
-        "model-evaluation"
+        "classification"
       ],
       "applications": [
-        "genome-variation",
-        "proteomics",
-        "molecular-structure",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2640,9 +2679,14 @@
           "id": "portfolio-biomlbench-molecular-property-classification"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-r-1",
@@ -2655,14 +2699,10 @@
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-r-1",
       "workflow": "molecular property regression",
       "skills": [
-        "prediction",
-        "model-evaluation"
+        "prediction"
       ],
       "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -2687,9 +2727,14 @@
           "id": "portfolio-biomlbench-molecular-property-regression"
         }
       ],
-      "annotation_basis": "workflow-family draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
+      }
     }
   ]
 }

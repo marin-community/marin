@@ -33,8 +33,7 @@
         "genome-variation",
         "genome-sequence",
         "epigenomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -156,8 +155,7 @@
         "genome-variation",
         "genome-sequence",
         "functional-genomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -218,8 +216,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -405,8 +402,7 @@
         "genome-variation",
         "genome-sequence",
         "epigenomics",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
@@ -693,8 +689,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -1132,8 +1127,7 @@
         "genome-variation",
         "genome-sequence",
         "microbiology",
-        "bioimaging",
-        "biological-knowledge"
+        "bioimaging"
       ],
       "context_tags": [
         "spatial"

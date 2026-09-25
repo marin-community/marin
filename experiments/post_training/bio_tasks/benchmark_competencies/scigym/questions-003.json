@@ -11,8 +11,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -35,9 +35,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000192",
@@ -50,8 +55,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -74,9 +79,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000742",
@@ -89,8 +99,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -113,9 +123,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000043",
@@ -128,8 +143,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -152,9 +167,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000799",
@@ -167,8 +187,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -191,9 +211,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000777",
@@ -206,8 +231,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -230,9 +255,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000793",
@@ -245,8 +275,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -269,9 +299,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000573",
@@ -284,8 +319,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -308,9 +343,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000039",
@@ -323,8 +363,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -347,9 +387,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000044",
@@ -362,8 +407,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -386,9 +431,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000923",
@@ -401,8 +451,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -425,9 +475,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000732",
@@ -440,8 +495,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -464,9 +519,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000001057",
@@ -479,8 +539,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -503,9 +563,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000092",
@@ -518,8 +583,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -542,9 +607,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000966",
@@ -557,8 +627,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -581,9 +651,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000885",
@@ -596,8 +671,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -620,9 +695,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000911",
@@ -635,8 +715,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -659,9 +739,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000098",
@@ -674,8 +759,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -698,9 +783,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000076",
@@ -713,8 +803,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -737,9 +827,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000329",
@@ -752,8 +847,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -776,9 +871,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000224",
@@ -791,8 +891,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -815,9 +915,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000663",
@@ -830,8 +935,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -854,9 +959,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000713",
@@ -869,8 +979,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -893,9 +1003,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000323",
@@ -908,8 +1023,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -932,9 +1047,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000483",
@@ -947,8 +1067,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -971,9 +1091,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000626",
@@ -986,8 +1111,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1010,9 +1135,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000878",
@@ -1025,8 +1155,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1049,9 +1179,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000455",
@@ -1064,8 +1199,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1088,9 +1223,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000902",
@@ -1103,8 +1243,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1127,9 +1267,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000037",
@@ -1142,8 +1287,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1166,9 +1311,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000407",
@@ -1181,8 +1331,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1205,9 +1355,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000470",
@@ -1220,8 +1375,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1244,9 +1399,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000239",
@@ -1259,8 +1419,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1283,9 +1443,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000334",
@@ -1298,8 +1463,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1322,9 +1487,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000609",
@@ -1337,8 +1507,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1361,9 +1531,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000690",
@@ -1376,8 +1551,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1400,9 +1575,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000102",
@@ -1415,8 +1595,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1439,9 +1619,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000442",
@@ -1454,8 +1639,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1478,9 +1663,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000001053",
@@ -1493,8 +1683,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1517,9 +1707,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000395",
@@ -1532,8 +1727,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1556,9 +1751,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000631",
@@ -1571,8 +1771,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1595,9 +1795,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000123",
@@ -1610,8 +1815,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1634,9 +1839,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000469",
@@ -1649,8 +1859,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1673,9 +1883,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000513",
@@ -1688,8 +1903,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1712,9 +1927,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000689",
@@ -1727,8 +1947,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1751,9 +1971,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000667",
@@ -1766,8 +1991,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1790,9 +2015,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000061",
@@ -1805,8 +2035,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1829,9 +2059,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000655",
@@ -1844,8 +2079,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1868,9 +2103,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000622",
@@ -1883,8 +2123,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1907,9 +2147,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000218",
@@ -1922,8 +2167,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1946,9 +2191,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000725",
@@ -1961,8 +2211,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -1985,9 +2235,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000625",
@@ -2000,8 +2255,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -2024,9 +2279,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000652",
@@ -2039,8 +2299,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -2063,9 +2323,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     },
     {
       "task_id": "BIOMD0000000365",
@@ -2078,8 +2343,8 @@
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
       "skills": [
-        "simulation",
-        "model-evaluation"
+        "experimental-design",
+        "simulation"
       ],
       "applications": [
         "systems-biology"
@@ -2102,9 +2367,14 @@
         "Predictive agreement does not establish unique mechanism recovery."
       ],
       "review_sources": [],
-      "annotation_basis": "shared-protocol draft",
+      "annotation_basis": "Operation-boundary review of the source protocol or output contract; scope and rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "source-protocol",
+        "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
+      }
     }
   ]
 }

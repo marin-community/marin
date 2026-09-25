@@ -16,8 +16,7 @@
         "statistics"
       ],
       "applications": [
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -205,9 +204,7 @@
       "skills": [
         "data-management"
       ],
-      "applications": [
-        "biological-knowledge"
-      ],
+      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -256,8 +253,7 @@
       "applications": [
         "transcriptomics",
         "genome-variation",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -306,8 +302,7 @@
       "applications": [
         "genome-variation",
         "chemical-biology",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -1381,8 +1376,7 @@
       "applications": [
         "transcriptomics",
         "functional-genomics",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -1564,8 +1558,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -1895,8 +1888,7 @@
       "applications": [
         "genome-variation",
         "molecular-structure",
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -2116,8 +2108,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2212,8 +2203,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -2261,8 +2251,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -2353,8 +2342,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -2487,8 +2475,7 @@
         "database-query"
       ],
       "applications": [
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
@@ -2986,8 +2973,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3033,8 +3019,7 @@
         "genome-variation",
         "genome-sequence",
         "molecular-structure",
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3172,8 +3157,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3218,8 +3202,7 @@
         "statistics"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3265,8 +3248,7 @@
         "data-management"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3354,8 +3336,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3399,8 +3380,7 @@
         "evidence-extraction"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
@@ -3544,8 +3524,7 @@
         "evidence-ranking"
       ],
       "applications": [
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
@@ -3596,8 +3575,7 @@
       "applications": [
         "transcriptomics",
         "epigenomics",
-        "clinical",
-        "biological-knowledge"
+        "clinical"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -3692,8 +3670,7 @@
       ],
       "applications": [
         "genome-sequence",
-        "chemical-biology",
-        "biological-knowledge"
+        "chemical-biology"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",

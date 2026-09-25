@@ -128,8 +128,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [
         "single-cell"
@@ -183,8 +182,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [
         "single-cell"
@@ -452,8 +450,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [
         "spatial"
@@ -566,8 +563,7 @@
         "cell-qc"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -669,8 +665,7 @@
       "applications": [
         "transcriptomics",
         "genome-sequence",
-        "epigenomics",
-        "biological-knowledge"
+        "epigenomics"
       ],
       "context_tags": [
         "single-cell"
@@ -828,8 +823,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "systems-biology",
-        "biological-knowledge"
+        "systems-biology"
       ],
       "context_tags": [
         "single-cell"
@@ -881,8 +875,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "genome-sequence",
-        "biological-knowledge"
+        "genome-sequence"
       ],
       "context_tags": [
         "single-cell"
@@ -934,8 +927,7 @@
         "data-management"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -991,8 +983,7 @@
         "visualization"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "spatial"
@@ -1657,8 +1648,7 @@
         "data-management"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "spatial"
@@ -1766,8 +1756,7 @@
         "visualization"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "spatial"
@@ -1823,8 +1812,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "bioimaging",
-        "biological-knowledge"
+        "bioimaging"
       ],
       "context_tags": [
         "spatial"
@@ -1878,8 +1866,7 @@
       "applications": [
         "transcriptomics",
         "molecular-structure",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -1978,8 +1965,7 @@
         "visualization"
       ],
       "applications": [
-        "transcriptomics",
-        "biological-knowledge"
+        "transcriptomics"
       ],
       "context_tags": [
         "single-cell"
@@ -2175,8 +2161,7 @@
       "applications": [
         "transcriptomics",
         "chemical-biology",
-        "functional-genomics",
-        "biological-knowledge"
+        "functional-genomics"
       ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
@@ -2676,8 +2661,7 @@
       ],
       "applications": [
         "transcriptomics",
-        "immunology",
-        "biological-knowledge"
+        "immunology"
       ],
       "context_tags": [
         "single-cell"
@@ -3154,13 +3138,10 @@
       "workflow": "ligand receptor network inference",
       "skills": [
         "communication",
-        "spatial",
-        "image-analysis"
+        "spatial"
       ],
       "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "bioimaging"
+        "transcriptomics"
       ],
       "context_tags": [
         "spatial"
@@ -3189,9 +3170,14 @@
           "id": "portfolio-liu-single-cell-ligand-receptor-network-inference"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "Operation-boundary review of the source question and input/output contract; rationale recorded below.",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "category_review": {
+        "version": "2026-09-25-operation-boundaries-2",
+        "scope": "question-output",
+        "note": "CellChat uses annotated spatial expression and JSON scale factors. A directory named spatial_imaging_data does not imply pixel analysis."
+      }
     },
     {
       "task_id": "sctransform--data2",
