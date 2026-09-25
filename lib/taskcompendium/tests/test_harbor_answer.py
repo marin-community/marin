@@ -19,8 +19,8 @@ from taskcompendium.lowering import (
     lower_to_harbor,
     select_lowerings,
 )
-from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
-from taskcompendium.rendering import Rendering
+from taskcompendium.models import AnswerType, ExactAnswer, Source, TaskRequirements, TaskSpec
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
 @dataclass
@@ -67,7 +67,7 @@ def specification() -> TaskSpec:
         verifier=ExactAnswer(expected="12"),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
         requirements=TaskRequirements(),
-        permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
+        answer_type=AnswerType.NUMBER,
     )
 
 
@@ -86,8 +86,8 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     tmp_path, specification, answer_format, response, reward, status
 ):
     binding = HarborTaskBinding()
-    rendering = Rendering(id=answer_format.value, answer_format=answer_format)
-    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
+    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
+    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
@@ -110,7 +110,7 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     specification = specification.model_copy(update={"verifier": ExactAnswer(expected="Straße Park")})
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
 
     result = await run_trial(
@@ -127,9 +127,9 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
-    (task / "rendering.json").write_text("{invalid")
+    (task / "submission_convention.json").write_text("{invalid")
 
     result = await run_trial(
         task, binding, HarborLaunch("replay", agent_kwargs={"response": "12"}), tmp_path / "trials", "run"
@@ -147,25 +147,26 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(
             specification,
-            Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
             HarborTaskBinding(),
             tmp_path / "task",
         )
 
 
-def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specification):
+def test_lowering_respects_source_submission_constraint(tmp_path, specification):
     specification = specification.model_copy(
         update={
             "instructions": "Return only the raw C++ program output.",
-            "permitted_answer_formats": (AnswerFormat.PLAIN,),
+            "answer_type": AnswerType.TEXT,
+            "permitted_submission_conventions": ("plain",),
         }
     )
     destination = tmp_path / "task"
 
-    with pytest.raises(ValueError, match="does not permit the 'json' answer format"):
+    with pytest.raises(ValueError, match="does not permit submission convention 'json'"):
         lower_to_harbor(
             specification,
-            Rendering(id="json", answer_format=AnswerFormat.JSON),
+            SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
             HarborTaskBinding(),
             destination,
         )
@@ -173,35 +174,45 @@ def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specificatio
     assert not destination.exists()
 
 
-def test_selection_exports_only_compatible_answer_format(tmp_path, specification):
-    specification = specification.model_copy(update={"permitted_answer_formats": (AnswerFormat.PLAIN,)})
-    renderings = (
-        Rendering(id="json", answer_format=AnswerFormat.JSON),
-        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+def test_selection_respects_source_submission_constraint(tmp_path, specification):
+    specification = specification.model_copy(update={"permitted_submission_conventions": ("plain",)})
+    conventions = (
+        SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
-    candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
+    candidates = compatible_lowerings(specification, conventions, (HarborTaskBinding(),))
 
     selected = select_lowerings(candidates, SelectionPolicy.FIRST)
-    task = lower_to_harbor(specification, selected[0].rendering, selected[0].binding, tmp_path / "task")
+    task = lower_to_harbor(specification, selected[0].convention, selected[0].binding, tmp_path / "task")
 
     assert len(candidates) == 1
-    assert json.loads((task / "rendering.json").read_text())["answer_format"] == "plain"
+    assert json.loads((task / "submission_convention.json").read_text())["answer_format"] == "plain"
     assert (
         compatible_lowerings(
             specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))}),
-            renderings,
+            conventions,
             (HarborTaskBinding(),),
         )
         == ()
     )
 
 
-def test_selection_samples_reproducibly_from_compatible_renderings(specification):
-    renderings = (
-        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
-        Rendering(id="json", answer_format=AnswerFormat.JSON),
+def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
+    specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
+    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+
+    assert compatible_lowerings(specification, (convention,), (HarborTaskBinding(),)) == ()
+    with pytest.raises(ValueError, match="cannot carry 'file'"):
+        lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    assert not (tmp_path / "task").exists()
+
+
+def test_selection_samples_reproducibly_from_compatible_conventions(specification):
+    conventions = (
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
     )
-    candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
+    candidates = compatible_lowerings(specification, conventions, (HarborTaskBinding(),))
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
@@ -214,7 +225,7 @@ def test_selection_samples_reproducibly_from_compatible_renderings(specification
 async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
     (task / "binding.json").write_text('{"environment":"direct_chat","tools":["terminal"]}')
 
@@ -231,7 +242,7 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     monkeypatch.setenv("TASKCOMPENDIUM_TEST_API_KEY", secret)
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
     launch = HarborLaunch(
         "chat",
@@ -252,7 +263,7 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
 async def test_chat_launch_rejects_raw_key(tmp_path, specification, chat_endpoint):
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
     launch = HarborLaunch(
         "chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url, "api_key": "secret"}
@@ -267,7 +278,7 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
     chat_endpoint.body = b'{"error":"model unavailable"}'
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
     launch = HarborLaunch("chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url})
 
