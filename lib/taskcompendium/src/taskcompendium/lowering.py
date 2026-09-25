@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.grading import validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
+from taskcompendium.submission import SubmissionConvention, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -64,7 +64,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, binding)
         for convention in convention_library
-        if submission_compatible(specification, convention)
+        if convention.supports(specification.answer_type)
         for binding in bindings
     )
 
