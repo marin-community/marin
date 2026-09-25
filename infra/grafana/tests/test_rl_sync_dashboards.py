@@ -262,12 +262,12 @@ def _millis(moment: datetime) -> int:
 
 def _row(
     *,
-    service: str,
     name: str,
     value: float,
     moment: datetime,
     seq: int,
-    run_id: str | None = None,
+    service: str = "marinskyrl",
+    run_id: str | None = RUN_ID,
     node_name: str | None = None,
     role: str = "",
     attributes: dict[str, str] | None = None,
@@ -295,12 +295,21 @@ def _row(
 
 
 def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> list[tuple]:
-    """What FinelogTimingSink publishes: one inclusive-wall row per recorded phase, no rank.
+    """What FinelogTimingSink publishes: one row per phase, no rank, parented to the nearest recorded ancestor."""
 
-    The parent is the nearest *recorded* ancestor, so the synchronous trainer — which never opens
-    a run_training timer — attaches fwd_logprobs_values_reward and train_critic_and_policy straight
-    to step, exactly as timing_observability.nearest_recorded_parent resolves them.
-    """
+    def row(name: str, value: float, **attributes: str) -> tuple:
+        attributes = {**attributes, "role": "trainer", "step": str(seq)}
+        return _row(
+            name=name,
+            value=value,
+            moment=moment,
+            seq=seq,
+            execution_uid=execution_uid,
+            node_name=NODES[0],
+            role="trainer",
+            attributes=attributes,
+        )
+
     tree = [
         ("step", STEP_SECONDS, ""),
         ("generate", DRIVER_PHASES["generate"], "step"),
@@ -312,208 +321,91 @@ def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> 
         *((phase, seconds, "generate") for phase, seconds in GENERATE_CHILDREN.items()),
         *((phase, seconds, parent) for phase, (parent, seconds) in GENERATE_GRANDCHILDREN.items()),
     ]
-    # EXCLUSIVE_DRIVER_SPANS: a residual is what its parent's wall does not contain, so it ships
-    # exclusive while every other driver span ships inclusive.
-    return (
-        [
-            _row(
-                service="marinskyrl",
-                name="phase_duration_seconds",
-                value=seconds,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=NODES[0],
-                role="trainer",
-                attributes={
-                    "phase": phase,
-                    "root": "step",
-                    "parent": parent,
-                    "clock_domain": "inclusive_wall",
-                    "role": "trainer",
-                    "step": str(seq),
-                },
+    outcome = "failure" if seq == FAILED_BUCKET else "success"
+    return [
+        *(
+            row(
+                "phase_duration_seconds",
+                seconds,
+                phase=phase,
+                root="step",
+                parent=parent,
+                clock_domain="inclusive_wall",
             )
             for phase, seconds, parent in tree
-        ]
-        + [
-            _row(
-                service="marinskyrl",
-                name="phase_duration_seconds",
-                value=GENERATE_RESIDUAL,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=NODES[0],
-                role="trainer",
-                attributes={
-                    "phase": "generate_span_residual",
-                    "root": "step",
-                    "parent": "generate",
-                    "clock_domain": "exclusive_wall",
-                    "role": "trainer",
-                    "step": str(seq),
-                },
-            )
-        ]
-        + [
-            _row(
-                service="marinskyrl",
-                name="phase_duration_seconds",
-                value=seconds,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=NODES[0],
-                role="trainer",
-                attributes={
-                    "phase": phase,
-                    "clock_domain": "critical_path",
-                    "role": "trainer",
-                    "outcome": "failure" if seq == FAILED_BUCKET else "success",
-                    "step": str(seq),
-                },
-            )
+        ),
+        # A residual is what its parent's wall does not contain, so it ships exclusive.
+        row(
+            "phase_duration_seconds",
+            GENERATE_RESIDUAL,
+            phase="generate_span_residual",
+            root="step",
+            parent="generate",
+            clock_domain="exclusive_wall",
+        ),
+        *(
+            row("phase_duration_seconds", seconds, phase=phase, clock_domain="critical_path", outcome=outcome)
             for phase, seconds in CRITICAL_PATH.items()
-        ]
-        + [
-            _row(
-                service="marinskyrl",
-                # The counts and the seconds go to different instruments, as publish_rollout_counters
-                # sends them.
-                name="rollout_count" if counter.endswith("_count") else "rollout_wait_seconds",
-                value=value,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=NODES[0],
-                role="trainer",
-                attributes={"counter": counter, "role": "trainer", "step": str(seq)},
-            )
+        ),
+        *(
+            row("rollout_count" if counter.endswith("_count") else "rollout_wait_seconds", value, counter=counter)
             for counter, value in ROLLOUT_COUNTERS.items()
-        ]
-    )
+        ),
+    ]
 
 
 def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EXECUTION) -> list[tuple]:
-    """What WorkerTimingSink publishes: exclusive spans per rank, plus one inclusive parent.
+    """What WorkerTimingSink publishes: exclusive spans per rank, the inclusive parents, and counters.
 
-    The ranks sit on different nodes, which is what lets the DCGM join credit both of the run's
-    nodes to it: those rows carry a node and no run, and the run's own rows carry the reverse.
+    Ranks sit on different nodes, so the DCGM join credits both nodes to the run.
     """
+
+    def row(worker_rank: str, name: str, value: float, **attributes: str) -> tuple:
+        return _row(
+            name=name,
+            value=value,
+            moment=moment,
+            seq=seq,
+            execution_uid=execution_uid,
+            node_name=NODES[int(worker_rank) % len(NODES)],
+            role="worker",
+            attributes={**attributes, "role": "worker", "rank": worker_rank, "step": str(seq)},
+        )
+
+    def span(worker_rank: str, phase: str, seconds: float, parent: str, domain: str) -> tuple:
+        return row(
+            worker_rank,
+            "phase_duration_seconds",
+            seconds,
+            phase=phase,
+            root="step",
+            parent=parent,
+            clock_domain=f"{domain}_{clock}",
+        )
+
     rows = []
     retried = execution_uid == RETRY_EXECUTION
+    scale = RETRY_SCALE if retried else 1.0
     for rank, spans in WORKER_SPANS.items():
         worker_rank = str(len(WORKER_SPANS) - 1 - int(rank)) if retried else rank
-        spans = {phase: seconds * (RETRY_SCALE if retried else 1.0) for phase, seconds in spans.items()}
-        ppo_train = PPO_TRAIN[rank] * (RETRY_SCALE if retried else 1.0)
-        rank_node = NODES[int(worker_rank) % len(NODES)]
-        emitted = dict(spans)
-        # The container span, as the first instrumented run actually published it: an exclusive
-        # clock domain, an empty parent, and four of the spans beside it inside its own wall.
-        # Banding it counts that time twice, and the producer's own residual goes sharply negative.
-        contained_seconds = sum(spans[phase] for phase in CONTAINED_SPANS)
-        emitted[CONTAINER_SPAN] = contained_seconds
-        emitted["policy_span_residual"] = ppo_train - sum(emitted.values())
-        parents = dict.fromkeys(emitted, "policy_ppo_train")
-        parents[CONTAINER_SPAN] = ""
-        parents["policy_span_publish"] = "policy_train"
-        emitted["policy_span_publish"] = SPAN_PUBLISH_SECONDS
-        for phase, seconds in emitted.items():
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="phase_duration_seconds",
-                    value=seconds,
-                    moment=moment,
-                    seq=seq,
-                    run_id=RUN_ID,
-                    execution_uid=execution_uid,
-                    node_name=rank_node,
-                    role="worker",
-                    attributes={
-                        "phase": phase,
-                        "root": "step",
-                        "parent": parents[phase],
-                        "clock_domain": f"exclusive_{clock}",
-                        "role": "worker",
-                        "rank": worker_rank,
-                        "step": str(seq),
-                    },
-                )
-            )
-        # The current spelling of the container, under the inclusive domain the sink gives it.
-        rows.append(
-            _row(
-                service="marinskyrl",
-                name="phase_duration_seconds",
-                value=contained_seconds,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=rank_node,
-                role="worker",
-                attributes={
-                    "phase": "policy_training_step",
-                    "root": "step",
-                    "parent": "policy_ppo_train",
-                    "clock_domain": f"inclusive_{clock}",
-                    "role": "worker",
-                    "rank": worker_rank,
-                    "step": str(seq),
-                },
-            )
-        )
-        rows.append(
-            _row(
-                service="marinskyrl",
-                name="phase_duration_seconds",
-                value=ppo_train,
-                moment=moment,
-                seq=seq,
-                run_id=RUN_ID,
-                execution_uid=execution_uid,
-                node_name=rank_node,
-                role="worker",
-                attributes={
-                    "phase": "policy_ppo_train",
-                    "root": "step",
-                    "parent": "policy_train",
-                    "clock_domain": f"inclusive_{clock}",
-                    "role": "worker",
-                    "rank": worker_rank,
-                    "step": str(seq),
-                },
-            )
-        )
-        # policy_train_bytes was split off the unit-1 counter instrument on 2026-09-03; the byte
-        # gauges moved to it and the allocator deltas stayed behind.
-        published = [
-            ("policy_train_count", WORKER_COUNTERS[rank]),
-            ("policy_train_count", WORKER_ALLOCATOR[rank]),
-            ("policy_train_bytes", WORKER_MEMORY[rank]),
+        spans = {phase: seconds * scale for phase, seconds in spans.items()}
+        # The container as the first instrumented run published it: exclusive, no parent, and wrapping
+        # four of its siblings. Banding it counts them twice.
+        contained = sum(spans[phase] for phase in CONTAINED_SPANS)
+        residual = PPO_TRAIN[rank] * scale - (sum(spans.values()) + contained)
+        rows += [span(worker_rank, phase, seconds, "policy_ppo_train", "exclusive") for phase, seconds in spans.items()]
+        rows += [
+            span(worker_rank, CONTAINER_SPAN, contained, "", "exclusive"),
+            span(worker_rank, "policy_span_residual", residual, "policy_ppo_train", "exclusive"),
+            span(worker_rank, "policy_span_publish", SPAN_PUBLISH_SECONDS, "policy_train", "exclusive"),
+            span(worker_rank, "policy_training_step", contained, "policy_ppo_train", "inclusive"),
+            span(worker_rank, "policy_ppo_train", PPO_TRAIN[rank] * scale, "policy_train", "inclusive"),
         ]
-        for instrument, counters in published:
-            for counter, value in counters.items():
-                rows.append(
-                    _row(
-                        service="marinskyrl",
-                        name=instrument,
-                        value=value,
-                        moment=moment,
-                        seq=seq,
-                        run_id=RUN_ID,
-                        execution_uid=execution_uid,
-                        node_name=rank_node,
-                        role="worker",
-                        attributes={"counter": counter, "role": "worker", "rank": worker_rank, "step": str(seq)},
-                    )
-                )
+        for instrument, counters in (
+            ("policy_train_count", {**WORKER_COUNTERS[rank], **WORKER_ALLOCATOR[rank]}),
+            ("policy_train_bytes", WORKER_MEMORY[rank]),
+        ):
+            rows += [row(worker_rank, instrument, value, counter=counter) for counter, value in counters.items()]
     return rows
 
 
@@ -549,6 +441,7 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
                 rows.append(
                     _row(
                         service="iris-node-agent",
+                        run_id=None,
                         name=name,
                         value=value,
                         moment=moment,
@@ -592,7 +485,6 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
                     value=value,
                     moment=moment,
                     seq=seq,
-                    run_id=RUN_ID,
                     node_name=NODES[1],
                     role="inference",
                     attributes=attributes,
@@ -623,12 +515,10 @@ def _run_rows(clock: str) -> list[tuple]:
         # The run variable reads policy_step, so the run has to report one.
         rows.append(
             _row(
-                service="marinskyrl",
                 name="policy_step",
                 value=float(bucket),
                 moment=moment,
                 seq=bucket,
-                run_id=RUN_ID,
                 node_name=NODES[0],
                 role="trainer",
             )
@@ -639,12 +529,10 @@ def _run_rows(clock: str) -> list[tuple]:
     for role, status, lost in (("trainer", "completed", 0), ("worker", "failed", 12)):
         rows.append(
             _row(
-                service="marinskyrl",
                 name="terminal",
                 value=0.0,
                 moment=NOW - timedelta(seconds=1),
                 seq=BUCKETS,
-                run_id=RUN_ID,
                 node_name=NODES[0],
                 role=role,
                 attributes={"role": role},
