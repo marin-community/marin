@@ -76,7 +76,7 @@ def _candidate(name: str, variant: str = "h100", count: int = 8, *, pin: str = "
 
 
 def _cpu_reserve(name: str, variant: str = "h100", *, ts: int = 0):
-    """A CPU job submitted with ``--reserve <variant>``: the marker and no gate."""
+    """CPU job with an availability marker and no numeric gate."""
     return QueuedCandidate(
         job_id=JobName.from_string(f"/u/{name}"),
         pinned_peer_id="",
@@ -269,7 +269,6 @@ def test_a_tracked_preempting_backend_beats_a_shape_only_one():
 
 
 def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
-    # Same ordering across peers, whatever the peer tie-break.
     peers = [
         _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
         _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
@@ -324,7 +323,6 @@ def test_a_cpu_reservation_prefers_the_peer_with_more_free_capacity():
     promotions = assign_queued(
         [_cpu_reserve(f"j{i}", ts=i) for i in range(8)], peers, ReservationLedger(), max_per_peer_per_cycle=8
     )
-    # The job takes no capacity, so every submission sees the same preference.
     assert [(p.peer_id, p.reserved) for p in promotions] == [("cw-us-east-02a", {})] * 8
 
 

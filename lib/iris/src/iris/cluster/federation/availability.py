@@ -4,8 +4,8 @@
 """Federated availability: peer free-capacity snapshots, a generation-keyed
 reservation ledger, and the pure queued-assignment pass the control tick runs.
 
-A federation parent holds jobs it cannot place locally in a queue until a peer
-reports enough free capacity to host one, then hands it off. This module is the
+A federation parent holds jobs it cannot place locally in a queue until an
+eligible peer is available, then hands them off. This module is the
 decision logic for that queue, kept pure (no DB, no proto, no I/O) so the control
 tick can call it over a snapshot and so it is unit-testable in isolation:
 
@@ -39,8 +39,9 @@ would preempt to admit the job.
 Placement spends idle capacity first, reclaims from the lowest-priority band upward,
 and prefers a peer that needs no preemption at all.
 
-A ``--reserve <variant>`` marker gates nothing numerically, so it ranks otherwise-equal
-placements by free capacity of that variant without taking any.
+A ``--reserve <variant>`` marker filters peers by shape but adds no numeric capacity
+gate. When other scores tie, placement prefers more effective capacity for that
+variant without spending it.
 """
 
 import hashlib
@@ -281,11 +282,11 @@ def assign_queued(
     below the candidate's band, minus reservations already made this generation,
     minus what earlier candidates in this pass took) meets the ``ge`` gate. A legacy
     backend that supplies no metric is matched on shape alone, and ranks behind every
-    backend whose capacity the parent can see. Among the rest, prefer a placement that
-    needs no preemption; tie-break by best fit (least remaining capacity for the gated
-    token after placement), then most free capacity for the ``--reserve`` variants, then
-    a per-job hash of the peer id, then backend id. Fit-aware: a candidate that fits
-    nowhere is skipped, not head-of-line-blocking the queue.
+    backend whose capacity the parent can see. Among measured backends, prefer no
+    preemption, then the tightest fit for the job's numeric capacity gate. For
+    ``--reserve`` markers, prefer more effective variant capacity. Break further
+    ties by a per-job hash of the peer id, then peer id and backend id. A candidate
+    that fits nowhere is skipped.
 
     Returns the promotions; the caller applies each as a conditional CAS and charges
     the ledger only for confirmed ones. Does not mutate ``ledger``.
@@ -310,8 +311,6 @@ def assign_queued(
     promotions: list[Promotion] = []
 
     for candidate in candidates:
-        # A _Placement widened with the peer, which breaks ties between equally good
-        # backends on different peers.
         best: tuple[bool, bool, float, float, str, str, str] | None = None
         for peer in reachable_peers:
             if candidate.pinned_peer_id and candidate.pinned_peer_id != peer.peer_id:
@@ -360,16 +359,7 @@ def assign_queued(
 
 
 class _Placement(NamedTuple):
-    """One backend a candidate could go to, in best-first field order.
-
-    A tuple so it doubles as the sort key: ``shape_only`` first, so a backend whose
-    capacity the parent cannot see loses to every backend that verifiably fits, even
-    one that fits only by preemption (choosing it would drop the reservation the
-    tracked placement would have charged). Then ``preempts``, so an idle backend beats
-    one that would have to evict work, then how much capacity is left after the job
-    lands (tighter fit first), then ``headroom``, then the backend id for a stable
-    tie-break.
-    """
+    """Sort key for a candidate on one backend, in preference order."""
 
     shape_only: bool  # True for a backend matched on shape alone: no capacity metric
     preempts: bool  # True when the job fits only by reclaiming held work
@@ -379,11 +369,7 @@ class _Placement(NamedTuple):
 
 
 def _shape_only_placement(backend_id: str) -> _Placement:
-    """A shape-matched backend the parent has no capacity metric for.
-
-    The capacity fields are unknown and never consulted: ``shape_only`` already ranks
-    this behind every placement whose capacity the parent can see.
-    """
+    """Placement for a shape match without a readable capacity metric."""
     return _Placement(shape_only=True, preempts=False, remaining=0.0, headroom=0.0, backend_id=backend_id)
 
 
@@ -450,15 +436,11 @@ def _remaining_after(capacity: _WorkingCapacity, gate: list[Constraint], band: i
 
 
 def _headroom(capacity: _WorkingCapacity, shape: list[Constraint], band: int) -> float:
-    """Negated capacity of the variants the job's ``--reserve`` markers name.
-
-    Negated so the emptiest peer sorts first: the job takes none of it, but the GPU
-    children it launches later need room there.
-    """
+    """Negated effective capacity of variants in ``availability:*`` markers."""
     variants = [c.key.removeprefix(AVAILABILITY_PREFIX) for c in shape if is_availability_key(c.key)]
     return -float(sum(capacity.available(variant, band) for variant in variants))
 
 
 def _spread_key(job_id: JobName, peer_id: str) -> str:
-    """Rendezvous hash, so jobs split across tied peers instead of taking the first by name."""
+    """Stable per-job tie-break across peers."""
     return hashlib.blake2b(f"{job_id.to_wire()}\x00{peer_id}".encode(), digest_size=8).hexdigest()
