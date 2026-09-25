@@ -234,7 +234,7 @@ class NativeActionAgent(DirectChatAgent):
                 if function.get(key) is not None:
                     definition[key] = function[key]
             tools.append({"type": "function", "function": definition})
-        body = {"model": self.model_name, "messages": self.messages, "tools": tools}
+        body: dict[str, Any] = {"model": self.model_name, "messages": self.messages, "tools": tools}
         if self.tool_choice is not None:
             body["tool_choice"] = self.tool_choice
         if self.parallel_tool_calls is not None:
