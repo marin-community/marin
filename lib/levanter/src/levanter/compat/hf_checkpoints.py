@@ -50,7 +50,7 @@ from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -467,7 +467,6 @@ def _load_safe_tensors(
 def _load_safetensor_shards(
     paths: list[str], dtype: Optional[jnp.dtype], fs: AbstractFileSystem | None = None
 ) -> dict:
-    """Read one checkpoint's shards concurrently with a shared staging budget."""
     budget = HostByteBudget(DEFAULT_STAGING_BUDGET_BYTES)
     mesh = get_concrete_mesh()  # Mesh contexts are thread-local.
 
@@ -900,7 +899,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if not shard_files:
             raise FileNotFoundError(f"No HF-ish checkpoint files found in {url}")
 
-        shard_paths = [os.path.join(path, shard_file) for shard_file in shard_files]
+        shard_paths = [prefix_join(path, shard_file) for shard_file in shard_files]
         if loader is _load_safe_tensors:
             return _load_safetensor_shards(shard_paths, dtype, fs=fs)
 
@@ -923,7 +922,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         loader = None
         # First try to load sharded checkpoint
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
-            index_path = os.path.join(path, index_file)
+            index_path = prefix_join(path, index_file)
             if fs.exists(index_path):
                 with fs.open(index_path, "r") as f:
                     index = json.load(f)
@@ -940,7 +939,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # If no index file found, try loading single file checkpoint
         if not shard_files:
             for model_file in [SAFE_TENSORS_MODEL, PYTORCH_MODEL]:
-                model_path = os.path.join(path, model_file)
+                model_path = prefix_join(path, model_file)
                 if fs.exists(model_path):
                     shard_files = [model_file]
 

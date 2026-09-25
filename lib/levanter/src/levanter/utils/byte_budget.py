@@ -6,7 +6,7 @@ import contextlib
 
 
 class HostByteBudget:
-    """Bound in-flight host bytes for tasks running on one event loop."""
+    """Schedule in-flight host bytes against a target on one event loop."""
 
     def __init__(self, limit_bytes: int):
         if limit_bytes <= 0:
