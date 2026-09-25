@@ -7,8 +7,6 @@ import json
 from pathlib import Path
 
 import pytest
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
 from marin.datakit.copartitioned import SOURCE_MANIFEST_FILENAME
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
@@ -49,16 +47,6 @@ UNRELATED = (
 # No shared 3-gram with the original.
 
 SOURCES = {"datakit/normalize/left": "source_000", "datakit/normalize/right": "source_001"}
-
-
-@pytest.fixture
-def local_client():
-    client = LocalClient()
-    try:
-        with set_current_client(client):
-            yield client
-    finally:
-        client.shutdown()
 
 
 def _write_cluster_text(root: Path, rows: list[dict]) -> str:
@@ -105,7 +93,7 @@ def _member(*, cluster: str, doc_id: str, text: str, file_idx: int) -> dict:
     }
 
 
-def test_marker_lands_beside_the_normalized_shard_that_holds_the_duplicate(tmp_path, local_client):
+def test_marker_lands_beside_the_normalized_shard_that_holds_the_duplicate(tmp_path):
     """A cross-source duplicate is marked in the *member's* tree, not its representative's."""
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
@@ -137,7 +125,7 @@ def test_marker_lands_beside_the_normalized_shard_that_holds_the_duplicate(tmp_p
     assert result.counters["fuzzy/cluster_verify/markers"] == 1
 
 
-def test_every_source_is_resolvable_even_when_it_has_no_markers(tmp_path, local_client):
+def test_every_source_is_resolvable_even_when_it_has_no_markers(tmp_path):
     """The store resolves one attribute directory per source key, marked or not."""
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
@@ -163,7 +151,7 @@ def test_every_source_is_resolvable_even_when_it_has_no_markers(tmp_path, local_
     }
 
 
-def test_a_rule_the_cluster_cannot_satisfy_marks_nothing(tmp_path, local_client):
+def test_a_rule_the_cluster_cannot_satisfy_marks_nothing(tmp_path):
     """The threshold is a parameter: raised above the pair's containment, nothing is marked."""
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
@@ -220,7 +208,7 @@ def test_attr_dir_for_an_unknown_source_names_the_missing_key(tmp_path, monkeypa
         result.attr_dir_for_source("datakit/normalize/left")
 
 
-def test_incomplete_cluster_text_is_rejected(tmp_path, local_client):
+def test_incomplete_cluster_text_is_rejected(tmp_path):
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
         [_member(cluster="c1", doc_id="left-original", text=ORIGINAL, file_idx=0)],
@@ -235,7 +223,7 @@ def test_incomplete_cluster_text_is_rejected(tmp_path, local_client):
         )
 
 
-def test_production_verification_compares_truncated_prefixes(tmp_path, local_client):
+def test_production_verification_compares_truncated_prefixes(tmp_path):
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
         [
@@ -257,7 +245,7 @@ def test_production_verification_compares_truncated_prefixes(tmp_path, local_cli
 
 
 @pytest.mark.parametrize(("members", "removed_ids"), [(2, []), (3, ["b"])])
-def test_cluster_buffer_uses_the_production_flush_boundary(tmp_path, local_client, members, removed_ids):
+def test_cluster_buffer_uses_the_production_flush_boundary(tmp_path, members, removed_ids):
     text = "alpha beta gamma"
     cluster_text = _write_cluster_text(
         tmp_path / "cluster_text",
@@ -275,7 +263,7 @@ def test_cluster_buffer_uses_the_production_flush_boundary(tmp_path, local_clien
     assert [row["id"] for row in markers] == removed_ids
 
 
-def test_final_oversized_buffer_splits_longest_first(tmp_path, local_client):
+def test_final_oversized_buffer_splits_longest_first(tmp_path):
     short = "alpha beta gamma"
     longest = "alpha beta gamma plus a longer reference document with many words"
     middle = "separate words describe an unrelated calibration"

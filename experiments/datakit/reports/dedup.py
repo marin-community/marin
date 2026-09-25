@@ -7,7 +7,12 @@ Headline numbers and histograms come from the artifact's aggregated counters.
 The per-source table comes from bounded attribute samples.
 """
 
-from marin.processing.classification.deduplication.cluster_verify import ClusterVerifiedFuzzyDupsAttrData
+from marin.processing.classification.deduplication.cluster_verify import (
+    COUNTER_PREFIX as CLUSTER_VERIFY_COUNTER_PREFIX,
+)
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerifiedFuzzyDupsAttrData,
+)
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     PERCENT_HISTOGRAM_METRICS,
@@ -198,7 +203,7 @@ def cluster_dedup_report(
     verified: ClusterVerifiedFuzzyDupsAttrData,
 ) -> StageReport:
     """Report measured cluster-verification counts and its recorded rule."""
-    prefix = "fuzzy/cluster_verify"
+    prefix = CLUSTER_VERIFY_COUNTER_PREFIX
     members = int(verified.counters[f"{prefix}/documents"])
     removed = int(verified.counters[f"{prefix}/markers"])
     stats = {
