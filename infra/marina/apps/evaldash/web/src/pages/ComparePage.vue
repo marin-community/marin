@@ -13,7 +13,7 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { isPartialCoverage } from '@/utils/panel'
+import { cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -43,11 +43,7 @@ const comparabilityWarning = computed(() => {
   if (!meta.value) return null
   const raw = route.query.cohort
   const selected = (Array.isArray(raw) ? raw[0] : raw) || meta.value.default_cohort
-  if (selected === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
-  if (!meta.value.verified_cohorts.includes(selected)) {
-    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
-  }
-  return null
+  return cohortWarning(selected, meta.value)
 })
 
 function fromQuery(): string[] {
