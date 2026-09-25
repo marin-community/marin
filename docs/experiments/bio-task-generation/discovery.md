@@ -40,6 +40,8 @@ Compare adoption evidence within source types. Downloads, stars and citations me
 
 Combine adoption signals with maintenance, usable examples and independent scientific use. A paper-analysis repository can offer a well-defined question and runnable methods despite few stars. Do not require the same popularity threshold or download metric for every source type.
 
+Keep scientific usefulness separate from documentation and portability. The [pipeline development testbed](index.md#pipeline-development-testbed) includes author-familiar paper repositories so discovery and extraction can be reviewed on code of varying quality. Reconstruct a bounded scientific task where feasible; do not turn it into a software-cleanup assignment by default.
+
 Initially prioritize qualitatively: evidence of use, additional scientific coverage, realism, verification feasibility, authoring cost and sandbox runtime. Preserve those judgments and evidence. Numerical weights remain open.
 
 ## Inspection prompt
