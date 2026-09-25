@@ -288,6 +288,40 @@ def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
     assert observed_templates == ["{{ messages }}"]
 
 
+def test_vllm_backend_propagates_startup_timeout_to_engine_processes(monkeypatch):
+    observed = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace()
+
+    base_launcher = SimpleNamespace(
+        command=lambda: ["vllm"],
+        env=lambda: {},
+        cache_identity=lambda: "test",
+    )
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: base_launcher)
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
+    spec = ModelSpec(
+        weights="org/model",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content=None,
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+    )
+
+    with VllmBackend(VllmEngineConfig(startup_timeout_seconds=1800), port=8000).start(spec):
+        pass
+
+    assert observed["launcher"].env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "1800"
+
+
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     """Resolving weights to a cache path must not change the served id.
 
