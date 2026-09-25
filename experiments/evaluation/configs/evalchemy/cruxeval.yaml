@@ -10,3 +10,5 @@ seed: 42
 # No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
 # benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 runtime_extras: [cruxeval]
+chat_template_kwargs:
+  enable_thinking: false
