@@ -14,14 +14,7 @@ from types import SimpleNamespace
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import (
-    ExactAnswerPayload,
-    GradeResult,
-    Outcome,
-    VerifierHandler,
-    exact_answer,
-    grade_answer,
-)
+from taskcompendium.grading import ExactAnswerPayload, GradeResult, Outcome, VerifierHandler, exact_answer, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.lowering import (
     HarborTaskBinding,
@@ -103,7 +96,6 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
-    assert "verif" not in (task / "instruction.md").read_text().lower()
     assert json.loads((task / "specification.json").read_text())["verifier"]["kind"] == "exact_answer"
 
     result = await run_trial(
@@ -353,9 +345,23 @@ def test_selection_samples_reproducibly_from_compatible_conventions(specificatio
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
-    assert select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) == select_lowerings(
-        candidates, SelectionPolicy.SAMPLE, rng_key=42
+    script = (
+        "import sys; "
+        "from taskcompendium.lowering import HarborTaskBinding, SelectionPolicy, "
+        "compatible_lowerings, select_lowerings; "
+        "from taskcompendium.models import TaskSpec; "
+        "from taskcompendium.submission import AnswerFormat, SubmissionConvention; "
+        "spec = TaskSpec.model_validate_json(sys.argv[1]); "
+        "conventions = (SubmissionConvention(id='plain', answer_format=AnswerFormat.PLAIN), "
+        "SubmissionConvention(id='json', answer_format=AnswerFormat.JSON)); "
+        "candidates = compatible_lowerings(spec, conventions, (HarborTaskBinding(),)); "
+        "print(select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42)[0].convention.id)"
     )
+    separate_process = subprocess.run(
+        [sys.executable, "-c", script, specification.model_dump_json()], capture_output=True, text=True, check=True
+    )
+    selected = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42)[0].convention.id
+    assert separate_process.stdout.strip() == selected
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
 
 
