@@ -113,4 +113,15 @@ def restore_checkpoint(
         canonical, checkpoint.path, jax.tree.map(lambda value: value.sharding, canonical)
     )
     restored = _pipeline_state(loaded, arrays)
-    return mpmd_checkpoint.wrap_checkpoint_arrays(restored, shardings), checkpoint.step
+    # Compilation can mark unused state leaves with an empty MPMD placement.
+    # Keep their initialized placement so their saved values remain representable.
+    destination_shardings = jax.tree.map(
+        lambda original, compiled: (
+            original._mpmd_sharding
+            if not isinstance(compiled, jax.sharding.Sharding) and not compiled.mesh_ids
+            else compiled
+        ),
+        state,
+        shardings,
+    )
+    return mpmd_checkpoint.wrap_checkpoint_arrays(restored, destination_shardings), checkpoint.step
