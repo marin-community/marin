@@ -26,6 +26,7 @@ CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
 FORK_FERRY_FEDERATION = "fork-ferry"
 GITHUB_AUTOMATION_FEDERATION = "ops-loom-github"
 PR_REVIEW_FEDERATION = "pr-review"
+PROSE_CLEANUP_FEDERATION = "agent-prose-cleanup"
 
 
 def main() -> None:
@@ -57,6 +58,7 @@ def main() -> None:
         "fork-ferry-profile": ("LOOM_FORK_FERRY_PROFILE", FORK_FERRY_FEDERATION),
         "github-automation-profile": ("LOOM_GITHUB_AUTOMATION_PROFILE", GITHUB_AUTOMATION_FEDERATION),
         "pr-review-profile": ("LOOM_PR_REVIEW_PROFILE", PR_REVIEW_FEDERATION),
+        "prose-cleanup-profile": ("LOOM_PROSE_CLEANUP_PROFILE", PROSE_CLEANUP_FEDERATION),
     }
     resolved_profiles = {}
     for resource_name, (variable_name, federation_name) in profile_variables.items():
@@ -90,6 +92,7 @@ def main() -> None:
     pulumi.export("fork_ferry_profile", resolved_profiles[FORK_FERRY_FEDERATION])
     pulumi.export("github_automation_profile", resolved_profiles[GITHUB_AUTOMATION_FEDERATION])
     pulumi.export("pr_review_profile", resolved_profiles[PR_REVIEW_FEDERATION])
+    pulumi.export("prose_cleanup_profile", resolved_profiles[PROSE_CLEANUP_FEDERATION])
 
 
 main()

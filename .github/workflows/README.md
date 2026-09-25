@@ -33,8 +33,11 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 the `agent-generated` label. Its goal directs the session to follow the
 writing-style guide and apply the archive, validation, and stale-body checks
 in `scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
-only the trusted default-branch launch action. The `marin-prose-cleanup` marker prevents an edit
-from retriggering another cleanup.
+only the trusted default-branch launch action. The workflow runs on open, reopen, and label
+events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile published as
+`LOOM_PROSE_CLEANUP_PROFILE`, and its idempotency key is the issue or PR number, so later label
+and reopen events return the existing run instead of starting another. A body that already carries
+the `marin-prose-cleanup` marker skips the launch entirely.
 
 ## Agentic lint
 

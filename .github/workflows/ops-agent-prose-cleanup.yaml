@@ -2,9 +2,9 @@ name: "Ops - Agent Prose Cleanup"
 
 on:
   issues:
-    types: [opened, edited, reopened, labeled]
+    types: [opened, reopened, labeled]
   pull_request_target:
-    types: [opened, edited, reopened, labeled]
+    types: [opened, reopened, labeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -20,6 +20,7 @@ jobs:
       ((github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-generated')) ||
        (github.event_name == 'pull_request_target' &&
         contains(github.event.pull_request.labels.*.name, 'agent-generated'))) &&
+      vars.LOOM_PROSE_CLEANUP_PROFILE != '' &&
       !contains(github.event.issue.body || github.event.pull_request.body, '<!-- marin-prose-cleanup -->')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -34,8 +35,8 @@ jobs:
       - name: Launch prose cleanup
         uses: ./.github/actions/launch-loom-run
         with:
-          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
-          idempotency-key: prose-cleanup:${{ github.event.issue.number || github.event.pull_request.number }}:${{ github.event.issue.updated_at || github.event.pull_request.updated_at }}
+          profile: ${{ vars.LOOM_PROSE_CLEANUP_PROFILE }}
+          idempotency-key: prose-cleanup:${{ github.event.issue.number || github.event.pull_request.number }}
           title: "Prose cleanup #${{ github.event.issue.number || github.event.pull_request.number }}"
           goal: >-
             Review the body of ${{ github.repository }} issue or PR
