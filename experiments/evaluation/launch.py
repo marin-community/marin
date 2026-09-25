@@ -10,12 +10,13 @@ import os
 import socket
 import subprocess
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config
+from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
@@ -30,6 +31,8 @@ from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
+    ModelConfigRef,
+    ModelRef,
 )
 from marin.evaluation.runner import (
     EvalExecutor,
@@ -235,6 +238,7 @@ def build_evaluation_batch(
 ) -> EvaluationBatch:
     """Resolve experiment names into one model-serving evaluation batch."""
     model = spec.model
+    source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
@@ -247,6 +251,20 @@ def build_evaluation_batch(
     ):
         model = replace(model, serve=resolved_serve_config(model))
     definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed)
+    model_ref = ModelRef(
+        name=model.name,
+        location=model.location,
+        backend=model.serve.backend.value,
+        config=ModelConfigRef.model_validate(asdict(model)),
+        source_config=source_model_config,
+    )
+    for name, definition in definitions:
+        violations = (
+            *policy_violations(spec.version, model_ref, definition.record_ref),
+            *runtime_violations(spec.version, definition.record_ref, definition.runtime_descriptor),
+        )
+        if violations:
+            raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
@@ -291,6 +309,7 @@ def build_evaluation_batch(
         submission_cluster=spec.submission_cluster,
         judge=judge,
         secret_env=secret_env,
+        source_model_config=source_model_config,
     )
 
 

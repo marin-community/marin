@@ -44,6 +44,7 @@ import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_measurements import measurements_from_records
+from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -51,6 +52,7 @@ from marin.evaluation.eval_stats import (
     SelectionRequest,
     declared_protocols,
 )
+from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -211,11 +213,14 @@ class PanelResponse(BaseModel):
     panel: list[str]
     families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
+    policy_rejections: list[dict[str, object]]
     request: PanelRequestResponse
 
 
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
+    comparison_model: str
+    policy_violations: list[str]
 
 
 class LogEntryResponse(BaseModel):
@@ -339,7 +344,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "created_at": record.created_at,
         "version": record.version,
         "user_name": record.user,
-        "model_name": record.model.name,
+        "model_name": comparison_model_name(record.model),
         "model_location": record.model.location,
         "eval_name": record.evaluation.name,
         "mechanism": record.evaluation.mechanism,
@@ -362,7 +367,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "model_name": record.model.name,
+        "model_name": comparison_model_name(record.model),
         "status": record.status.value,
         "created_at": record.created_at,
     }
@@ -422,7 +427,11 @@ class RecordStore:
     def get_record(self, run_id: str) -> dict | None:
         _records, by_id = self._snapshot()
         record = by_id.get(run_id)
-        return record.model_dump(mode="json", by_alias=True) if record is not None else None
+        return (
+            {**record.model_dump(mode="json", by_alias=True), "comparison_model": comparison_model_name(record.model)}
+            if record is not None
+            else None
+        )
 
     def fetch_runs(
         self,
@@ -457,7 +466,11 @@ class RecordStore:
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
-            records = [record for record in records if record.model.name not in archived]
+            records = [
+                record
+                for record in records
+                if record.model.name not in archived and comparison_model_name(record.model) not in archived
+            ]
         return build_panel(records, request, frozenset(archived), aggregate)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
@@ -484,7 +497,7 @@ class RecordStore:
         records, _by_id = self._snapshot()
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
-            if (model and record.model.name != model) or (user and record.user != user):
+            if (model and comparison_model_name(record.model) != model) or (user and record.user != user):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -495,7 +508,7 @@ class RecordStore:
             groups.append(
                 {
                     "group_id": group_id,
-                    "model_name": newest.model.name,
+                    "model_name": comparison_model_name(newest.model),
                     "version": newest.version,
                     "description": newest.description,
                     "user_name": newest.user,
@@ -517,8 +530,16 @@ class RecordStore:
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
-        task_records = [record for record in records if record.model.name == model and record.evaluation.name == task]
-        protocol_records = [record for record in records if record.evaluation.name == task]
+        task_records = [
+            record
+            for record in records
+            if comparison_model_name(record.model) == model
+            and record.evaluation.name == task
+            and not record_policy_violations(record)
+        ]
+        protocol_records = [
+            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
+        ]
         protocols = declared_protocols(measurements_from_records(protocol_records))
         points = []
         for record in task_records:
@@ -1057,11 +1078,13 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
-def _run_headline(record: dict) -> dict | None:
+def _run_headline(record: EvalRunRecord) -> dict | None:
     """The run's overall grade for the detail header: its rolled-up primary metric with the interval
     and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
     metrics)."""
-    return record_headline(EvalRunRecord.model_validate(record))
+    if record_policy_violations(record):
+        return None
+    return record_headline(record)
 
 
 def _group_member(record: EvalRunRecord) -> dict:
@@ -1071,7 +1094,7 @@ def _group_member(record: EvalRunRecord) -> dict:
         "eval_name": record.evaluation.name,
         "status": record.status.value,
         "created_at": record.created_at,
-        "headline": record_headline(record),
+        "headline": _run_headline(record),
     }
 
 
@@ -1134,7 +1157,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return RunDetailResponse.model_validate({**record, "headline": _run_headline(record)})
+        parsed = EvalRunRecord.model_validate(record)
+        return RunDetailResponse.model_validate(
+            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+        )
 
     @router.get("/runs/{run_id}/jobs")
     async def api_run_jobs(request: Request) -> JSONResponse:
@@ -1274,9 +1300,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
+    cohort = params.get("cohort", SEPTEMBER_24_VERSION)
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=params.get("cohort") or None,
+        cohort_version=None if cohort == "all" else cohort,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),

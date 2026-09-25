@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -411,8 +412,8 @@ def test_record_config_mirror_covers_every_launcher_field(mirror, launcher):
     assert not missing, f"{mirror.__name__} does not mirror {launcher.__name__} fields {sorted(missing)}"
 
 
-def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_path):
-    """An unknown key under model.config.serve costs that key, not the whole record."""
+def test_a_serve_field_the_schema_has_not_learned_remains_in_the_model_identity(tmp_path):
+    """An unknown serving field must not make two configurations look identical."""
     configured = _RECORD.model_copy(
         update={
             "model": ModelRef(
@@ -436,4 +437,5 @@ def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_p
     assert record.metrics == _RECORD.metrics
     assert record.model.config is not None
     assert record.model.config.serve.tensor_parallel_size is None
-    assert not hasattr(record.model.config.serve, "future_serve_option")
+    assert record.model.config.serve.future_serve_option == 2
+    assert comparison_model_name(record.model) != comparison_model_name(configured.model)

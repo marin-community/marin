@@ -19,6 +19,7 @@ from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
@@ -142,6 +143,7 @@ class EvaluationBatch:
     submission_cluster: str
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    source_model_config: ModelConfigRef | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,8 @@ def _record(
             "extra": dict(evalchemy.extra_gen_kwargs) if evalchemy is not None else {},
         }
     )
+    model_config = ModelConfigRef.model_validate(asdict(batch.model))
+    source_model_config = batch.source_model_config or model_config
     record = EvalRunRecord(
         run_id=identity.run_id,
         group_id=batch.group_id,
@@ -203,7 +207,9 @@ def _record(
             name=batch.model.name,
             location=batch.model.location,
             backend=batch.model.serve.backend.value,
-            config=ModelConfigRef.model_validate(asdict(batch.model)),
+            config=model_config,
+            source_config=source_model_config if source_model_config != model_config else None,
+            config_digest=model_config_digest(source_model_config),
         ),
         judge=(
             HostedJudgeRef(

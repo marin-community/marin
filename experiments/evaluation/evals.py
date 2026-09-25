@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
@@ -71,6 +72,7 @@ class EvalchemyDefinition:
         return EvalRef(
             name=config.name,
             mechanism="evalchemy",
+            source_digest=source_config_digest(self.config_path),
             family=self.family,
             tasks=tuple(
                 EvalTaskRef(
@@ -91,6 +93,7 @@ class EvalchemyDefinition:
                 batch_size=config.batch_size,
                 seed=config.seed,
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
+                chat_template_kwargs=dict(config.chat_template_kwargs),
                 extra_model_args=dict(config.extra_model_args),
                 max_length=config.max_length,
                 judge=(
@@ -128,6 +131,10 @@ class EvalchemyDefinition:
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
+            chat_template_kwargs={
+                **model.generation.chat_template_kwargs,
+                **config.chat_template_kwargs,
+            },
         )
 
 
@@ -151,6 +158,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            source_digest=source_config_digest(self.config_path),
             family=self.family,
             tasks=(
                 EvalTaskRef(
@@ -255,6 +263,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         batch_size=config.batch_size,
         seed=config.seed,
         extra_gen_kwargs=extra_gen_kwargs,
+        chat_template_kwargs=dict(config.chat_template_kwargs),
         extra_model_args=extra_model_args,
         max_length=config.max_length,
         runtime=EvalchemyRuntimeConfig(

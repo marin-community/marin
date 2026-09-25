@@ -88,7 +88,7 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
 GET  /history?model=&task=   every run's headline score for one cell, over time
@@ -136,13 +136,15 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-By default each benchmark is taken from the newest run that clears the request's admission rules
+The API defaults to `cohort=eval-policy-2026-09-24-verified`; `cohort=all` selects the newest admissible run per benchmark across cohorts. A named verified cohort admits only records with its approved benchmark config, evaluator revision, and thinking mode. Historical policy labels remain in run detail, but do not qualify as verified comparisons. Models with different normalized source YAMLs have separate comparison names ending in `@<12-character digest>`.
+
+Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
 of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
 size for a capped run, or a metric protocol mismatch. A cohort that re-ran only part of a model's
-benchmark set does not hide results that are still the newest available for their own benchmark;
-`cohort=<version>` pins every column to one launch instead. A `(model, benchmark)` with no admitted
+benchmark set does not hide results that are still the newest available for their own benchmark when
+`cohort=all` is selected. A `(model, benchmark)` with no admitted
 cell is reported in `missing` with the reason and the offending run, so an empty cell is explained.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
