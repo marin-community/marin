@@ -529,11 +529,11 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
             assert "number" in declared.values(), f"{panel['title']}: no numeric column to plot"
 
 
-def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
+@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_train_step.json"])
+def test_every_panel_has_a_distinct_title_id_and_slot(board: str) -> None:
     # A duplicated panel renders twice and shares an id, and a test that looks panels up by
     # title cannot see it: the lookup keeps one and the dashboard keeps both.
-    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = dashboard["panels"]
+    panels = stitch_all(DASHBOARDS, DASHBOARDS / "panels")[board]["panels"]
 
     titles = [panel["title"] for panel in panels]
     assert len(titles) == len(set(titles)), titles

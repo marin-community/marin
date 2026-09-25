@@ -1072,22 +1072,6 @@ def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
     assert {round(value, 6) for _, value in rows} == {round(expected, 6)}
 
 
-def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
-    """id and gridPos are dashboard-local -- the two things a panelRef legitimately varies.
-
-    test_rl_runs_dashboard.py checks rl_runs.json.
-    """
-    for name in ("rl_sync_train_step.json", "rl_sync_generation.json"):
-        board = _stitched()[name]
-        panels = board["panels"]
-        titles = [panel["title"] for panel in panels]
-        assert len(titles) == len(set(titles)), (name, titles)
-        ids = [panel["id"] for panel in panels]
-        assert len(ids) == len(set(ids)), (name, ids)
-        slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
-        assert len(slots) == len(set(slots)), (name, slots)
-
-
 def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(store) -> None:
     """Three things decide whether anything below can be read, and all three are invisible in a
     duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
