@@ -1,5 +1,5 @@
 {
-  "status": "native-reference-independent-arithmetic-and-fresh-task-oracle-passed; Harbor-pending",
+  "status": "native-reference-independent-arithmetic-fresh-oracle-and-Harbor-passed; competency-review-pending",
   "source_revision": "ea66e88c73465d8d35703429669cace87e10c62b",
   "archive_sha256": "c3d6a82047d0d6c18132bca788da3456426e421153d89085cb733a8ea05ffd14",
   "task_recipe": "real-rnaseq-shrinkage-enrichment-audit",
@@ -66,6 +66,16 @@
     "positive_checks": 2,
     "negative_checks": 30,
     "seconds": 208.04520280699944,
+    "model_calls": 0
+  },
+  "Harbor": {
+    "job_id": "/exedev/bio-enrichment-harbor-20260924-235846",
+    "archive_uri": "gs://marin-us-central2/bio-tasks/harbor-validation/sha256/fd1c7cb36826032dbc878a6d8da160e0f8165e28a9e75bd1842ec6aed44ac29d/outputs.tar.zst",
+    "archive_sha256": "fd1c7cb36826032dbc878a6d8da160e0f8165e28a9e75bd1842ec6aed44ac29d",
+    "positive_cases": 1,
+    "negative_cases": 4,
+    "oracle_seconds": 158.946723,
+    "remaining_sandboxes": 0,
     "model_calls": 0
   }
 }

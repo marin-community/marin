@@ -4823,6 +4823,1489 @@
         }
       ],
       "limitations": "One fresh oracle execution and three isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
+    },
+    {
+      "job_id": "/exedev/bio-enrichment-harbor-20260924-235846",
+      "source_revision": "62334024f82cd35a3ceb5ce5bd6c58f1402418e0",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "named oracle with Terminus terminal setup check",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "58ef56317130b7b3e6d15bc1dbe1ed8e2b3a95b8bf8c750f56f9c7df56bcb682",
+      "canonical_task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+      "archive": {
+        "state": "preserved",
+        "uri": "gs://marin-us-central2/bio-tasks/harbor-validation/sha256/fd1c7cb36826032dbc878a6d8da160e0f8165e28a9e75bd1842ec6aed44ac29d/outputs.tar.zst",
+        "sha256": "fd1c7cb36826032dbc878a6d8da160e0f8165e28a9e75bd1842ec6aed44ac29d",
+        "size_bytes": 9676340,
+        "temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-enrichment-harbor-20260924-235846/0/31ed0eb02afff66c/outputs.tar.zst",
+        "provider_verified": {
+          "size_bytes": 9676340,
+          "md5_base64": "pYw10ntMsPq8N75kk6i2uw==",
+          "generation": "1790295077408232"
+        }
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-9a98788d",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330",
+        "accelerators_requested": 0,
+        "worker_preflight": {
+          "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-0",
+          "healthy": true,
+          "scale_group": "tpu_v4-reserved_256-us-central2-b",
+          "tpu_name": "t1v-n-9a98788d",
+          "backend_id": "default"
+        }
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-25T00:07:34.119602+00:00",
+        "trials": [
+          "real-rnaseq-shrinkage-enrichment__XxgXRWF",
+          "real-rnaseq-shrinkage-enrichment__mMT4PKg",
+          "real-rnaseq-shrinkage-enrichment__onQWY7P",
+          "real-rnaseq-shrinkage-enrichment__phWCvvg",
+          "real-rnaseq-shrinkage-enrichment__vgUQgD6"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-25T00:07:35.343176+00:00",
+            "remaining": [
+              {
+                "id": "7ab46a08-6d89-403f-9636-a3a58d3f4da3",
+                "state": "destroying",
+                "desired_state": "destroyed"
+              }
+            ]
+          },
+          {
+            "checked_at": "2026-09-25T00:08:06.246896+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-25T00:08:06.291256+00:00"
+      },
+      "summary_identity_check": "All three artifact-only controls have the exact passing answer.json SHA-256 and all eight correct summary fields; each fails exactly the intended table. Empty output fails all six tables.",
+      "cases": [
+        {
+          "task_id": "real-rnaseq-shrinkage-enrichment-audit-v1-20260924-00000",
+          "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+          "control": "fresh-native-oracle",
+          "expected_reward": 1,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [],
+          "task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+          "repository_indices": [
+            5
+          ],
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "audit",
+                  "field": "genes_fitted",
+                  "passed": true,
+                  "expected": 16659,
+                  "actual": 16659
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_significant",
+                  "passed": true,
+                  "expected": 9298,
+                  "actual": 9298
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_significant",
+                  "passed": true,
+                  "expected": 8615,
+                  "actual": 8615
+                },
+                {
+                  "id": "audit",
+                  "field": "large_shrunken_effects",
+                  "passed": true,
+                  "expected": 5037,
+                  "actual": 5037
+                },
+                {
+                  "id": "audit",
+                  "field": "changed_effect_threshold",
+                  "passed": true,
+                  "expected": 1586,
+                  "actual": 1586
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_tested_significant_terms",
+                  "passed": true,
+                  "expected": 406,
+                  "actual": 406
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_genome_significant_terms",
+                  "passed": true,
+                  "expected": 3786,
+                  "actual": 3786
+                },
+                {
+                  "id": "audit",
+                  "field": "shared_significant_terms",
+                  "passed": true,
+                  "expected": 381,
+                  "actual": 381
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 6,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_results.tsv": {
+                  "passed": true,
+                  "rows": 16659,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_decisions.tsv": {
+                  "passed": true,
+                  "rows": 27179,
+                  "missing": [],
+                  "failures": []
+                },
+                "annotation_membership.tsv": {
+                  "passed": true,
+                  "rows": 25730,
+                  "missing": [],
+                  "failures": []
+                },
+                "adjusted_tested_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 5898,
+                  "missing": [],
+                  "failures": []
+                },
+                "raw_genome_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 6437,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "gene_results.tsv": {
+              "passed": true,
+              "rows": 16659,
+              "missing": [],
+              "failures": []
+            },
+            "gene_decisions.tsv": {
+              "passed": true,
+              "rows": 27179,
+              "missing": [],
+              "failures": []
+            },
+            "annotation_membership.tsv": {
+              "passed": true,
+              "rows": 25730,
+              "missing": [],
+              "failures": []
+            },
+            "adjusted_tested_enrichment.tsv": {
+              "passed": true,
+              "rows": 5898,
+              "missing": [],
+              "failures": []
+            },
+            "raw_genome_enrichment.tsv": {
+              "passed": true,
+              "rows": 6437,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "baa53589f83e78291d9b00c6591509a2b8ff4bcbcd2bb3ba90ecaa7efd64d26e",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+            "instruction.md": "df41b156c7001a7386479221f586e8cde5c9eaf59ca40fb74d07096ad0daf537",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "f92fc07154b6232953b50c0884875505f4700b108f8912ea736b79bbe89b36b3",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/oracle.pyz": "3edbbe7d87d12ce69a4b539f165e489ff3833e43634a09fe62c5b5b0c8be4c10",
+            "solution/solve.sh": "1f121078299861aa27063777c4a78b70656709c44eb8270073dd75afd1488463",
+            "task.toml": "ae149f805dfb6fd92e9002674b57b1ee3666bff96b878574287a4ddb719c7b58",
+            "tests/Dockerfile": "216dfc838119caeb4e12731a04e563d9e7bdaed0e047943c2ced9bdb69462959",
+            "tests/reference.json": "15044cf841c42094074db297b3f167bc0258ba254c5f2f60647eb916bfbb80ce",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "34c34309f8573a10bcb0ee39169c875298549274593da3db3ac3208a9be33175"
+          },
+          "artifact_sha256": {
+            "answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "gene_results.tsv": "b4d603982de60aa807236f88f95f20d6d7e7aa8d8ecce31e8254dde7faa5eab4",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "annotation_membership.tsv": "81e12724e8409d755a80db417d09a7d00d58e6f562debc8266a9ff35d7192e14",
+            "raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12"
+          },
+          "seconds": {
+            "environment_setup": 5.210089,
+            "agent_setup": 3.933184,
+            "agent_execution": 158.946723,
+            "verifier": 14.528991
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/Rscript\nRscript (R) version 4.5.3 (2026-03-11)\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T00:04:18.733414Z",
+          "finished_at": "2026-09-25T00:07:30.366839Z"
+        },
+        {
+          "task_id": "real-rnaseq-shrinkage-enrichment-audit-v1-20260924-00000-unshrunk-effect",
+          "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+          "control": "unshrunk-effect",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "gene_results.tsv"
+          ],
+          "changed_rows": 16659,
+          "task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+          "repository_indices": [
+            5
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "audit",
+                  "field": "genes_fitted",
+                  "passed": true,
+                  "expected": 16659,
+                  "actual": 16659
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_significant",
+                  "passed": true,
+                  "expected": 9298,
+                  "actual": 9298
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_significant",
+                  "passed": true,
+                  "expected": 8615,
+                  "actual": 8615
+                },
+                {
+                  "id": "audit",
+                  "field": "large_shrunken_effects",
+                  "passed": true,
+                  "expected": 5037,
+                  "actual": 5037
+                },
+                {
+                  "id": "audit",
+                  "field": "changed_effect_threshold",
+                  "passed": true,
+                  "expected": 1586,
+                  "actual": 1586
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_tested_significant_terms",
+                  "passed": true,
+                  "expected": 406,
+                  "actual": 406
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_genome_significant_terms",
+                  "passed": true,
+                  "expected": 3786,
+                  "actual": 3786
+                },
+                {
+                  "id": "audit",
+                  "field": "shared_significant_terms",
+                  "passed": true,
+                  "expected": 381,
+                  "actual": 381
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 6,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_results.tsv": {
+                  "passed": false,
+                  "rows": 16659,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "19888",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "20671",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "27395",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "18777",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "21399",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "58175",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "108664",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "12421",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "319263",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "59014",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "76187",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "72481",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "76982",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "17864",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "70675",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "170755",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "620986",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "73824",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "266793",
+                      "field": "shrunken_log2_fold_change"
+                    },
+                    {
+                      "id": "100038398",
+                      "field": "shrunken_log2_fold_change"
+                    }
+                  ]
+                },
+                "gene_decisions.tsv": {
+                  "passed": true,
+                  "rows": 27179,
+                  "missing": [],
+                  "failures": []
+                },
+                "annotation_membership.tsv": {
+                  "passed": true,
+                  "rows": 25730,
+                  "missing": [],
+                  "failures": []
+                },
+                "adjusted_tested_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 5898,
+                  "missing": [],
+                  "failures": []
+                },
+                "raw_genome_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 6437,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "gene_results.tsv": {
+              "passed": false,
+              "rows": 16659,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "19888",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "20671",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "27395",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "18777",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "21399",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "58175",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "108664",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "12421",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "319263",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "59014",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "76187",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "72481",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "76982",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "17864",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "70675",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "170755",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "620986",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "73824",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "266793",
+                  "field": "shrunken_log2_fold_change"
+                },
+                {
+                  "id": "100038398",
+                  "field": "shrunken_log2_fold_change"
+                }
+              ]
+            },
+            "gene_decisions.tsv": {
+              "passed": true,
+              "rows": 27179,
+              "missing": [],
+              "failures": []
+            },
+            "annotation_membership.tsv": {
+              "passed": true,
+              "rows": 25730,
+              "missing": [],
+              "failures": []
+            },
+            "adjusted_tested_enrichment.tsv": {
+              "passed": true,
+              "rows": 5898,
+              "missing": [],
+              "failures": []
+            },
+            "raw_genome_enrichment.tsv": {
+              "passed": true,
+              "rows": 6437,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "baa53589f83e78291d9b00c6591509a2b8ff4bcbcd2bb3ba90ecaa7efd64d26e",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+            "instruction.md": "df41b156c7001a7386479221f586e8cde5c9eaf59ca40fb74d07096ad0daf537",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "f92fc07154b6232953b50c0884875505f4700b108f8912ea736b79bbe89b36b3",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "solution/control/annotation_membership.tsv": "81e12724e8409d755a80db417d09a7d00d58e6f562debc8266a9ff35d7192e14",
+            "solution/control/answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "solution/control/gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "solution/control/gene_results.tsv": "97c8cdbbe3842cf660cef984e900bdca3c6c7a4e34d407a1f9f457e94b0808d9",
+            "solution/control/raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12",
+            "solution/control/sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "solution/oracle.pyz": "3edbbe7d87d12ce69a4b539f165e489ff3833e43634a09fe62c5b5b0c8be4c10",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "ae149f805dfb6fd92e9002674b57b1ee3666bff96b878574287a4ddb719c7b58",
+            "tests/Dockerfile": "216dfc838119caeb4e12731a04e563d9e7bdaed0e047943c2ced9bdb69462959",
+            "tests/reference.json": "15044cf841c42094074db297b3f167bc0258ba254c5f2f60647eb916bfbb80ce",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "34c34309f8573a10bcb0ee39169c875298549274593da3db3ac3208a9be33175"
+          },
+          "artifact_sha256": {
+            "answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "gene_results.tsv": "97c8cdbbe3842cf660cef984e900bdca3c6c7a4e34d407a1f9f457e94b0808d9",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "annotation_membership.tsv": "81e12724e8409d755a80db417d09a7d00d58e6f562debc8266a9ff35d7192e14",
+            "raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12"
+          },
+          "seconds": {
+            "environment_setup": 2.958042,
+            "agent_setup": 4.223596,
+            "agent_execution": 2.619656,
+            "verifier": 14.167513
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/Rscript\nRscript (R) version 4.5.3 (2026-03-11)\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T00:03:46.488913Z",
+          "finished_at": "2026-09-25T00:04:18.726485Z"
+        },
+        {
+          "task_id": "real-rnaseq-shrinkage-enrichment-audit-v1-20260924-00000-adjusted-tested-wrong-background",
+          "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+          "control": "adjusted-tested-wrong-background",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "annotation_membership.tsv"
+          ],
+          "changed_rows": 11106,
+          "task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+          "repository_indices": [
+            5
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "audit",
+                  "field": "genes_fitted",
+                  "passed": true,
+                  "expected": 16659,
+                  "actual": 16659
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_significant",
+                  "passed": true,
+                  "expected": 9298,
+                  "actual": 9298
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_significant",
+                  "passed": true,
+                  "expected": 8615,
+                  "actual": 8615
+                },
+                {
+                  "id": "audit",
+                  "field": "large_shrunken_effects",
+                  "passed": true,
+                  "expected": 5037,
+                  "actual": 5037
+                },
+                {
+                  "id": "audit",
+                  "field": "changed_effect_threshold",
+                  "passed": true,
+                  "expected": 1586,
+                  "actual": 1586
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_tested_significant_terms",
+                  "passed": true,
+                  "expected": 406,
+                  "actual": 406
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_genome_significant_terms",
+                  "passed": true,
+                  "expected": 3786,
+                  "actual": 3786
+                },
+                {
+                  "id": "audit",
+                  "field": "shared_significant_terms",
+                  "passed": true,
+                  "expected": 381,
+                  "actual": 381
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 6,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_results.tsv": {
+                  "passed": true,
+                  "rows": 16659,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_decisions.tsv": {
+                  "passed": true,
+                  "rows": 27179,
+                  "missing": [],
+                  "failures": []
+                },
+                "annotation_membership.tsv": {
+                  "passed": false,
+                  "rows": 25730,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "100009609",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100009614",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100009664",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100012",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100015211",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100033459",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100034661",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100034675",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100034729",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100036518",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100036520",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100036539",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100036573",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100037260",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038349",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038353",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038355",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038394",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038395",
+                      "field": "adjusted_tested_background"
+                    },
+                    {
+                      "id": "100038397",
+                      "field": "adjusted_tested_background"
+                    }
+                  ]
+                },
+                "adjusted_tested_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 5898,
+                  "missing": [],
+                  "failures": []
+                },
+                "raw_genome_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 6437,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "gene_results.tsv": {
+              "passed": true,
+              "rows": 16659,
+              "missing": [],
+              "failures": []
+            },
+            "gene_decisions.tsv": {
+              "passed": true,
+              "rows": 27179,
+              "missing": [],
+              "failures": []
+            },
+            "annotation_membership.tsv": {
+              "passed": false,
+              "rows": 25730,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "100009609",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100009614",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100009664",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100012",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100015211",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100033459",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100034661",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100034675",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100034729",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100036518",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100036520",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100036539",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100036573",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100037260",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038349",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038353",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038355",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038394",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038395",
+                  "field": "adjusted_tested_background"
+                },
+                {
+                  "id": "100038397",
+                  "field": "adjusted_tested_background"
+                }
+              ]
+            },
+            "adjusted_tested_enrichment.tsv": {
+              "passed": true,
+              "rows": 5898,
+              "missing": [],
+              "failures": []
+            },
+            "raw_genome_enrichment.tsv": {
+              "passed": true,
+              "rows": 6437,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "baa53589f83e78291d9b00c6591509a2b8ff4bcbcd2bb3ba90ecaa7efd64d26e",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+            "instruction.md": "df41b156c7001a7386479221f586e8cde5c9eaf59ca40fb74d07096ad0daf537",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "f92fc07154b6232953b50c0884875505f4700b108f8912ea736b79bbe89b36b3",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "solution/control/annotation_membership.tsv": "3d6568c1b68905d5d8ba0fab69b4c44f9a27dc84fa8363a60d95ba9fe533c862",
+            "solution/control/answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "solution/control/gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "solution/control/gene_results.tsv": "b4d603982de60aa807236f88f95f20d6d7e7aa8d8ecce31e8254dde7faa5eab4",
+            "solution/control/raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12",
+            "solution/control/sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "solution/oracle.pyz": "3edbbe7d87d12ce69a4b539f165e489ff3833e43634a09fe62c5b5b0c8be4c10",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "ae149f805dfb6fd92e9002674b57b1ee3666bff96b878574287a4ddb719c7b58",
+            "tests/Dockerfile": "216dfc838119caeb4e12731a04e563d9e7bdaed0e047943c2ced9bdb69462959",
+            "tests/reference.json": "15044cf841c42094074db297b3f167bc0258ba254c5f2f60647eb916bfbb80ce",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "34c34309f8573a10bcb0ee39169c875298549274593da3db3ac3208a9be33175"
+          },
+          "artifact_sha256": {
+            "answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "gene_results.tsv": "b4d603982de60aa807236f88f95f20d6d7e7aa8d8ecce31e8254dde7faa5eab4",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "annotation_membership.tsv": "3d6568c1b68905d5d8ba0fab69b4c44f9a27dc84fa8363a60d95ba9fe533c862",
+            "raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12"
+          },
+          "seconds": {
+            "environment_setup": 2.371866,
+            "agent_setup": 4.46783,
+            "agent_execution": 2.604081,
+            "verifier": 14.423016
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/Rscript\nRscript (R) version 4.5.3 (2026-03-11)\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T00:03:13.766857Z",
+          "finished_at": "2026-09-25T00:03:46.481824Z"
+        },
+        {
+          "task_id": "real-rnaseq-shrinkage-enrichment-audit-v1-20260924-00000-raw-genome-wrong-background",
+          "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+          "control": "raw-genome-wrong-background",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "annotation_membership.tsv"
+          ],
+          "changed_rows": 11106,
+          "task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+          "repository_indices": [
+            5
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "audit",
+                  "field": "genes_fitted",
+                  "passed": true,
+                  "expected": 16659,
+                  "actual": 16659
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_significant",
+                  "passed": true,
+                  "expected": 9298,
+                  "actual": 9298
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_significant",
+                  "passed": true,
+                  "expected": 8615,
+                  "actual": 8615
+                },
+                {
+                  "id": "audit",
+                  "field": "large_shrunken_effects",
+                  "passed": true,
+                  "expected": 5037,
+                  "actual": 5037
+                },
+                {
+                  "id": "audit",
+                  "field": "changed_effect_threshold",
+                  "passed": true,
+                  "expected": 1586,
+                  "actual": 1586
+                },
+                {
+                  "id": "audit",
+                  "field": "adjusted_tested_significant_terms",
+                  "passed": true,
+                  "expected": 406,
+                  "actual": 406
+                },
+                {
+                  "id": "audit",
+                  "field": "raw_genome_significant_terms",
+                  "passed": true,
+                  "expected": 3786,
+                  "actual": 3786
+                },
+                {
+                  "id": "audit",
+                  "field": "shared_significant_terms",
+                  "passed": true,
+                  "expected": 381,
+                  "actual": 381
+                }
+              ],
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": true,
+                  "rows": 6,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_results.tsv": {
+                  "passed": true,
+                  "rows": 16659,
+                  "missing": [],
+                  "failures": []
+                },
+                "gene_decisions.tsv": {
+                  "passed": true,
+                  "rows": 27179,
+                  "missing": [],
+                  "failures": []
+                },
+                "annotation_membership.tsv": {
+                  "passed": false,
+                  "rows": 25730,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "100009609",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100009614",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100009664",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100012",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100015211",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100033459",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100034661",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100034675",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100034729",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100036518",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100036520",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100036539",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100036573",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100037260",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038349",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038353",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038355",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038394",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038395",
+                      "field": "raw_genome_background"
+                    },
+                    {
+                      "id": "100038397",
+                      "field": "raw_genome_background"
+                    }
+                  ]
+                },
+                "adjusted_tested_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 5898,
+                  "missing": [],
+                  "failures": []
+                },
+                "raw_genome_enrichment.tsv": {
+                  "passed": true,
+                  "rows": 6437,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "gene_results.tsv": {
+              "passed": true,
+              "rows": 16659,
+              "missing": [],
+              "failures": []
+            },
+            "gene_decisions.tsv": {
+              "passed": true,
+              "rows": 27179,
+              "missing": [],
+              "failures": []
+            },
+            "annotation_membership.tsv": {
+              "passed": false,
+              "rows": 25730,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "100009609",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100009614",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100009664",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100012",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100015211",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100033459",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100034661",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100034675",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100034729",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100036518",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100036520",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100036539",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100036573",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100037260",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038349",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038353",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038355",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038394",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038395",
+                  "field": "raw_genome_background"
+                },
+                {
+                  "id": "100038397",
+                  "field": "raw_genome_background"
+                }
+              ]
+            },
+            "adjusted_tested_enrichment.tsv": {
+              "passed": true,
+              "rows": 5898,
+              "missing": [],
+              "failures": []
+            },
+            "raw_genome_enrichment.tsv": {
+              "passed": true,
+              "rows": 6437,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "baa53589f83e78291d9b00c6591509a2b8ff4bcbcd2bb3ba90ecaa7efd64d26e",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+            "instruction.md": "df41b156c7001a7386479221f586e8cde5c9eaf59ca40fb74d07096ad0daf537",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "f92fc07154b6232953b50c0884875505f4700b108f8912ea736b79bbe89b36b3",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/control/adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "solution/control/annotation_membership.tsv": "6eeec890db959d6a1b6ae62a71d341a63ed08293f4a8286188b3bde64d987417",
+            "solution/control/answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "solution/control/gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "solution/control/gene_results.tsv": "b4d603982de60aa807236f88f95f20d6d7e7aa8d8ecce31e8254dde7faa5eab4",
+            "solution/control/raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12",
+            "solution/control/sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "solution/oracle.pyz": "3edbbe7d87d12ce69a4b539f165e489ff3833e43634a09fe62c5b5b0c8be4c10",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "ae149f805dfb6fd92e9002674b57b1ee3666bff96b878574287a4ddb719c7b58",
+            "tests/Dockerfile": "216dfc838119caeb4e12731a04e563d9e7bdaed0e047943c2ced9bdb69462959",
+            "tests/reference.json": "15044cf841c42094074db297b3f167bc0258ba254c5f2f60647eb916bfbb80ce",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "34c34309f8573a10bcb0ee39169c875298549274593da3db3ac3208a9be33175"
+          },
+          "artifact_sha256": {
+            "answer.json": "5ef8df1cefcf84299d76c53842e5a93193648da4ec6d485752b93faccc662570",
+            "gene_results.tsv": "b4d603982de60aa807236f88f95f20d6d7e7aa8d8ecce31e8254dde7faa5eab4",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b",
+            "gene_decisions.tsv": "2c373febc76c525087a827be6ba979734110c76191f133a7fb53399ce1968989",
+            "adjusted_tested_enrichment.tsv": "1d974345f293ea107a4ffb35fff3228e7d1fbcbb9c383a7870be5c65084ed921",
+            "annotation_membership.tsv": "6eeec890db959d6a1b6ae62a71d341a63ed08293f4a8286188b3bde64d987417",
+            "raw_genome_enrichment.tsv": "52ee6206061f4c6a637bde7d7e8ed62b44fa9f83e7251cce3fe4cb39195e6f12"
+          },
+          "seconds": {
+            "environment_setup": 2.462105,
+            "agent_setup": 4.312208,
+            "agent_execution": 2.108747,
+            "verifier": 14.51702
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/Rscript\nRscript (R) version 4.5.3 (2026-03-11)\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T00:02:41.340801Z",
+          "finished_at": "2026-09-25T00:03:13.759148Z"
+        },
+        {
+          "task_id": "real-rnaseq-shrinkage-enrichment-audit-v1-20260924-00000-empty-output",
+          "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+          "control": "empty-output",
+          "expected_reward": 0,
+          "summary_kind": "missing",
+          "expected_summary_reason": "missing_or_nonregular_answer",
+          "expected_artifact_failures": [
+            "adjusted_tested_enrichment.tsv",
+            "annotation_membership.tsv",
+            "gene_decisions.tsv",
+            "gene_results.tsv",
+            "raw_genome_enrichment.tsv",
+            "sample_qc.tsv"
+          ],
+          "task_sha256": "fb9852c848c4648774a51c6b7a2b1d269a503953bfebdea4c652bf3129e2590a",
+          "repository_indices": [
+            5
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "missing_or_nonregular_answer",
+              "artifact_checks": {
+                "sample_qc.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "gene_results.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "gene_decisions.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "annotation_membership.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "adjusted_tested_enrichment.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "raw_genome_enrichment.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "gene_results.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "gene_decisions.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "annotation_membership.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "adjusted_tested_enrichment.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "raw_genome_enrichment.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "baa53589f83e78291d9b00c6591509a2b8ff4bcbcd2bb3ba90ecaa7efd64d26e",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+            "instruction.md": "df41b156c7001a7386479221f586e8cde5c9eaf59ca40fb74d07096ad0daf537",
+            "setup_files/inputs/counts.tsv": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+            "setup_files/inputs/query.json": "f92fc07154b6232953b50c0884875505f4700b108f8912ea736b79bbe89b36b3",
+            "setup_files/inputs/samples.tsv": "14f6adfa8f256c2e8ac4854d5b1f2b068c4b32e2933b2cf666de92d2ea053265",
+            "solution/oracle.pyz": "3edbbe7d87d12ce69a4b539f165e489ff3833e43634a09fe62c5b5b0c8be4c10",
+            "solution/solve.sh": "534913239c5af4d35fb89c9c6776ab80b99b4406dabde854e347f812312f10cb",
+            "task.toml": "ae149f805dfb6fd92e9002674b57b1ee3666bff96b878574287a4ddb719c7b58",
+            "tests/Dockerfile": "216dfc838119caeb4e12731a04e563d9e7bdaed0e047943c2ced9bdb69462959",
+            "tests/reference.json": "15044cf841c42094074db297b3f167bc0258ba254c5f2f60647eb916bfbb80ce",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "34c34309f8573a10bcb0ee39169c875298549274593da3db3ac3208a9be33175"
+          },
+          "artifact_sha256": {},
+          "seconds": {
+            "environment_setup": 79.131257,
+            "agent_setup": 3.859325,
+            "agent_execution": 2.120365,
+            "verifier": 48.796528
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/Rscript\nRscript (R) version 4.5.3 (2026-03-11)\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-24T23:59:34.591010Z",
+          "finished_at": "2026-09-25T00:02:41.332617Z"
+        }
+      ],
+      "limitations": "One observed luminal developmental contrast. Package execution and full artifacts passed; source-lineage and competency assignment review remain separate. No semantic GO reduction or ranked GSEA is covered."
     }
   ]
 }

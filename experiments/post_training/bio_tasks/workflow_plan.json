@@ -144,7 +144,13 @@
         },
         {
           "id": "rna-seq-contrast-enrichment-03",
-          "scientific_question": "Which conclusions survive declared filtering, shrinkage and enrichment-universe choices?"
+          "scientific_question": "Which conclusions survive declared filtering, shrinkage and enrichment-universe choices?",
+          "implementation": {
+            "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+            "native_validation": "native_validation_runs/42fbd427ac27.json",
+            "Harbor": "passed; 1 fresh oracle and 4 rejected controls; container_validation.json",
+            "scope": "Count filtering, original Wald significance versus shrunken effects, and jointly changed selection/background specifications. No isolation of the individual ORA-choice effects, semantic reduction or GSEA."
+          }
         },
         {
           "id": "rna-seq-contrast-enrichment-04",

@@ -102,7 +102,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
 | 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
-| 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction`, `real-rnaseq-shrinkage-enrichment-audit` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed; 1 fresh shrinkage/enrichment task oracle passed; Harbor pending |
+| 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction`, `real-rnaseq-shrinkage-enrichment-audit` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed; 1 fresh shrinkage/enrichment task oracle passed; Harbor passed |
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | 3 reference checks passed (`dna-unique-mapping`) |
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
@@ -564,7 +564,7 @@ The 31 real-data candidates use unchanged biological observations or declared ob
   and two clusterProfiler GO-enrichment specifications on six luminal libraries.
   Its [native reference and independent arithmetic checks](../../experiments/post_training/bio_tasks/sources/shrinkage-enrichment-reference.json)
   and fresh task oracle passed in 208 seconds, including 30 rejected controls. The
-  pinned environment profile supplies 8 GiB of memory; Harbor checks remain pending.
+  pinned environment profile supplies 8 GiB of memory; Harbor passed one fresh oracle and four rejected controls.
   It adds no validated benchmark or competency credit and uses the existing study
   lineage.
 - **PDB 1UBQ, 1CRN and 4HHB:** complete deposited mmCIF inputs for per-chain geometry

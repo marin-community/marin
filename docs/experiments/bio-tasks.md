@@ -20,7 +20,7 @@ of the task contract; see [the shared contract](https://github.com/marin-communi
 
 [Open the public explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
 to inspect the draft hierarchy, generation policy, source benchmarks, format profiles,
-repository metadata and five frozen public task examples. The self-contained
+repository metadata and frozen public task examples. The self-contained
 [HTML](bio-task-coverage.html) needs no login or local server.
 
 The versioned [taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
@@ -144,8 +144,10 @@ The new `real-rnaseq-shrinkage-enrichment-audit` candidate uses GSE60450 luminal
 libraries to compare shrunken effect thresholds and two GO-enrichment specifications.
 Its [native reference and independent arithmetic checks](../../experiments/post_training/bio_tasks/sources/shrinkage-enrichment-reference.json)
 and fresh input-reading task oracle passed, including 30 rejected controls. The
-pinned environment profile supplies 8 GiB of memory. Harbor execution and scientific
-review remain pending. Registration adds one
+pinned environment profile supplies 8 GiB of memory. Harbor also passed the fresh
+oracle in 159 seconds and rejected three artifact-only controls with unchanged
+correct summaries, plus an empty-output control. Scientific
+and competency-assignment review remain pending. Registration adds one
 candidate and no validated benchmark or competency assignment. It reuses the
 existing GSE60450 study lineage.
 

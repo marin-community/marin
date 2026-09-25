@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T22:26:00.604392+00:00",
+  "updated_at": "2026-09-25T00:28:00Z",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -24,7 +24,7 @@
     "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
   "selected_candidate": null,
-  "selection_reason": "Resume the prepared count/shrinkage/enrichment workflow; its native reference completed successfully. Validate the complete task before promoting coverage.",
+  "selection_reason": "The shrinkage/enrichment task passed native and Harbor validation. Prepare separate single-cell representation, BAM read-structure and heme-pocket workflows with one author responsible for each complete task. Competency weights remain undecided; benchmark endpoints stay provisional until their complete outputs are assessed.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1240,7 +1240,7 @@
   },
   "next_preparation": {
     "proposed_task_id": "count-contrast-enrichment",
-    "status": "resumed; inspect completed native references and package bounded connected tasks",
+    "status": "native oracle and Harbor passed for bounded shrinkage/ORA task; remaining semantic/GSEA/source endpoints separate",
     "selection_basis": "The observed mouse counts, sample identities and source-audited GO/native methods support preparation of an explicitly adapted expression/enrichment workflow. Biological-context differences alone do not block workflow coverage. The 17-record conditional group remains an endpoint inventory, not validated gain; complete methods and outputs still require checks.",
     "source_designs": [
       "workflow_designs/bixbench.json",
@@ -1271,5 +1271,63 @@
       "validated_mappings_added": 0
     }
   ],
-  "competency_taxonomy": "competencies.json"
+  "competency_taxonomy": "competencies.json",
+  "active_work": [
+    {
+      "recipe": "real-rnaseq-shrinkage-enrichment-audit",
+      "stage": "Harbor-passed; competency-assignment-review",
+      "native_evidence": "native_validation_runs/42fbd427ac27.json",
+      "native_positive_checks": 2,
+      "native_negative_checks": 30,
+      "competency_credit": "pending reviewed assignment",
+      "limits": "No ontology simplification, ranked GSEA or named-gene lookup claim.",
+      "Harbor_evidence": "/exedev/bio-enrichment-harbor-20260924-235846"
+    },
+    {
+      "proposed_recipe": "real-singlecell-representation-audit",
+      "stage": "reference-and-verifier-implementation",
+      "acceptance_packet": "workflow_designs/singlecell-representation.json",
+      "input_source": "GSE81682 observed read counts; exact prior QC transformation retained",
+      "competency_focus": [
+        "Sparse count normalization and preservation",
+        "Variable-gene selection",
+        "Same-fit PCA depth and loading diagnostics"
+      ],
+      "coverage_state": "candidate; source endpoint adaptations and component-only limits explicit"
+    },
+    {
+      "proposed_recipe": "real-phix-bam-read-structure",
+      "stage": "implementation; combined native environment and execution pending",
+      "input_source": "Observed PhiX paired FASTQ and reference sequence",
+      "competency_focus": [
+        "Read-layout and length inference",
+        "Alignment eligibility and pair consistency",
+        "Complete BAM and BAI verification"
+      ],
+      "coverage_state": "candidate; no execution or competency credit yet"
+    },
+    {
+      "proposed_recipe": "real-heme-pocket-burial",
+      "stage": "native and independent reference implementation; execution pending",
+      "input_source": "Observed PDB 4HHB paired mmCIF and PDB",
+      "competency_focus": [
+        "Structure identity and ligand resolution",
+        "Heavy-atom pocket contacts",
+        "Ligand-induced solvent-accessibility changes"
+      ],
+      "coverage_state": "candidate; proximity does not imply hydrogen-bond identification"
+    }
+  ],
+  "authoring_policy": {
+    "unit": "One complete Harbor task per author",
+    "owner_responsibilities": [
+      "Specify the scientific question and benchmark-derived competency",
+      "Freeze real biological inputs and provenance",
+      "Implement the private native-package oracle",
+      "Check all requested artifacts and scientific negative controls",
+      "Record native and Harbor evidence before proposing competency credit"
+    ],
+    "integration_owner": "Shared verifier interfaces, registry integration, reviewed competency assignments and publication",
+    "execution_policy": "Stagger active agents and native checks within current host limits; keep each task with its owner through completion."
+  }
 }
