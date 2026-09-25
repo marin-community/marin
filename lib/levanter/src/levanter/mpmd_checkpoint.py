@@ -130,8 +130,9 @@ def restore_checkpoint(state: State, checkpoint_path: str, shardings: PyTree) ->
 def wrap_checkpoint_arrays(state: State, shardings: PyTree) -> State:
     """Wrap restored device buffers in the destination MPMD array types.
 
-    Arrays must already reside on the target devices; this does not reshard or
-    copy them. Ordinary JAX shardings leave arrays unchanged.
+    Arrays must already reside on the target devices. Buffers are copied only
+    when the checkpoint reader selected a different memory kind from the
+    compiled MPMD input. Ordinary JAX shardings leave arrays unchanged.
     """
 
     def wrap(value, target):
@@ -148,11 +149,19 @@ def wrap_checkpoint_arrays(state: State, shardings: PyTree) -> State:
         for mesh_id in sorted(target.mesh_ids):
             sharding = NamedSharding(target.mpmd_mesh.unstack[mesh_id], target.spec, memory_kind=target.memory_kind)
             if sharding.addressable_devices:
+                local_buffers = []
+                for device in sharding.mesh.devices.flat:
+                    if device not in buffers:
+                        continue
+                    buffer = buffers[device]
+                    if buffer.sharding.memory_kind != sharding.memory_kind:
+                        buffer = jax.device_put(buffer, buffer.sharding.with_memory_kind(sharding.memory_kind))
+                    local_buffers.append(buffer)
                 local_arrays.append(
                     jax.make_array_from_single_device_arrays(
                         value.shape,
                         sharding,
-                        [buffers[device] for device in sharding.mesh.devices.flat if device in buffers],
+                        local_buffers,
                         dtype=value.dtype,
                     )
                 )
