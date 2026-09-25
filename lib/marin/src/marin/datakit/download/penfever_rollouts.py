@@ -1266,10 +1266,10 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
             "terminus_version": (
                 "2026.09.17.native-json" if dataset.cohort_name == "qwen35-122b-131k-opencode" else "2026.09.24"
             ),
-            "think_tokens": (
-                None
-                if dataset.cohort_name == "qwen35-122b-131k-opencode"
-                else THINK_TOKENS_BY_COHORT[dataset.cohort_name]
+            **(
+                {"think_tokens": THINK_TOKENS_BY_COHORT[dataset.cohort_name]}
+                if dataset.cohort_name != "qwen35-122b-131k-opencode"
+                else {}
             ),
             "conversion_version": "2026.09.11.review-fixes",
             "teacher": dataset.teacher,
