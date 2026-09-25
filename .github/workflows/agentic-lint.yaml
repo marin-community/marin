@@ -11,15 +11,16 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: read
     steps:
       - name: Require lint review of this head
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LOOM_PROFILE: ${{ vars.LOOM_AGENTIC_LINT_PROFILE }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
@@ -33,8 +34,11 @@ jobs:
             echo "::error::Agentic lint is pending or failed. Check the Loom launch and review result."
             exit 1
           fi
-          if [[ -z "$LOOM_PROFILE" ]]; then
-            echo "Loom lint federation is not active yet; accepting the completed local review label."
+          base_workflow=$(gh api \
+            "repos/$GITHUB_REPOSITORY/contents/.github/workflows/agentic-lint.yaml?ref=$BASE_SHA" \
+            --jq .content | base64 --decode)
+          if ! grep -Fq 'launch-review:' <<< "$base_workflow"; then
+            echo "The base revision predates the Loom lint launcher; accepting the local review label."
             exit 0
           fi
           marker="<!-- marin-agentic-lint:$HEAD_SHA -->"
