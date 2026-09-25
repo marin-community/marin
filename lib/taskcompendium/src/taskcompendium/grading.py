@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib.metadata import entry_points
-from typing import Any, Generic, TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
@@ -49,15 +49,15 @@ class VerifierHandler(Generic[PayloadT]):
     grade: Callable[[PayloadT, GradingAttempt], GradeResult]
 
 
-def _handler(kind: str) -> VerifierHandler[Any]:
+def _handler(kind: str) -> VerifierHandler[BaseModel]:
     matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == kind]
     if len(matches) != 1:
         raise ValueError(f"Unknown or ambiguous verifier kind: {kind!r}")
-    factory = cast(Callable[[], VerifierHandler[Any]], matches[0].load())
+    factory = cast(Callable[[], VerifierHandler[BaseModel]], matches[0].load())
     return factory()
 
 
-def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[Any], Any]:
+def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[BaseModel], BaseModel]:
     handler = _handler(verifier.kind)
     try:
         payload = handler.payload_type.model_validate(verifier.parameters)
@@ -67,7 +67,7 @@ def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[Any], Any]:
 
 
 def validate_verifier(verifier: VerifierSpec) -> None:
-    """Check a private verifier before export or launch, independent of convention."""
+    """Check a private verifier before export or launch, independent of submission convention."""
     _resolved(verifier)
 
 

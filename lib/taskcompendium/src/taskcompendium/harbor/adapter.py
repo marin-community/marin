@@ -91,7 +91,7 @@ class NoToolEnvironment(BaseEnvironment):
 
 
 class ReplayAgent(BaseAgent):
-    """Supply a fixed final response to exercise the real Harbor trial path."""
+    """Submit a caller-provided final response without a model request."""
 
     def __init__(self, *args, response: str, **kwargs):
         super().__init__(*args, **kwargs)
