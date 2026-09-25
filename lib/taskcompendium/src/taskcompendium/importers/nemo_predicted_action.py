@@ -7,9 +7,9 @@ import hashlib
 import json
 from typing import Any
 
-from taskcompendium.models import AnswerFormat, FunctionCall, NativeFunction, Source, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerType, FunctionCall, NativeFunction, Source, TaskRequirements, TaskSpec
 from taskcompendium.nemo_verifier import predicted_action_verifier
-from taskcompendium.rendering import NativeMessage, Rendering, format_native_messages
+from taskcompendium.submission import AnswerFormat, NativeMessage, SubmissionConvention, format_native_messages
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
@@ -97,7 +97,7 @@ def _messages(request: dict[str, Any]) -> tuple[NativeMessage, ...]:
     return tuple(turns)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Rendering]:
+def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, SubmissionConvention]:
     """Verify row identity and retain the expected action only in private TaskSpec data."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
@@ -130,9 +130,10 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Ren
         verifier=predicted_action_verifier(expected_calls),
         source=source,
         requirements=TaskRequirements(),
-        permitted_answer_formats=(AnswerFormat.FINAL_ACTION,),
+        answer_type=AnswerType.NATIVE_ACTION,
+        permitted_submission_conventions=("nemo-native-final-action",),
     )
-    rendering = Rendering(
+    convention = SubmissionConvention(
         id="nemo-native-final-action",
         answer_format=AnswerFormat.FINAL_ACTION,
         functions=functions,
@@ -140,4 +141,4 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Ren
         tool_choice=tool_choice,
         parallel_tool_calls=parallel_tool_calls,
     )
-    return specification, rendering
+    return specification, convention

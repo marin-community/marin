@@ -14,15 +14,15 @@ from harbor.trial.trial import Trial
 from taskcompendium.harbor.adapter import DEFAULT_REQUEST_TIMEOUT
 from taskcompendium.lowering import (
     BINDING_FILE,
-    RENDERING_FILE,
     SPECIFICATION_FILE,
+    SUBMISSION_CONVENTION_FILE,
     HarborTaskBinding,
     read_binding,
-    read_rendering,
     read_specification,
+    read_submission_convention,
     validate_binding,
 )
-from taskcompendium.rendering import AnswerFormat
+from taskcompendium.submission import AnswerFormat
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ def _validate_launch(launch: HarborLaunch, answer_format: AnswerFormat | None) -
         if not isinstance(launch.model, str) or not launch.model:
             raise ValueError("Chat launch requires a model")
         if answer_format is None:
-            raise ValueError("Chat launch requires a readable rendering")
+            raise ValueError("Chat launch requires a readable convention")
         if set(launch.agent_kwargs) - {"api_base", "api_key_env", "request_timeout"}:
             raise ValueError("Unsupported chat launch arguments")
         if not isinstance(launch.agent_kwargs.get("api_base"), str) or not launch.agent_kwargs["api_base"]:
@@ -73,12 +73,12 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
         raise ValueError("Launch binding differs from the exported task binding")
     validate_binding(read_specification(task_dir / SPECIFICATION_FILE), binding)
     try:
-        rendering = read_rendering(task_dir / RENDERING_FILE)
+        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     except ValueError:
         if launch.agent == "chat":
             raise
-        rendering = None  # Replay still runs so the verifier can record invalid private metadata.
-    answer_format = rendering.answer_format if rendering is not None else None
+        convention = None  # Replay still runs so the verifier can record invalid private metadata.
+    answer_format = convention.answer_format if convention is not None else None
     _validate_launch(launch, answer_format)
     agents = {
         "replay": "taskcompendium.harbor.adapter:ReplayAgent",
@@ -86,12 +86,12 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
         "chat": "taskcompendium.harbor.adapter:DirectChatAgent",
     }
     kwargs = dict(launch.agent_kwargs)
-    if launch.agent == "chat" and rendering is not None and rendering.answer_format == AnswerFormat.FINAL_ACTION:
+    if launch.agent == "chat" and convention is not None and convention.answer_format == AnswerFormat.FINAL_ACTION:
         agents["chat"] = "taskcompendium.harbor.adapter:NativeActionAgent"
-        kwargs["functions"] = [function.model_dump(mode="json") for function in rendering.functions]
-        kwargs["messages"] = [message.model_dump(mode="json") for message in rendering.messages]
-        kwargs["tool_choice"] = rendering.tool_choice
-        kwargs["parallel_tool_calls"] = rendering.parallel_tool_calls
+        kwargs["functions"] = [function.model_dump(mode="json") for function in convention.functions]
+        kwargs["messages"] = [message.model_dump(mode="json") for message in convention.messages]
+        kwargs["tool_choice"] = convention.tool_choice
+        kwargs["parallel_tool_calls"] = convention.parallel_tool_calls
     agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": kwargs}
     if launch.model is not None:
         agent["model_name"] = launch.model

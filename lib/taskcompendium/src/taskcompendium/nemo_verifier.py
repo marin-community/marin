@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, VerifierHandler
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierSpec
 from taskcompendium.predicted_action import compare, decode_action, parse_arguments
-from taskcompendium.rendering import AnswerFormat
+from taskcompendium.submission import AnswerFormat
 
 KIND = "nemo_predicted_action"
 
@@ -59,8 +59,8 @@ def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> Verif
 
 
 def _grade_action(payload: PredictedActionPayload, attempt: GradingAttempt) -> GradeResult:
-    if attempt.rendering.answer_format != AnswerFormat.FINAL_ACTION:
-        return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action rendering")
+    if attempt.convention.answer_format != AnswerFormat.FINAL_ACTION:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
     try:
         if attempt.response is None:
             raise ValueError("Final action is missing")

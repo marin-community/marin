@@ -13,7 +13,7 @@ from typing import Any, Generic, TypeVar, cast
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from taskcompendium.models import TaskSpec, VerifierSpec
-from taskcompendium.rendering import Rendering, extract_answer
+from taskcompendium.submission import SubmissionConvention, extract_answer
 
 ENTRY_POINT_GROUP = "taskcompendium.verifiers"
 EXACT_ANSWER_KIND = "exact_answer"
@@ -38,7 +38,7 @@ class GradeResult:
 class GradingAttempt:
     """Submission evidence available to a registered verifier."""
 
-    rendering: Rendering
+    convention: SubmissionConvention
     response: str | None
     environment: object
 
@@ -67,7 +67,7 @@ def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[Any], Any]:
 
 
 def validate_verifier(verifier: VerifierSpec) -> None:
-    """Check a private verifier before export or launch, independent of rendering."""
+    """Check a private verifier before export or launch, independent of convention."""
     _resolved(verifier)
 
 
@@ -78,10 +78,10 @@ def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResu
 
 
 def grade_answer(
-    specification: TaskSpec, rendering: Rendering, response: str | None, environment: object
+    specification: TaskSpec, convention: SubmissionConvention, response: str | None, environment: object
 ) -> GradeResult:
     """Extract and score a response through the verifier registry."""
-    return grade_attempt(specification, GradingAttempt(rendering, response, environment))
+    return grade_attempt(specification, GradingAttempt(convention, response, environment))
 
 
 class ExactAnswerPayload(BaseModel):
@@ -112,7 +112,7 @@ def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:
 
 def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeResult:
     try:
-        candidate = extract_answer(attempt.response, attempt.rendering)
+        candidate = extract_answer(attempt.response, attempt.convention)
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
     match = _normalize_exact(candidate, payload) == _normalize_exact(payload.expected, payload)

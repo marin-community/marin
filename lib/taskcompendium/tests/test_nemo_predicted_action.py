@@ -13,8 +13,8 @@ import pytest
 
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor, read_specification
-from taskcompendium.models import FunctionCall, ToolCallComparatorConfig
+from taskcompendium.lowering import HarborTaskBinding, compatible_lowerings, lower_to_harbor, read_specification
+from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
 from taskcompendium.predicted_action import compare, decode_action
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
@@ -32,17 +32,20 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     provenance = json.loads((FIXTURES / "predicted-action.provenance.json").read_text())
     assert canonical_sha256(row) == provenance["canonical_json_sha256"]
-    specification, rendering = import_row(row, provenance["canonical_json_sha256"])
+    specification, convention = import_row(row, provenance["canonical_json_sha256"])
+    assert specification.answer_type == AnswerType.NATIVE_ACTION
+    assert convention.supports(AnswerType.NATIVE_ACTION)
+    assert not convention.supports(AnswerType.FILE)
     assert specification.source.dataset == provenance["dataset"]
     assert specification.source.revision == provenance["dataset_revision"]
-    assert [message.role for message in rendering.messages] == ["system", "user", "assistant", "user"]
-    assert rendering.messages[0].content == row["responses_create_params"]["input"][0]["content"]
-    assert rendering.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
-    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
-    public = (task / "instruction.md").read_text() + (task / "rendering.json").read_text()
+    assert [message.role for message in convention.messages] == ["system", "user", "assistant", "user"]
+    assert convention.messages[0].content == row["responses_create_params"]["input"][0]["content"]
+    assert convention.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
+    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
-    rendering_data = json.loads((task / "rendering.json").read_text())
-    assert "authenticate_user" in {function["name"] for function in rendering_data["functions"]}
+    convention_data = json.loads((task / "submission_convention.json").read_text())
+    assert "authenticate_user" in {function["name"] for function in convention_data["functions"]}
     assert not (task / "tests").exists()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
@@ -50,15 +53,15 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
 
 def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
+    specification, convention = import_row(row, canonical_sha256(row))
+    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import GradingAttempt, grade_attempt; "
-        "from taskcompendium.lowering import read_rendering, read_specification; "
+        "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_attempt(read_specification(root / 'specification.json'), "
-        "GradingAttempt(read_rendering(root / 'rendering.json'), sys.argv[2], object())); "
+        "GradingAttempt(read_submission_convention(root / 'submission_convention.json'), sys.argv[2], object())); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -97,8 +100,8 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
 
 def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
+    specification, convention = import_row(row, canonical_sha256(row))
+    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
     data["verifier"]["parameters"] = {"expected_message": "Any response"}
     (task / "specification.json").write_text(json.dumps(data))
@@ -109,8 +112,8 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
 
 def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
+    specification, convention = import_row(row, canonical_sha256(row))
+    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
     data["verifier"]["parameters"]["numeric_tolerance"] = True
     (task / "specification.json").write_text(json.dumps(data))
@@ -121,12 +124,15 @@ def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_
 
 def test_predicted_action_rejects_instruction_message_drift(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
+    specification, convention = import_row(row, canonical_sha256(row))
+    changed = specification.model_copy(update={"instructions": "Changed instruction"})
+
+    assert compatible_lowerings(changed, (convention,), (HarborTaskBinding(),)) == ()
 
     with pytest.raises(ValueError, match="differ from source messages"):
         lower_to_harbor(
-            specification.model_copy(update={"instructions": "Changed instruction"}),
-            rendering,
+            changed,
+            convention,
             HarborTaskBinding(),
             tmp_path / "task",
         )
@@ -165,9 +171,9 @@ def test_predicted_action_rejects_instruction_message_drift(tmp_path):
 )
 async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
+    specification, convention = import_row(row, canonical_sha256(row))
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
+    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
 
     result = await run_trial(
         task, binding, HarborLaunch("action_replay", agent_kwargs={"response": response}), tmp_path / "trials", "run"
@@ -196,9 +202,9 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
 )
 async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_path, launch, message):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
+    specification, convention = import_row(row, canonical_sha256(row))
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
+    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
 
     with pytest.raises(ValueError, match=message):
         await run_trial(task, binding, launch, tmp_path / "trials", "run")
@@ -207,9 +213,9 @@ async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_pat
 
 async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
+    specification, convention = import_row(row, canonical_sha256(row))
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
+    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
     requests = []
     monkeypatch.setenv("NEMO_TEST_API_KEY", "test-token")
 
@@ -231,7 +237,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert result.verifier_result.rewards == {"reward": 1.0}
     request, authorization = requests[0]
     assert request["tools"][0]["function"]["name"] == "authenticate_user"
-    assert request["messages"] == [{"role": message.role, "content": message.content} for message in rendering.messages]
+    assert request["messages"] == [{"role": message.role, "content": message.content} for message in convention.messages]
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert authorization == "Bearer test-token"
