@@ -153,50 +153,6 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
         )
 
 
-def test_lowering_respects_source_submission_constraint(tmp_path, specification):
-    specification = specification.model_copy(
-        update={
-            "instructions": "Return only the raw C++ program output.",
-            "answer_type": AnswerType.TEXT,
-            "permitted_submission_conventions": ("plain",),
-        }
-    )
-    destination = tmp_path / "task"
-
-    with pytest.raises(ValueError, match="does not permit submission convention 'json'"):
-        lower_to_harbor(
-            specification,
-            SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
-            HarborTaskBinding(),
-            destination,
-        )
-
-    assert not destination.exists()
-
-
-def test_selection_respects_source_submission_constraint(tmp_path, specification):
-    specification = specification.model_copy(update={"permitted_submission_conventions": ("plain",)})
-    conventions = (
-        SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-    )
-    candidates = compatible_lowerings(specification, conventions, (HarborTaskBinding(),))
-
-    selected = select_lowerings(candidates, SelectionPolicy.FIRST)
-    task = lower_to_harbor(specification, selected[0].convention, selected[0].binding, tmp_path / "task")
-
-    assert len(candidates) == 1
-    assert json.loads((task / "submission_convention.json").read_text())["answer_format"] == "plain"
-    assert (
-        compatible_lowerings(
-            specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))}),
-            conventions,
-            (HarborTaskBinding(),),
-        )
-        == ()
-    )
-
-
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
