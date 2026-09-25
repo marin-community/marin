@@ -6,7 +6,7 @@
 import math
 
 import pytest
-from marin.evaluation.eval_measurements import measurement_from_record
+from marin.evaluation.eval_measurements import measurement_from_record, task_item_count
 from marin.evaluation.eval_stats import (
     AggregationProtocol,
     CohortMode,
@@ -40,6 +40,10 @@ from marin.evaluation.records import (
     RunStatus,
     TaskCoverage,
 )
+
+
+def test_task_item_count_rejects_fractional_counts():
+    assert task_item_count({"total_examples": 3.5}) is None
 
 
 def _measurement(
@@ -702,6 +706,26 @@ def test_record_adapter_does_not_double_count_a_duplicated_task_directory():
     assert measurement is not None
     assert measurement.coverage.n_scored == 14042
     assert measurement.value == pytest.approx(0.63502)
+
+
+def test_record_adapter_excludes_scratch_attempt_from_single_task_score():
+    record = _record(
+        eval_name="olympiadbench",
+        metrics={
+            "tmpvu7bt1e4": {"sample_len": 30.0, "acc,none": 4 / 30},
+            "olympiadbench": {"sample_len": 30.0, "acc,none": 2 / 30},
+        },
+        coverage={
+            "tmpvu7bt1e4": TaskCoverage(n_attempted=30, n_scored=30, n_correct=4),
+            "olympiadbench": TaskCoverage(n_attempted=30, n_scored=30, n_correct=2),
+        },
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.value == pytest.approx(2 / 30)
+    assert measurement.coverage.n_scored == 30
 
 
 def test_record_adapter_reads_harbor_coverage_and_its_error_histogram():

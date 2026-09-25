@@ -1,7 +1,7 @@
 ---
 name: lint-review
 description: Run the read-only infra/lint PR reporter only when invoked by CI or explicitly requested; do not select it for the commit workflow's fix-and-respond review.
-allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*)
 ---
 
 # Skill: Lint-catalog review on a PR
@@ -27,10 +27,11 @@ unforgivable error; so is fabricating one.
 ## Steps
 
 1. **Idempotency guard (only with `--comment`).** Check whether this skill has
-   already posted on the PR: look for the marker `<!-- marin-lint-review -->` in
+   already posted on this PR head: look for the marker
+   `<!-- marin-lint-review:<head SHA> -->` in
    both issue comments (`gh pr view <PR> --json comments`) and inline review
    comments (`gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate`). If the
-   marker is present, stop now — the PR already has a lint pass and we do not want
+   marker is present, stop now — this PR head already has a lint pass and we do not want
    duplicate comments. Otherwise continue.
 
 2. **Run the review.** From the repo root:
@@ -72,23 +73,23 @@ unforgivable error; so is fabricating one.
    here regardless.)
 
 5. **Post inline comments.** With `--comment` and findings present, for **each**
-   finding post one inline comment with
-   `mcp__github_inline_comment__create_inline_comment`, the
-   finding's `path` and `line`, and a body of exactly this shape:
+   finding post one inline review comment on the head commit, using the GitHub
+   tools available in your session, at the finding's `path` and `line`, with a
+   body of exactly this shape:
 
    ```
-   `ml-<code>` · confidence <confidence>
+   🤖 `ml-<code>` · confidence <confidence>
 
    <message>
 
-   <!-- marin-lint-review -->
+   <!-- marin-lint-review:<head SHA> -->
    ```
 
    The `<message>` is copied verbatim from the finding. Post one comment per
    finding; never post two comments for the same finding.
 
-6. **Handle un-anchorable findings.** The inline-comment tool rejects a line that
-   is not part of the PR diff (it raises a validation error). A finding can land
+6. **Handle un-anchorable findings.** GitHub rejects an inline comment on a line
+   that is not part of the PR diff. A finding can land
    on such a line — e.g. the holistic `meta` lane anchors on context outside the
    added hunks. When a post fails for that reason, **do not abort**: record that
    finding and keep going through the rest.
@@ -98,7 +99,7 @@ unforgivable error; so is fabricating one.
    so none are dropped. Format:
 
    ```
-   Lint review:
+   🤖 Lint review:
 
    These infra/lint findings anchor on lines not in the PR diff, so they could not
    be attached inline.
@@ -106,7 +107,7 @@ unforgivable error; so is fabricating one.
    - <path>:<line>: ml-<code> (<confidence>) <message>
    - ...
 
-   <!-- marin-lint-review -->
+   <!-- marin-lint-review:<head SHA> -->
    ```
 
    List every un-anchorable finding verbatim. If every finding was placed inline,

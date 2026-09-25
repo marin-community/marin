@@ -20,6 +20,8 @@ import tqdm_loggable.auto as tqdm
 from fsspec import AbstractFileSystem
 from fsspec.asyn import AsyncFileSystem
 
+from levanter.utils.byte_budget import HostByteBudget
+
 logger = logging.getLogger(__name__)
 
 _SAFETENSOR_DTYPE_MAP: Dict[str, np.dtype] = {
@@ -43,6 +45,7 @@ ShardingFunction = Callable[[Tuple[int, ...]], Optional[jax.sharding.Sharding]]
 
 DEFAULT_CHUNK_SIZE_BYTES = int(os.environ.get("LEVANTER_FSSPEC_CHUNK_BYTES", 2 * 1024**3))
 MAX_CONCURRENT_CHUNKS = int(os.environ.get("LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS", "4"))
+DEFAULT_STAGING_BUDGET_BYTES = 16 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -209,6 +212,7 @@ async def read_safetensors_fsspec(
     dtype_override: Optional[jnp.dtype] = None,
     sharding_fn: Optional[ShardingFunction] = None,
     fs: Optional[AbstractFileSystem] = None,
+    staging_budget: Optional[HostByteBudget] = None,
 ) -> Dict[str, jax.Array]:
     """
     Stream tensors from a safetensors file using fsspec, optionally sharding the outputs.
@@ -250,9 +254,12 @@ async def read_safetensors_fsspec(
     pbar = tqdm.tqdm(total=total_file_size, unit="B", unit_scale=True, desc=f"Reading {path}")
     progress_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max(1, min(MAX_CONCURRENT_CHUNKS, len(chunk_specs))))
+    staging_budget = staging_budget or HostByteBudget(DEFAULT_STAGING_BUDGET_BYTES)
+    target_dtype = np.dtype(dtype_override) if dtype_override is not None else None
 
     async def _materialize_chunk(chunk: ChunkSpec) -> Dict[str, jax.Array]:
-        async with semaphore:
+        # Approximate staging as twice the range to allow for a conversion copy.
+        async with semaphore, staging_budget.reserve(2 * chunk.size):
             raw = await async_fs._cat_file(chunk.file_path, start=chunk.byte_start, end=chunk.byte_end)
             chunk_view = memoryview(raw)
             chunk_results: Dict[str, jax.Array] = {}
@@ -267,8 +274,8 @@ async def read_safetensors_fsspec(
                     offset=offset,
                 ).reshape(record.shape)
 
-                if dtype_override is not None and np.issubdtype(tensor_np.dtype, np.floating):
-                    tensor_np = tensor_np.astype(np.dtype(dtype_override), copy=False)
+                if target_dtype is not None and np.issubdtype(tensor_np.dtype, np.floating):
+                    tensor_np = tensor_np.astype(target_dtype, copy=False)
 
                 sharding = sharding_map[record.key]
                 if sharding is not None:
@@ -277,6 +284,9 @@ async def read_safetensors_fsspec(
                     array = jnp.asarray(tensor_np)
 
                 chunk_results[record.key] = array
+
+            # device_put may retain the host buffer until its transfer completes.
+            await asyncio.to_thread(jax.block_until_ready, chunk_results)
 
             async with progress_lock:
                 pbar.update(chunk.size)

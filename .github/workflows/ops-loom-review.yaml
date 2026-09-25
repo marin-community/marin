@@ -5,7 +5,7 @@ name: "Ops - Loom Review"
 # SHA after Loom verifies this workflow's OIDC identity.
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened, synchronize]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -15,12 +15,7 @@ jobs:
   review:
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (
-        github.event.pull_request.author_association == 'OWNER' ||
-        github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'COLLABORATOR'
-      )
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -32,10 +27,20 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
 
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: marin-ops-agent[bot]
+
       - name: Launch Loom review
+        if: steps.author.outputs.allowed == 'true'
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}

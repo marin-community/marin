@@ -1,29 +1,56 @@
-name: Agentic lint policy
+name: Agentic lint
 
+# Best-effort Loom lint review. The `agentic-lint` label records that a PR has
+# had a lint pass, either from the author's local `--review` run (the commit
+# skill applies the label at PR creation) or from this workflow. Reviews start
+# only while the label is absent, so pushes to a reviewed PR do not trigger
+# another pass; removing the label requests a fresh review of the current head.
 on:
-  pull_request:
-    types: [opened, ready_for_review, reopened, synchronize, labeled, unlabeled]
+  pull_request_target:
+    types: [opened, ready_for_review, reopened, unlabeled]
 
 jobs:
-  agentic-lint:
+  launch-review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'agentic-lint') &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'agentic-lint')
     runs-on: ubuntu-latest
-    permissions: {}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Require the agentic lint label
-        env:
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          set -euo pipefail
-          case "$AUTHOR" in
-            "dependabot[bot]"|"marin-external-runtime-updater[bot]")
-              echo "Automated dependency PRs do not use the agent commit workflow."
-              exit 0
-              ;;
-          esac
-          if jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
-            echo "The agentic-lint label records completion of the local agentic review."
-            exit 0
-          fi
-          echo "::error::Run the commit workflow's agentic review, then add the agentic-lint label."
-          exit 1
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
+          sparse-checkout-cone-mode: false
+
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: marin-ops-agent[bot]
+
+      - name: Launch agentic lint
+        if: steps.author.outputs.allowed == 'true'
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_AGENTIC_LINT_PROFILE }}
+          idempotency-key: agentic-lint:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "Agentic lint for #${{ github.event.pull_request.number }}"
+          goal: >-
+            Review pull request #${{ github.event.pull_request.number }} at head
+            ${{ github.event.pull_request.head.sha }}. Follow the agentic-lint
+            profile instructions: run the lint catalog review, report every
+            finding on the PR, and add the agentic-lint label once the review
+            completes. Append a typed result to the Loom channel.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}

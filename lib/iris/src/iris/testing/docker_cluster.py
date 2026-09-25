@@ -163,10 +163,6 @@ class E2ECluster:
         cache_path = self._cache_dir if self._cache_dir else temp_path / "cache"
         cache_path.mkdir(exist_ok=True)
 
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,

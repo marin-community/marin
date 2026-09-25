@@ -945,7 +945,7 @@ class IrisClient:
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1).
                 Multi-process GPU execution within a task is composed into the command
-                (``python -m iris.hooks.multigpu_main --nproc N -- <cmd>``), not a submit arg.
+                (``python -m iris.jax.multigpu_main --nproc N -- <cmd>``), not a submit arg.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             max_task_failures: Cumulative failed task attempts the job tolerates before
@@ -976,7 +976,7 @@ class IrisClient:
 
         # iris is a dumb scheduler: it runs the entrypoint verbatim. Multi-process GPU
         # execution and profiling are composed into the command by the caller
-        # (e.g. `python -m iris.hooks.multigpu_main --nproc N -- <cmd>`).
+        # (e.g. `python -m iris.jax.multigpu_main --nproc N -- <cmd>`).
 
         # Get parent job ID from context
         ctx = get_iris_ctx()

@@ -175,6 +175,18 @@ def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
     assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
 
 
+def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeypatch):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(
+        "rigging.filesystem.cluster_config.marin_prefix",
+        lambda: pytest.fail("explicit source must not probe the launcher environment"),
+    )
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(30, "curriculum-math", source_prefix="s3://marin-us-east-02a/marin")
+    assert path == "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math"
+
+
 def test_marin_temp_bucket_routes_r2_to_bucket_root():
     """An R2 source prefix yields a TTL temp path at the R2 bucket root (unchanged)."""
     cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))

@@ -1,11 +1,11 @@
 # Releasing Packages to PyPI
 
-Marin publishes twelve distributions to [PyPI](https://pypi.org/).
+Marin publishes fourteen distributions to [PyPI](https://pypi.org/).
 [`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
 is their single build and publish workflow. Its dynamic matrix handles four
 release families:
 
-- The seven general pure-Python libraries share one version and exact sibling
+- The nine general pure-Python libraries share one version and exact sibling
   dependency pins.
 - Dupekit and Finelog each publish a pure-Python distribution with a native
   companion.
@@ -24,6 +24,8 @@ the names don't collide on PyPI, which has no namespaces. The **import name**
 | `marin-levanter` | `levanter` | `lib/levanter` |
 | `marin-rigging` | `rigging` | `lib/rigging` |
 | `marin-zephyr` | `zephyr` | `lib/zephyr` |
+| `marin-finestore` | `finestore` | `lib/finestore` |
+| `marin-shellbox` | `shellbox` | `lib/shellbox` |
 | `marin-finelog` | `finelog` | `lib/finelog` |
 | `marin-finelog-server` | `finelog_server` | `lib/finelog/rust` |
 | `marin-dupekit` | `dupekit` | `lib/dupekit` |
@@ -49,7 +51,7 @@ upload token that expires when the run ends.
 Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
 `finelog-v<X.Y.Z>`, and `iris-native-v<X.Y.Z>`.
 
-The seven general libs always share one version per build, and each published
+The nine general libs always share one version per build, and each published
 wheel pins its sibling `marin-*` dependencies to that exact version.
 
 Native implementation pull requests compile their changed Rust sources in
@@ -95,16 +97,21 @@ release must use a fresh version.
 ## One-time PyPI setup
 
 This is performed once by a PyPI admin who owns the `marin-community`
-organization. It cannot be automated.
+organization. It cannot be automated from the release workflow.
 
 ### 1. Organization
 
 Ensure a `marin-community` [PyPI organization](https://pypi.org/manage/organizations/)
 exists with at least two human admins. Every `marin-*` project is owned by it.
 
+For Shellbox, create the `marin-shellbox` project under the organization in
+PyPI's organization Projects page. Configure its trusted publisher before
+merging the release workflow change: the next general-library release includes
+Shellbox.
+
 ### 2. Clear the placeholder releases
 
-Every `marin-*` lib already exists on PyPI with a single placeholder release:
+The older `marin-*` libraries already exist on PyPI with placeholder releases:
 `0.99` for seven of them (`marin-core`, `marin-iris`, `marin-fray`,
 `marin-haliax`, `marin-levanter`, `marin-rigging`, `marin-zephyr`) and `0.1.0`
 for `marin-finelog`. Delete that **release** from each project (project page →
@@ -122,17 +129,15 @@ unprefixed `marin` name is not used.)
 
 ### 3. Configure a trusted publisher for each distribution
 
-Every project already exists (step 2 removes only the placeholder release,
-not the project), so open each one's per-project publishing page and add the
-publisher there:
+Open each project's publishing page and add the publisher there:
 
 ```
 https://pypi.org/manage/project/<name>/settings/publishing/
 ```
 
-(If a project were ever fully deleted, you would instead add a **pending
-publisher** from `https://pypi.org/manage/account/publishing/`, which creates
-the project on the first matching upload — not needed here.)
+(A pending publisher can also create a project on first upload, but it does
+not reserve the project name or assign it to the organization. Create
+`marin-shellbox` under the organization first.)
 
 Add a publisher with these values, choosing the workflow that publishes the
 project:
@@ -150,12 +155,17 @@ job remains in this top-level workflow because
 [PyPI Trusted Publishing does not currently support naming a reusable workflow](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github)
 as the publisher.
 
-The seven general-library bindings already name
+The existing general-library bindings already name
 `marin-release-libs-wheels.yaml`. Before enabling consolidated native
 publishing, change the five native project bindings (`marin-dupekit`,
 `marin-dupekit-native`, `marin-finelog`, `marin-finelog-server`, and
 `marin-iris-native`) to that same filename and the `pypi-publish` environment.
 No Google Cloud WIF or long-lived credential change is required.
+
+For `marin-shellbox`, add a trusted publisher to that project's Publishing
+settings with the field values above. The general-library schedule and
+`marin-libs-v*` tags publish Shellbox at the same version as its siblings. No
+PyPI API token or GitHub secret is needed.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 

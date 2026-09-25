@@ -481,14 +481,24 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
                     "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
                     "trajectory_config": {"raw_content": True},
                 },
+                "verifier_env": {
+                    "OPENAI_API_KEY": "EMPTY",
+                    "OPENAI_BASE_URL": "https://judge.example/capability/v1",
+                    "MODEL_NAME": "judge-model",
+                },
             }
         )
     )
     script = (
+        "import json; "
         "from pathlib import Path; "
+        "from pydantic import SecretStr; "
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        "print(config.model_dump_json())"
+        "payload=config.model_dump(mode='json'); "
+        "payload['verifier']['env']={key: (value.get_secret_value() if isinstance(value, SecretStr) else value) "
+        "for key, value in config.verifier.env.items()}; "
+        "print(json.dumps(payload))"
     )
 
     effective = json.loads(_external_python("-c", script).stdout)
@@ -510,6 +520,11 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
     assert agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"] == {
         "baseURL": "https://iris.example/capability/v1"
+    }
+    assert effective["verifier"]["env"] == {
+        "OPENAI_API_KEY": "EMPTY",
+        "OPENAI_BASE_URL": "https://judge.example/capability/v1",
+        "MODEL_NAME": "judge-model",
     }
 
 
@@ -574,6 +589,7 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
                 "served_model": "served-qwen",
                 "task_limit": 3,
                 "model_agent_kwargs": {},
+                "verifier_env": {},
             }
         )
     )

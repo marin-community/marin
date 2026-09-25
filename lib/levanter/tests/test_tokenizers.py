@@ -1362,6 +1362,23 @@ def test_stage_from_hf_copies_files_and_populates_mirror(tmp_path, fake_tokenize
     assert all(f"hf-hub-{_hf_hub_version}" in u for u in mirror_calls)
 
 
+def test_stage_from_hf_passes_pinned_revision_separately(tmp_path, fake_tokenizer_dir):
+    """Checkpoint-style repo refs pin tokenizer downloads instead of becoming invalid repo IDs."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    with (
+        patch("levanter.tokenizers.snapshot_download", return_value=str(fake_tokenizer_dir)) as download,
+        patch("levanter.tokenizers._populate_mirror_file"),
+    ):
+        _stage_from_hf("org/model@deadbeef", str(local_dir))
+
+    _, kwargs = download.call_args
+    assert kwargs["revision"] == "deadbeef"
+    assert download.call_args.args == ("org/model",)
+    assert (local_dir / "tokenizer.json").exists()
+
+
 def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
     """_stage_from_mirror fetches files from the mirror filesystem into local_dir."""
     local_dir = tmp_path / "staged"

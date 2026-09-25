@@ -5,14 +5,14 @@ description: Triage a failed canary ferry run only when invoked by CI with the r
 
 # Skill: Triage Canary
 
-Triage a failed canary ferry run. Diagnose root cause, file a GitHub issue,
-write a Slack summary. Diagnosis and reporting only — no code changes, no PRs.
+Triage a failed canary ferry run. Diagnose root cause and file a GitHub issue.
+The workflow sends the immediate Slack failure notice. Diagnosis and reporting
+only — no code changes, no PRs.
 
 ## CI invocation context
 
-The composite action includes these non-secret values in the prompt. Use the
-prompt values directly instead of inspecting the process environment. Matching
-environment variables remain available to commands invoked during triage.
+The Loom launch includes these non-secret values in its goal. Use those values
+directly instead of inspecting the process environment.
 
 | Variable | Description |
 |---|---|
@@ -29,9 +29,11 @@ environment variables remain available to commands invoked during triage.
 
 ### 1. Gather diagnostics
 
-The cluster is still live. Collect signal now — it will be torn down after you.
+The Actions runner may have exited. Start with the diagnostics artifact linked
+from `GHA_RUN_URL` and durable Iris and Finelog logs. Use live cluster commands
+only when the relevant cluster is still running.
 
-- Iris job state via `.venv/bin/iris --config=$IRIS_CONFIG job list`
+- Iris job state via `iris --config=$IRIS_CONFIG job list` when accessible.
 - **GPU lane:** you have kubectl at `~/.kube/coreweave-iris`, namespace `$IRIS_NAMESPACE` (defaults to `iris-ci` — the canary shares this namespace with PR CI).
   Get pod status, controller logs, task pod logs, warning events, pod describe.
   **Filter by `iris.job_id=<CANARY_JOB_ID with '/' replaced by '.'>`** so you only see this canary's pods, not co-tenant CI pods. Example: `kubectl -n iris-ci get pods -l iris.job_id=runner.iris-run-job-abc123`.
@@ -60,18 +62,7 @@ Follow the `file-issue` skill. Use the bug-report template.
 - Use GFM to make the details (e.g. log traces, code to reproduce issue) optional and declutter the issue.
 - Use `--body-file` with a temp file (see `file-issue` skill for the pattern).
 
-### 4. Write `slack_message.md`
+### 4. Publish the result
 
-Write to the repo root. The workflow reads this file and sends it to Slack.
-Always write this file, even if issue creation failed.
-
-Format — keep to 4 lines max:
-
-```
-:red_circle: *{GPU|TPU} Canary failed* — {one-line summary}
-*Root cause:* {category} — {1 sentence}
-*Issue:* {github issue URL}
-*GHA run:* {GHA_RUN_URL}
-```
-
-If root cause is unclear, say so: `root cause unclear` with your best-guess signals.
+Append a typed `result` in the Loom channel with the issue URL, diagnosis, and
+`GHA_RUN_URL`. If root cause is unclear, state that and the best available signal.
