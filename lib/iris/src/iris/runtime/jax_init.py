@@ -300,10 +300,6 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _attempt_endpoint_name(endpoint_name: str, attempt_id: int) -> str:
-    return f"{endpoint_name}-attempt-{attempt_id}"
-
-
 def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
     """Choose and publish global process 0's coordinator address."""
     coordinator = f"{job_info.advertise_host}:{resolve_coordinator_port(job_info, port)}"
@@ -396,7 +392,8 @@ def initialize_jax(
             ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
             an available port. Pass a port only to pin it.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
-            registered name to the current task attempt.
+            registered name to the child job so concurrent sibling jobs in one
+            hierarchy cannot share a coordinator.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort
@@ -426,7 +423,7 @@ def initialize_jax(
 
     job_info = get_job_info()
     if job_info is not None:
-        endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
+        endpoint_name = job_info.scoped_endpoint_name(endpoint_name)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
