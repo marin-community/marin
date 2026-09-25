@@ -287,8 +287,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
-            # Inkling rel-pos weights (r_proj and the shared bias bank).
-            if ".rel_pos." in path_lower:
+            # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
+            if ".rel_pos." in path_lower or re.search(r"\.(value_embed|ve_lambda|ve_gate)$", path_lower):
                 return "adam"
             if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"

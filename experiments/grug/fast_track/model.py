@@ -101,6 +101,16 @@ class AttnResLayerBackward(StrEnum):
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
 
 
+class ValueEmbeds(StrEnum):
+    """Value embeddings on the MLA layers: ``v = lambda1 * v + w * value_embed[token]``."""
+
+    NONE = "none"
+    LAMBDA = "lambda"
+    """``w = lambda2``, a learned scalar per layer (``lambda1`` init 1, ``lambda2`` init 0)."""
+    GATED = "gated"
+    """``w = sigmoid(x W_ve_gate)`` per head, ``W_ve_gate`` zero-initialized (0.5 at init)."""
+
+
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
     if mesh is None or mesh.empty:
         raise ValueError("grug/fast_track requires a non-empty abstract mesh")
@@ -203,6 +213,13 @@ class GrugModelConfig:
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
     attention forward per layer; needed for memory at d1280."""
+    value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
+    """Per-MLA-layer value-embedding table added to v (see ``ValueEmbeds``)."""
+    sublayer_scales: bool = False
+    """A learnable scalar (init 1) on every attention and MLP sublayer output, before it enters the
+    AttnRes history."""
+    second_embed: bool = False
+    """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -327,6 +344,9 @@ class CausalSelfAttention(eqx.Module):
     kv_latent_norm: "RMSNorm | None"
     w_uk: Float[Array, "L NH"] | None
     w_uv: Float[Array, "L NH"] | None
+    value_embed: Float[Array, "V NH"] | None
+    ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
+    ve_gate: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -335,8 +355,9 @@ class CausalSelfAttention(eqx.Module):
         std = cfg.initializer_std
         attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
         if cfg.mla:
-            k_q, k_dkv, k_uk, k_uv, k_o, k_rel = random.split(key, 6)
+            k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             kvl = cfg.mla_kv_latent_dim
+            use_ve = cfg.value_embeds != ValueEmbeds.NONE
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
@@ -349,6 +370,11 @@ class CausalSelfAttention(eqx.Module):
                 kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
                 w_uv=reshard(_init_weight(k_uv, (kvl, n * h), std), P(None, "model")),
+                value_embed=(
+                    reshard(_init_weight(k_ve, (cfg.vocab_size, n * h), std), P(None, None)) if use_ve else None
+                ),
+                ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
+                ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
                 cfg=cfg,
             )
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
@@ -364,11 +390,17 @@ class CausalSelfAttention(eqx.Module):
             kv_latent_norm=None,
             w_uk=None,
             w_uv=None,
+            value_embed=None,
+            ve_lambda=None,
+            ve_gate=None,
             cfg=cfg,
         )
 
     def _mla_qkv(
-        self, x: Float[Array, "B S D"], sconv_segment_ids: Int[Array, "B S"] | None
+        self,
+        x: Float[Array, "B S D"],
+        sconv_segment_ids: Int[Array, "B S"] | None,
+        token_ids: Int[Array, "B S"] | None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
@@ -380,6 +412,16 @@ class CausalSelfAttention(eqx.Module):
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         k = rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
         v = rearrange(jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+        if self.value_embed is not None:
+            assert self.ve_lambda is not None and token_ids is not None
+            ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
+            ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
+            lam = self.ve_lambda.astype(x.dtype)
+            if self.ve_gate is not None:
+                ve_weight = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.ve_gate.astype(x.dtype)))[..., None]
+            else:
+                ve_weight = lam[1]
+            v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
         return q, k, v
 
     def _gqa_qkv(
@@ -435,6 +477,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        token_ids: Int[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -443,7 +486,7 @@ class CausalSelfAttention(eqx.Module):
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
         if self.cfg.mla:
-            q, k, v = self._mla_qkv(x, sconv_segment_ids)
+            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
 
@@ -950,6 +993,9 @@ class Block(eqx.Module):
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
+    # Learnable sublayer output scalars (None without cfg.sublayer_scales).
+    attn_out_scale: Float[Array, ""] | None
+    mlp_out_scale: Float[Array, ""] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -990,6 +1036,8 @@ class Block(eqx.Module):
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
+            attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
+            mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
         )
 
     def attn_branch(
@@ -998,15 +1046,18 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array,
         is_global: bool | jax.Array,
+        token_ids: Int[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(h))
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
             out = self.attn(attn_in, _sconv_segment_ids(mask))
         else:
-            out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+            out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids)
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
+        if self.attn_out_scale is not None:
+            out = out * self.attn_out_scale.astype(out.dtype)
         return out
 
     def mlp_branch(
@@ -1022,6 +1073,8 @@ class Block(eqx.Module):
             out, stats = self.mlp(mlp_in)
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
+        if self.mlp_out_scale is not None:
+            out = out * self.mlp_out_scale.astype(out.dtype)
         return out, stats
 
     @named_call
@@ -1093,6 +1146,7 @@ def _attn_res_mix(
 def _attn_res_layer(
     diff_args: tuple[Block, tuple[jax.Array, ...], tuple[jax.Array, ...], jax.Array | None, jax.Array],
     mask: AttentionMask,
+    token_ids: Int[Array, "B S"],
     use_long: bool,
     layer_index: int,
     eps: float,
@@ -1107,7 +1161,7 @@ def _attn_res_layer(
     attn_branch = type(layer).attn_branch
     if layer.attn.cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
-    attn_out = attn_branch(layer, h, mask, use_long, use_long)
+    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids)
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
     h = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps)
@@ -1115,16 +1169,16 @@ def _attn_res_layer(
     return partial + mlp_out, router_stats
 
 
-def _attn_res_layer_passthrough(diff_args, mask, use_long, layer_index, eps):
+def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps):
     """``_attn_res_layer`` returning ``(partial, blocks, block_logits, router_stats)``: the history is
     passed through so ``_attn_res_layer_remat`` can thread each block's cotangent layer to layer."""
     _, blocks, block_logits, _, _ = diff_args
-    partial, router_stats = _attn_res_layer(diff_args, mask, use_long, layer_index, eps)
+    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps)
     return partial, blocks, block_logits, router_stats
 
 
 @eqx.filter_custom_vjp
-def _attn_res_layer_remat(diff_args, mask, use_long, layer_index, eps):
+def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps):
     """``_attn_res_layer_passthrough`` with a backward shaped for the unrolled layer loop.
 
     The history is passed through unchanged so each block's cotangent is threaded layer to layer and
@@ -1136,17 +1190,17 @@ def _attn_res_layer_remat(diff_args, mask, use_long, layer_index, eps):
     layer's starts. Without the barriers the unrolled loop's peak memory at d1024 is 3.6x the scanned
     baseline's.
     """
-    return _attn_res_layer_passthrough(diff_args, mask, use_long, layer_index, eps)
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps)
 
 
 @_attn_res_layer_remat.def_fwd
-def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, use_long, layer_index, eps):
+def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
     del perturbed
-    return _attn_res_layer_passthrough(diff_args, mask, use_long, layer_index, eps), None
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps), None
 
 
 @_attn_res_layer_remat.def_bwd
-def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, use_long, layer_index, eps):
+def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
     del residuals, perturbed
     # Router stats are logging-only and carry no cotangent.
     d_partial, d_blocks, d_block_logits, _d_stats = grad_out
@@ -1159,7 +1213,9 @@ def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, u
         diff_args, d_partial, d_blocks, d_block_logits = jax.lax.optimization_barrier(
             (diff_args, d_partial, d_blocks, d_block_logits)
         )
-        _, vjp_fn = jax.vjp(lambda args: _attn_res_layer(args, mask, use_long, layer_index, eps)[0], diff_args)
+        _, vjp_fn = jax.vjp(
+            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)[0], diff_args
+        )
         ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries),) = vjp_fn(d_partial)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
         d_block_logits = tuple(a + b for a, b in zip(d_block_logits, d_block_logits_own, strict=True))
@@ -1211,6 +1267,8 @@ class Transformer(eqx.Module):
     final_gated_norm: GatedNorm
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
+    token_embed2: jax.Array | None
+    embed2_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1234,6 +1292,8 @@ class Transformer(eqx.Module):
             cfg = cfg_or_vocab
 
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        # Folded off the root key so the optional table leaves every other init unchanged.
+        embed2_key = random.fold_in(key, 2)
         # The embedding is fully replicated for a local lookup.
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
@@ -1259,6 +1319,12 @@ class Transformer(eqx.Module):
             attn_res_query_final=(
                 reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None)) if cfg.attn_res else None
             ),
+            token_embed2=(
+                reshard(_init_weight(embed2_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None))
+                if cfg.second_embed
+                else None
+            ),
+            embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
             config=cfg,
         )
 
@@ -1317,9 +1383,17 @@ class Transformer(eqx.Module):
         valid = _batch_reshard(valid)
 
         final_gate_stats: dict[str, jax.Array] = {}
+        if cfg.second_embed and not cfg.attn_res:
+            raise ValueError("second_embed requires attn_res")
         if cfg.attn_res:
+            extra_sources = ()
+            if self.token_embed2 is not None:
+                assert self.embed2_norm is not None
+                extra_sources = (self.embed2_norm(_embedding_gather(self.token_embed2, token_ids)),)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
+                token_ids,
+                extra_sources,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
             )
@@ -1375,6 +1449,8 @@ class Transformer(eqx.Module):
     def _attn_res_layers(
         self,
         hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        extra_sources: tuple[jax.Array, ...],
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
@@ -1408,8 +1484,9 @@ class Transformer(eqx.Module):
             if cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
             else _attn_res_layer_passthrough
         )
-        blocks: tuple[jax.Array, ...] = ()
-        block_logits: tuple[jax.Array, ...] = ()
+        # Extra embedding sources are blocks from the start, readable by every gate.
+        blocks: tuple[jax.Array, ...] = extra_sources
+        block_logits: tuple[jax.Array, ...] = tuple(_attn_res_source_logits(src, queries, eps) for src in extra_sources)
         partial: jax.Array | None = hidden
         layer_stats = []
         for i, layer in enumerate(layers):
@@ -1423,6 +1500,7 @@ class Transformer(eqx.Module):
             partial, blocks, block_logits, stats = layer_fn(
                 (layer, blocks, block_logits, partial, queries),
                 long_layer_mask if use_long else short_layer_mask,
+                token_ids,
                 use_long,
                 i,
                 eps,
@@ -1439,6 +1517,10 @@ class Transformer(eqx.Module):
                 jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0))
             ),
         }
+        for i, layer in enumerate(layers):
+            if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
+                final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
+                final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
         return hidden, jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats), final_stats
 
@@ -1484,7 +1566,7 @@ class Transformer(eqx.Module):
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
                 for name in list(router_metrics)
-                if name.startswith("attn_res_final_")
+                if name.startswith("attn_res_")
             }
             if not router_metrics:
                 # Dense model: no router to summarize.

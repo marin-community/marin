@@ -14,8 +14,12 @@ import math
 import os
 import shlex
 import sys
+import types
+import typing
+from collections.abc import Mapping
 from datetime import timedelta
 from enum import StrEnum
+from typing import Any
 
 import click
 import jmp
@@ -320,6 +324,8 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile: bool = False,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
+    model_settings: Mapping[str, str] | None = None,
+    optimizer_settings: Mapping[str, str] | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -343,6 +349,7 @@ def build_h100_ladder_run(
         if not model.attn_res:
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
+    model = _apply_settings(model, model_settings or {})
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -389,6 +396,7 @@ def build_h100_ladder_run(
         hidden_dim=model.hidden_dim,
         seq_len=SEQ_LEN,
     )
+    optimizer = _apply_settings(optimizer, optimizer_settings or {})
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
@@ -600,6 +608,16 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Training-job retries after a failure (0 for debugging runs).",
 )
 @click.option(
+    "--model-set",
+    multiple=True,
+    help="Override a GrugModelConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
+)
+@click.option(
+    "--opt-set",
+    multiple=True,
+    help="Override a GrugMoeMuonHConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
+)
+@click.option(
     "--priority",
     type=click.Choice(["production", "interactive", "batch"]),
     default="interactive",
@@ -632,6 +650,8 @@ def main(
     seed: int,
     profile: bool,
     max_retries: int,
+    model_set: tuple[str, ...],
+    opt_set: tuple[str, ...],
     priority: str,
     submit: bool,
     target_cluster: str | None,
@@ -652,7 +672,53 @@ def main(
         seed=seed,
         profile=profile,
         max_retries_failure=max_retries,
+        model_settings=_parse_settings(model_set),
+        optimizer_settings=_parse_settings(opt_set),
     )
+
+
+def _parse_settings(items: tuple[str, ...]) -> dict[str, str]:
+    settings = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep:
+            raise click.BadParameter(f"expected 'name=value', got {item!r}")
+        settings[name.strip()] = value.strip()
+    return settings
+
+
+def _typed_setting(config: Any, name: str, text: str) -> Any:
+    """Parse ``text`` as the declared type of ``config.<name>`` (``X | None`` parses as ``X``; ``none`` gives
+    None; tuples are comma-separated)."""
+    if name not in {f.name for f in dataclasses.fields(config)}:
+        raise ValueError(f"{type(config).__name__} has no field {name!r}")
+    if text.lower() == "none":
+        return None
+    return _parse_as(typing.get_type_hints(type(config))[name], text, name)
+
+
+def _parse_as(annotation: Any, text: str, name: str) -> Any:
+    args = [a for a in typing.get_args(annotation) if a is not type(None)]
+    if typing.get_origin(annotation) in (types.UnionType, typing.Union):
+        if len(args) != 1:
+            raise ValueError(f"{name}: cannot parse union type {annotation}")
+        return _parse_as(args[0], text, name)
+    if typing.get_origin(annotation) is tuple:
+        item = args[0] if args else float
+        return tuple(_parse_as(item, part, name) for part in text.split(",") if part)
+    if annotation is bool:
+        if text.lower() not in ("true", "false"):
+            raise ValueError(f"{name} expects true/false, got {text!r}")
+        return text.lower() == "true"
+    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+        return annotation(text)
+    if annotation in (int, float, str):
+        return annotation(text)
+    raise ValueError(f"{name}: unsupported field type {annotation}")
+
+
+def _apply_settings(config: Any, settings: Mapping[str, str]) -> Any:
+    return dataclasses.replace(config, **{k: _typed_setting(config, k, v) for k, v in settings.items()})
 
 
 if __name__ == "__main__":
