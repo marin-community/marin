@@ -3,7 +3,7 @@
 
 """Per-node multi-process supervisor: run one JAX process per device group.
 
-``python -m iris.hooks.multigpu_main --nproc N [--devices-per-proc D] [--wrap 'CMD'] -- <argv>``
+``python -m iris.jax.multigpu_main --nproc N [--devices-per-proc D] [--wrap 'CMD'] -- <argv>``
 spawns N copies of ``<argv>`` inside a single Iris task, each pinned to a
 contiguous group of D local accelerator devices. It is the GPU analogue of
 ``srun``/``torchrun`` scoped to one host: the children share the pod's IPC
@@ -22,7 +22,7 @@ Each child inherits the supervisor's environment plus its rank::
     IRIS_MULTIGPU_PROCESS_INDEX    = task_index * nproc + local  (global rank)
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS = the child's D device ids     ("0", or "2,3")
 
-``iris.runtime.jax_init.initialize_jax`` reads these (their names are the contract
+``iris.jax.init.initialize_jax`` reads these (their names are the contract
 this module defines) and joins the JAX mesh. The names are iris-private (not the
 JAX_*/framework namespace) so a job that already sets JAX rank vars never trips
 the supervised path.
@@ -50,7 +50,7 @@ from rigging.timing import Deadline, Duration
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.log_highlights import rank_log_tag
-from iris.hooks.multigpu import (
+from iris.jax.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
@@ -254,13 +254,12 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
         raise SystemExit(
-            "usage: python -m iris.hooks.multigpu_main --nproc N [--devices-per-proc D] "
-            "[--wrap 'CMD'] -- <command...>"
+            "usage: python -m iris.jax.multigpu_main --nproc N [--devices-per-proc D] " "[--wrap 'CMD'] -- <command...>"
         )
     split = raw.index("--")
     own_args, child_argv = raw[:split], raw[split + 1 :]
 
-    parser = argparse.ArgumentParser(prog="python -m iris.hooks.multigpu_main")
+    parser = argparse.ArgumentParser(prog="python -m iris.jax.multigpu_main")
     parser.add_argument("--nproc", type=int, required=True, help="number of processes to launch on this host")
     parser.add_argument(
         "--devices-per-proc", type=int, default=1, help="local accelerator devices assigned to each process"

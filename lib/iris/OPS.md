@@ -383,6 +383,8 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
 
+Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
+
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
 GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.

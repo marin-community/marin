@@ -45,7 +45,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.hooks.multigpu import build_multigpu_hook
+from iris.jax.multigpu import build_multigpu_hook
 from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
