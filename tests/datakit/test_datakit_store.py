@@ -240,7 +240,8 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
     return [np.asarray(doc["input_ids"]) for doc in cache]
 
 
-def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fuzzy_exempt", [False, True])
+def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch, fuzzy_exempt):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
@@ -255,13 +256,17 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
+        fuzzy_exempt_sources=frozenset(tokenize) if fuzzy_exempt else frozenset(),
     )
 
+    expected = {key: dict(docs) for key, docs in EXPECTED.items()}
+    if fuzzy_exempt:
+        expected[(1, 2)][905] = 8
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
-    assert set(by_key) == set(EXPECTED), "exactly the surviving buckets, nothing for the dropped docs"
+    assert set(by_key) == set(expected), "exactly the surviving buckets, nothing for the dropped docs"
 
     all_tokens: list[int] = []
-    for key, expected_docs in EXPECTED.items():
+    for key, expected_docs in expected.items():
         bucket = by_key[key]
         assert bucket.total_elements == len(expected_docs)
         assert bucket.total_tokens == sum(expected_docs.values())
@@ -275,19 +280,21 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
             assert len(set(arr.tolist())) == 1  # each doc is a run of its unique token value
             all_tokens.extend(arr.tolist())
 
-    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "filtered docs must be absent"
+    dropped = DROPPED_TOKEN_VALUES - ({905} if fuzzy_exempt else set())
+    assert dropped.isdisjoint(all_tokens), "filtered docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
     assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 2
-    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == 1
-    assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
+    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == (0 if fuzzy_exempt else 1)
+    assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in expected.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
-        length for docs in EXPECTED.values() for length in docs.values()
+        length for docs in expected.values() for length in docs.values()
     )
     record = json.loads((tmp_path / "store" / ".artifact.json").read_text())
     assert record["result"]["cache_path"] == "store"
     assert all(bucket["path"].startswith("store/") for bucket in record["result"]["buckets"])
     loaded = read_artifact(output_path, ClusteredStoreData)
+    assert loaded.fuzzy_exempt_sources == (sorted(tokenize) if fuzzy_exempt else [])
     assert loaded.cache_path == output_path
     assert [bucket.path for bucket in loaded.buckets] == [bucket.path for bucket in artifact.buckets]
 

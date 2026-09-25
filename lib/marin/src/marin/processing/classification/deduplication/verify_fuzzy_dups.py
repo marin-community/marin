@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, groupby
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -111,12 +111,11 @@ class VerifiedFuzzyDupsPerSource(BaseModel):
     source_tag: str
 
 
-class VerifiedFuzzyDupsAttrData(BaseModel):
-    """Sparse, co-partitioned markers for verified fuzzy duplicates."""
+class VerifiedFuzzyDupsArtifact(BaseModel):
+    """Source mapping and counters shared by verified-marker producers."""
 
-    version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
-    verification: FuzzyVerificationParams
-    local_representatives: LocalRepresentativeParams
+    producer: Literal["pipeline", "cluster"] = "pipeline"
+    version: str
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
 
@@ -127,6 +126,21 @@ class VerifiedFuzzyDupsAttrData(BaseModel):
         if entry is None:
             raise KeyError(f"Verified fuzzy duplicate attributes have no entry for source_key={source_key!r}")
         return entry.attr_dir
+
+
+class VerifiedFuzzyDupsAttrData(VerifiedFuzzyDupsArtifact):
+    """Sparse markers from the pipeline fuzzy-duplicate verifier."""
+
+    producer: Literal["pipeline", "cluster"] = "pipeline"
+    version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
+    verification: FuzzyVerificationParams
+    local_representatives: LocalRepresentativeParams
+
+    @model_validator(mode="after")
+    def _pipeline_producer(self) -> "VerifiedFuzzyDupsAttrData":
+        if self.producer != "pipeline":
+            raise ValueError("Pipeline verified-marker artifacts require producer='pipeline'")
+        return self
 
 
 @dataclass(frozen=True)
