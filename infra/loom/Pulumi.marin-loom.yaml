@@ -183,10 +183,32 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 3600
-      maxConcurrent: 8
+      maxConcurrent: 12
       turnBudget: 250
       prelude: weaver
       instructionsFile: profiles/github-automation/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    prose-cleanup:
+      agent: codex
+      description: Rewrite agent-authored issue and PR descriptions in house style
+      model: *codexModel
+      effort: low
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 600
+      maxConcurrent: 3
+      turnBudget: 40
+      prelude: weaver
+      instructionsFile: profiles/prose-cleanup/AGENTS.md
       env: *loomIrisUser
       restricted: false
       githubRepositories:
@@ -302,8 +324,8 @@ config:
     - name: agent-prose-cleanup
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-agent-prose-cleanup.yaml@refs/heads/main
-      profile: *githubAutomationProfile
-      serviceTag: *githubAutomationProfile
+      profile: prose-cleanup
+      serviceTag: prose-cleanup
       ref: refs/heads/main
     - name: canary-ferry
       repositoryId: *marinRepositoryId
