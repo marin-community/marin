@@ -21,9 +21,12 @@ from iac.github.dependency_updater import (
 from iac.github.resources import credential_resource_plans, register_credentials, repository_name
 
 LOOM_STACK = "organization/marin-loom/marin-loom"
+AGENTIC_LINT_FEDERATION = "agentic-lint"
 CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
 FORK_FERRY_FEDERATION = "fork-ferry"
+GITHUB_AUTOMATION_FEDERATION = "ops-loom-github"
 PR_REVIEW_FEDERATION = "pr-review"
+PROSE_CLEANUP_FEDERATION = "agent-prose-cleanup"
 
 
 def main() -> None:
@@ -47,12 +50,15 @@ def main() -> None:
     loom = pulumi.StackReference(LOOM_STACK)
     federation_profiles = loom.require_output("githubFederationProfiles")
     profile_variables = {
+        "agentic-lint-profile": ("LOOM_AGENTIC_LINT_PROFILE", AGENTIC_LINT_FEDERATION),
         "codehealth-refinement-profile": (
             "LOOM_CODEHEALTH_REFINEMENT_PROFILE",
             CODEHEALTH_REFINEMENT_FEDERATION,
         ),
         "fork-ferry-profile": ("LOOM_FORK_FERRY_PROFILE", FORK_FERRY_FEDERATION),
+        "github-automation-profile": ("LOOM_GITHUB_AUTOMATION_PROFILE", GITHUB_AUTOMATION_FEDERATION),
         "pr-review-profile": ("LOOM_PR_REVIEW_PROFILE", PR_REVIEW_FEDERATION),
+        "prose-cleanup-profile": ("LOOM_PROSE_CLEANUP_PROFILE", PROSE_CLEANUP_FEDERATION),
     }
     resolved_profiles = {}
     for resource_name, (variable_name, federation_name) in profile_variables.items():
@@ -75,12 +81,18 @@ def main() -> None:
     register_dependency_updater(updater, deployment_policy)
     pulumi.export("credential_count", len(plans))
     pulumi.export(
+        "agentic_lint_profile",
+        resolved_profiles[AGENTIC_LINT_FEDERATION],
+    )
+    pulumi.export(
         "codehealth_refinement_profile",
         resolved_profiles[CODEHEALTH_REFINEMENT_FEDERATION],
     )
     pulumi.export("dependency_updater_enabled", True)
     pulumi.export("fork_ferry_profile", resolved_profiles[FORK_FERRY_FEDERATION])
+    pulumi.export("github_automation_profile", resolved_profiles[GITHUB_AUTOMATION_FEDERATION])
     pulumi.export("pr_review_profile", resolved_profiles[PR_REVIEW_FEDERATION])
+    pulumi.export("prose_cleanup_profile", resolved_profiles[PROSE_CLEANUP_FEDERATION])
 
 
 main()

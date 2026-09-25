@@ -8,8 +8,8 @@ model once, runs every selected eval against that endpoint in order, and writes 
 inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
 scans those records into its Postgres query index.
 
-`marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
-each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
+`marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
+hosted-judge session, then passes their Iris endpoint URLs to each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
@@ -45,6 +45,14 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
 # Override GPU placement and scheduling priority.
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
   --federated_cluster cw-rno2a --priority interactive
+
+# Co-host one judge for every Harbor verifier in this batch.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
+  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
+  --federated_cluster cw-rno2a --limit 2
 ```
 
 Key options: exactly one of `--model` or `--model-config` selects a registry entry or a catalog-schema
@@ -52,6 +60,8 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
+verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.

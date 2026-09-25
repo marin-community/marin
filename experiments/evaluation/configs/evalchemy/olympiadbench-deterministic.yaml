@@ -1,0 +1,7 @@
+tasks: [OlympiadBenchDeterministic]
+task_options:
+  OlympiadBenchDeterministic:
+    num_fewshot: 0
+    task_alias: olympiadbench_deterministic
+    generation: true
+runtime_extras: [olympiadbenchdeterministic]

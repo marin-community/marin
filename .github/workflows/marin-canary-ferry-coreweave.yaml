@@ -38,8 +38,7 @@ on:
 permissions:
   contents: read   # actions/checkout
   packages: write  # docker login ghcr.io for iris cluster start
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
+  id-token: write  # Loom federation OIDC
 
 # Serialise with iris-smoke-coreweave.yaml — both rebuild/roll the shared
 # iris-ci controller and submit jobs against the shared H100, so only one
@@ -173,11 +172,11 @@ jobs:
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
 
       # Keep the wait below the job timeout (180) so a hung ferry fails this
-      # *step* (failure(), runner stays alive for Claude triage) rather than
-      # tripping the job timeout (cancelled(), which force-kills triage after
-      # GitHub's short grace — exit 143). The monitor --timeout (120m) exits
+      # *step* (failure(), runner stays alive for the Loom launch) rather than
+      # tripping the job timeout, which can interrupt the Loom launch. An
+      # already launched session continues. The monitor --timeout (120m) exits
       # gracefully; timeout-minutes is a hard backstop if the monitor wedges
-      # between polls. Healthy runs finish in ~35m, leaving ~55m for triage.
+      # between polls. Healthy runs finish in ~35m, leaving time for diagnostics.
       - name: Wait for canary ferry
         timeout-minutes: 125
         shell: bash -l {0}
@@ -244,13 +243,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Claude triage
-        id: claude_triage
+      - name: Launch Loom triage
+        id: loom_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: ./.github/actions/claude-triage
-        timeout-minutes: 30
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
         with:
-          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: gpu
           job-id: ${{ steps.submit.outputs.job_id }}
           run-id: ${{ env.RUN_ID }}
@@ -258,23 +257,7 @@ jobs:
           iris-namespace: ${{ env.IRIS_NAMESPACE }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
-          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          extra-allowed-tools: 'Bash(kubectl:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Edit'
-
-      # Upload Claude's Slack message (if it was written) so the separate
-      # notify-slack job can pick it up. We run Slack notify in a separate
-      # job because a job-level timeout can force-kill this runner before
-      # in-job steps after Claude triage ever execute — see
-      # https://github.com/marin-community/marin/actions/runs/24498461666.
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry-cw.result` reflects the main

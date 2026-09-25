@@ -22,9 +22,37 @@ generation = generate_curriculum_sft(
     accepted_examples=64,
     seed=17,
     max_completion_tokens=4096,
+    task_specification="Use self-contained fictional tasks with checkable answers.",
 )
 ```
 
-The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. Training and
-evaluation are separate consumers of its chat Parquet. This generation recipe has not yet been run;
-the earlier finance pilot used oracle-derived arithmetic conversations.
+The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. The earlier
+finance pilot used oracle-derived arithmetic conversations; this GLM recipe produces unverified
+answers.
+
+`pipeline.py` creates one generation and chat-preparation step per capability. The prepared
+Parquet artifacts carry canonical OpenAI `messages` and feed `sft_step` through
+`ArtifactDatasetSpec`. The shared launcher tokenizes the chat, masks user turns from the loss,
+and trains `SnowballLMHeadModel` directly from the pinned Hugging Face checkpoint. Conversations
+stay separate (`pack=False`) because Snowball does not consume packed-document attention masks.
+The launcher saves a sharded bfloat16 Hugging Face checkpoint at the final training step under
+the training artifact's `hf/` directory.
+
+`math_trial.py` declares a bounded first loop: deterministic OlympiadBench and Math500 on the
+pinned September 20 HF model, three algebra capabilities, four Snowball updates, and
+the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
+equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
+OlympiadBench runs. The trial prefix is resolved through
+`marin_temp_bucket(ttl_days=30)` to the east-region lifecycle-managed bucket. Run `--stage generate` on
+`cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
+`S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train` and `after` on RNO2A with the
+same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
+Generation uses `SOURCE_VERSION`; the SFT and its re-evaluation use the CLI `--version`, so a failed
+SFT can be retried under a new version without regenerating data. `--stage full` binds both
+evaluations and training in one graph after generation has completed.
+
+This trial has not established an improvement. Its GLM answers are structurally checked but not
+oracle-verified, and it has no matched task-only control. A before/after change would measure the
+whole synthetic-SFT recipe, not the curriculum's independent contribution. The standard Levanter
+Adam optimizer does not reproduce Will's special-token learning-rate or frozen-router-bias changes;
+it starts a fresh optimizer from the published September 20 weights.

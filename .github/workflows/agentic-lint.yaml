@@ -3,16 +3,25 @@ name: Agentic lint policy
 on:
   pull_request:
     types: [opened, ready_for_review, reopened, synchronize, labeled, unlabeled]
+  pull_request_target:
+    types: [opened, ready_for_review, reopened, synchronize]
 
 jobs:
   agentic-lint:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
+      issues: read
     steps:
-      - name: Require the agentic lint label
+      - name: Require lint review of this head
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           case "$AUTHOR" in
@@ -21,9 +30,70 @@ jobs:
               exit 0
               ;;
           esac
-          if jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
-            echo "The agentic-lint label records completion of the local agentic review."
+          if ! jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
+            echo "::error::Agentic lint is pending or failed. Check the Loom launch and review result."
+            exit 1
+          fi
+          base_workflow=$(gh api \
+            "repos/$GITHUB_REPOSITORY/contents/.github/workflows/agentic-lint.yaml?ref=$BASE_SHA" \
+            --jq .content | base64 --decode)
+          if ! grep -Fq 'launch-review:' <<< "$base_workflow"; then
+            echo "The base revision predates the Loom lint launcher; accepting the local review label."
             exit 0
           fi
-          echo "::error::Run the commit workflow's agentic review, then add the agentic-lint label."
+          marker="<!-- marin-agentic-lint:$HEAD_SHA -->"
+          comments=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "loom-oa-dev[bot]") | .body')
+          if grep -Fq "$marker" <<< "$comments"; then
+            echo "Agentic lint completed for $HEAD_SHA."
+            exit 0
+          fi
+          echo "::error::No completed Loom lint review for PR head $HEAD_SHA."
           exit 1
+
+  launch-review:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      vars.LOOM_AGENTIC_LINT_PROFILE != '' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
+          sparse-checkout-cone-mode: false
+
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: marin-ops-agent[bot]
+
+      - name: Launch agentic lint
+        if: steps.author.outputs.allowed == 'true'
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_AGENTIC_LINT_PROFILE }}
+          idempotency-key: agentic-lint:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "Agentic lint for #${{ github.event.pull_request.number }}"
+          goal: >-
+            Review pull request #${{ github.event.pull_request.number }} at head
+            ${{ github.event.pull_request.head.sha }}. Follow the agentic-lint
+            profile instructions. Run the lint catalog review, report every
+            finding, publish a completion marker for this head, and refresh the
+            agentic-lint label only after the review succeeds.
+            Append a typed result to the Loom channel.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}

@@ -130,6 +130,17 @@ and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
 does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
+`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+with a small concurrency cap and turn budget, so description rewrites never
+consume the shared automation pool. The remaining GitHub agent workflows have
+individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
+`main`; the shared profile does not make other workflows eligible. Deploy the
+Loom stack before the GitHub Pulumi stack so the latter can publish
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`, and
+`LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+Loom stack before the GitHub Pulumi stack whenever these federations or profile
+variables change.
 
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
