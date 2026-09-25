@@ -15,6 +15,7 @@ SOURCE = "GSE81682"
 def generate_singlecell(_seed: int) -> Instance:
     reference = json.loads(source_text(SOURCE, "gse81682-qc-reference.json.gz"))
     contract = singlecell_contract(reference)
+    assets = source_catalog()[SOURCE]["file_inputs"]
     return Instance(
         "Prepare an auditable filtered count matrix for the observed mouse hematopoietic stem/progenitor "
         "Smart-seq2 study GSE81682. All inputs are in /app/inputs. matrix.mtx.gz is a gzip-compressed "
@@ -52,8 +53,8 @@ def generate_singlecell(_seed: int) -> Instance:
         ),
         workflow_scope=WorkflowScope.CONNECTED,
         input_files={
-            name: InputFile(asset["sha256"], asset["bytes"])
-            for name, asset in source_catalog()[SOURCE]["file_inputs"].items()
+            name: InputFile(assets[name]["sha256"], assets[name]["bytes"])
+            for name in ("cells.tsv", "features.tsv", "matrix.mtx.gz")
         },
     )
 

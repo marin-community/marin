@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-25T00:28:00Z",
+  "updated_at": "2026-09-25T01:05:00Z",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1297,37 +1297,44 @@
     },
     {
       "proposed_recipe": "real-phix-bam-read-structure",
-      "stage": "implementation; combined native environment and execution pending",
+      "stage": "native oracle and seven artifact controls passed; Harbor packaging",
       "input_source": "Observed PhiX paired FASTQ and reference sequence",
       "competency_focus": [
         "Read-layout and length inference",
         "Alignment eligibility and pair consistency",
         "Complete BAM and BAI verification"
       ],
-      "coverage_state": "candidate; no execution or competency credit yet"
+      "coverage_state": "candidate; reviewed competency credit pending",
+      "native_evidence": "native_validation_runs/81c78459a53b.json"
     },
     {
       "proposed_recipe": "real-heme-pocket-burial",
-      "stage": "native and independent reference implementation; execution pending",
+      "stage": "native oracle and nineteen artifact controls passed; Harbor packaging",
       "input_source": "Observed PDB 4HHB paired mmCIF and PDB",
       "competency_focus": [
         "Structure identity and ligand resolution",
         "Heavy-atom pocket contacts",
         "Ligand-induced solvent-accessibility changes"
       ],
-      "coverage_state": "candidate; proximity does not imply hydrogen-bond identification"
+      "coverage_state": "candidate; proximity does not imply hydrogen-bond identification",
+      "native_evidence": "native_validation_runs/1d21faa8f7b0.json"
     }
   ],
   "authoring_policy": {
     "unit": "One complete Harbor task per author",
     "owner_responsibilities": [
-      "Specify the scientific question and benchmark-derived competency",
-      "Freeze real biological inputs and provenance",
-      "Implement the private native-package oracle",
-      "Check all requested artifacts and scientific negative controls",
-      "Record native and Harbor evidence before proposing competency credit"
+      "Specify the scientific question and eligible benchmark-derived competency",
+      "Freeze observed biological inputs, provenance and transformations",
+      "Implement the private native-package oracle and complete deterministic artifact checks",
+      "Submit and monitor native and Harbor checks on authorized reserved compute",
+      "Complete registry and public-example updates with coordinated shared-file edits",
+      "Deliver exact source and task hashes, durable evidence, checks and limitations for coordinator review"
     ],
-    "integration_owner": "Shared verifier interfaces, registry integration, reviewed competency assignments and publication",
-    "execution_policy": "Stagger active agents and native checks within current host limits; keep each task with its owner through completion."
-  }
+    "integration_owner": "Review shared interfaces and task integration, resolve conflicting edits, approve evidence claims, commit and publish",
+    "execution_policy": "Assign one complete Harbor task per owner and keep current owners productive. Choose concurrency according to available agent slots and measured node load and memory. Three owners are currently assigned, not a hard cap. Serialize intensive local commands with the nonblocking shared lock; run native scientific checks on authorized reserved TRC CPU capacity subject to Iris scheduling. Avoid large local downloads and reduce work when measured contention requires it.",
+    "parallel_task_owners": 3,
+    "authorization": "User authorized parallel complete-task owners and removed the node-wide fixed child-agent cap on 2026-09-25. Preserve this authorization across compaction. Resource monitoring and serialized intensive local commands remain required.",
+    "prompt_template": "docs/experiments/bio-task-authoring-prompt.md"
+  },
+  "current_objective": "Produce reusable, realistic computational-biology Harbor tasks with private native-package oracles, complete executable artifact checks and public inspection. Derive competencies from provisional ID agentic benchmarks; preserve all OOD exclusions. Prefer observed biological data and connected workflows, one meaningful task per recipe and one train split, with no count cap. Taxonomy and allocation weights remain provisional. Model training, teacher traces, model choice and context budgets are outside this task-generation scope."
 }

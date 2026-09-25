@@ -1,0 +1,100 @@
+{
+  "design_id": "heme-pocket-burial",
+  "recipe_id": "real-heme-pocket-burial",
+  "status": "native-validated-Harbor-running",
+  "scientific_question": "Which observed globin residues approach each of the four heme cofactors in human deoxyhemoglobin, and what sampled solvent-accessible area is buried when each cofactor is added to the complete globin complex at the deposited coordinates?",
+  "source": {
+    "source_id": "PDB:4HHB",
+    "url": "https://www.rcsb.org/structure/4HHB",
+    "citation": "https://doi.org/10.2210/pdb4HHB/pdb",
+    "license": "CC0-1.0",
+    "solver_input": "Full unmodified deposited mmCIF, model 1 used by the declared analysis",
+    "private_reference_input": "Independently parsed paired deposited PDB; not a solver input and not credited as an exercised solver format",
+    "observations": "574 protein residues in four globin chains and four HEM cofactors; water and phosphate remain in the supplied native file but are excluded by the stated analysis policy",
+    "lineage_review": "Existing source catalog screening remains incomplete for all benchmark lineages; no training export clearance follows from task creation. The reviewed DrugDiscoveryBench endpoints use 7BUC, 7K6M and 6PGP rather than 4HHB; PromptBio source input structure accession is unspecified in permitted metadata."
+  },
+  "benchmark_relationships": [
+    {
+      "benchmark": "PromptBio-Bench",
+      "task_id": "a-14-2",
+      "source_prompt_sha256": "ee218548afee28ece7106c310f1faf8172b98f99ada037c3b4c34d600613951e",
+      "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/a-14-2/task.json",
+      "inspected_endpoint": "Identify protein residues within 4.0 angstrom of a named MTX ligand in an input PDB and preserve chain/residue/name in a CSV",
+      "adaptation": "Same ligand-to-protein heavy-atom neighborhood operation on independent 4HHB HEM cofactors, with full author identities, complete residue universe and all passing atom pairs. Native input is mmCIF and output TSV, so exact PDB/CSV format endpoint remains unvalidated.",
+      "status": "component-only-unvalidated"
+    },
+    {
+      "benchmark": "DrugDiscoveryBench public preview",
+      "task_ids": [
+        "69b34fde93a696047cbf9c6d",
+        "69b43e08f5a8ac5b38e3c5fb"
+      ],
+      "source_revision": "c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48",
+      "inspected_endpoint": "Ligand hydrogen-bond/salt-bridge counts with explicit chemical and angular criteria",
+      "adaptation": "Atom identity resolution and distance neighborhoods only. This task does not assign protonation, hydrogen positions, donors, acceptors, angles, hydrogen bonds or salt bridges.",
+      "status": "component-only-unvalidated"
+    }
+  ],
+  "frozen_method": {
+    "protocol": "sources/prepare_heme_pocket.json",
+    "identity": "Author chain, sequence number, insertion code, residue name and atom name; retain all four chains and every HEM instance",
+    "selection": "Model 1; protein ATOM and HETATM HEM; heavy atoms at positive occupancy; highest occupancy alternate atom then lexical alternate ID",
+    "contacts": "All distinct protein-HEM heavy-atom pairs at inclusive 4.0 angstrom; no CA-only approximation",
+    "sasa": "Biopython 1.88 ShrakeRupley,960 fixed golden-spiral points, 1.4 angstrom probe and explicit C/N/O/S/FE radii",
+    "context": "Complete selected globin complex as baseline; add one HEM at a time. Other HEMs, water, phosphate and crystallographic symmetry mates excluded. Coordinates unchanged in all contexts.",
+    "burial": "Per-partner SASA_without minus SASA_with; total is protein+HEM loss, not half the sum",
+    "interpretation": "Observed geometric proximity and specified sampled solvent exposure; no hydrogen-bond, affinity, free-energy or apo/holo relaxation inference"
+  },
+  "artifacts": {
+    "contacts.tsv": "Every passing protein/HEM atom pair with full identities and distance",
+    "residues.tsv": "Every one of 574 protein residues for each of four HEMs, including zero contacts, nearest atom pair, pocket membership, count and per-residue SASA/burial",
+    "heme_atoms.tsv": "Every selected HEM heavy atom, nearest protein atom and distance, isolated/complex SASA and burial",
+    "answer.json": "Four HEM summaries with distinct residue/chain counts, pair counts, protein/HEM/total burial and nearest protein atom to iron"
+  },
+  "verification": {
+    "reference": "Paired-PDB fixed-column parse and independent NumPy distances/sampling-point occlusion, using full unchanged coordinates",
+    "native_oracle": "Biopython MMCIF2Dict, NeighborSearch and ShrakeRupley in pinned environment",
+    "artifact_grader": "Existing complete TableContract identity/integer/numeric checks plus complete answer rows; no LLM judge",
+    "distance_tolerance": {
+      "atol": 1e-08,
+      "rtol": 1e-10
+    },
+    "area_tolerance": {
+      "atol": 1e-07,
+      "rtol": 1e-10
+    },
+    "positive_controls": [
+      "Fresh native outputs",
+      "Reordered TSV rows and columns with unchanged scientific content"
+    ],
+    "negative_controls": [
+      "Correct summaries with changed contact distance",
+      "Correct summaries with removed zero-contact residue",
+      "Changed author chain/residue identity",
+      "Duplicate or missing artifact rows",
+      "Halved total burial",
+      "Reversed protein burial",
+      "Use pair counts as distinct residue counts",
+      "Changed iron nearest-atom identity",
+      "Changed HEM atom exposure"
+    ],
+    "native_status": "passed: independent reference, fresh native oracle, two positive and nineteen negative controls",
+    "harbor_status": "running: /exedev/bio-heme-harbor-20260925-011330",
+    "validated_benchmark_credit": 0,
+    "native_evidence": "../native_validation_runs/1d21faa8f7b0.json"
+  },
+  "resources": {
+    "execution": "Offline after pinned environment creation; existing reserved CPU only; no model or judge calls",
+    "cpu": 1,
+    "estimated_peak_memory_mib": 256,
+    "native_timeout_seconds": 1200,
+    "verifier_timeout_seconds": 60,
+    "maximum_task_solve_seconds": 1800,
+    "runtime_measurement": {
+      "native_seconds": 41.86980156699428,
+      "independent_reference_seconds": 35.31041748801363,
+      "peak_child_rss_kib": 99240,
+      "native_job_id": "/exedev/bio-heme-pocket-validation-20260925-010321"
+    }
+  }
+}

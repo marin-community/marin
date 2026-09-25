@@ -1,0 +1,709 @@
+{
+  "schema_version": 1,
+  "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009",
+  "scope": "Complete observed 4HHB; independent paired-PDB arithmetic reference, fresh native Biopython mmCIF/SASA oracle and complete artifact controls. No model calls.",
+  "checks": [
+    {
+      "repository_index": 19,
+      "repository": "Biopython",
+      "recipe": "real-heme-pocket-burial",
+      "status": "passed",
+      "execution": "completed",
+      "environment": {
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "bytes": 28948
+          },
+          {
+            "name": "biopython",
+            "version": "1.88",
+            "build": "py312h5cc1888_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/biopython-1.88-py312h5cc1888_1.conda",
+            "sha256": "3def2a81e90dc04384e1ef75e6cbeccd749e2a9c49b79ba0b0e4a1a58cfabbd1",
+            "bytes": 3273918
+          },
+          {
+            "name": "bzip2",
+            "version": "1.0.8",
+            "build": "hda65f42_10",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+            "sha256": "1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96",
+            "bytes": 257808
+          },
+          {
+            "name": "ca-certificates",
+            "version": "2026.7.22",
+            "build": "hbd8a1cb_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+            "sha256": "0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6",
+            "bytes": 131780
+          },
+          {
+            "name": "icu",
+            "version": "78.3",
+            "build": "py310h44b86e0_2",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+            "sha256": "9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432",
+            "bytes": 14459115
+          },
+          {
+            "name": "ld_impl_linux-64",
+            "version": "2.46.1",
+            "build": "default_hbd61a6d_102",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+            "sha256": "27d83f1188cd19bcb7754a078b3fa7f4cfb8527f8eb2fde54dd01fc529d1adec",
+            "bytes": 745303
+          },
+          {
+            "name": "libblas",
+            "version": "3.11.0",
+            "build": "11_h4a7cf45_openblas",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libblas-3.11.0-11_h4a7cf45_openblas.conda",
+            "sha256": "d942e0c820d60a613a6f786d074f0820fb6343e3f1ccfb110b1d98b44fb75968",
+            "bytes": 18246
+          },
+          {
+            "name": "libcblas",
+            "version": "3.11.0",
+            "build": "11_h0358290_openblas",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libcblas-3.11.0-11_h0358290_openblas.conda",
+            "sha256": "f7d1bbdea61cf94ba219d17b2cb571a29830f8025385af799bff5a7ad1ef45e6",
+            "bytes": 18196
+          },
+          {
+            "name": "libexpat",
+            "version": "2.8.4",
+            "build": "hd2095e1_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+            "sha256": "2f5e90b621f7bf64c35d5c972bd85a645555d82404130569149a129dcbc8b8dd",
+            "bytes": 77595
+          },
+          {
+            "name": "libffi",
+            "version": "3.7.0",
+            "build": "h81df57d_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+            "sha256": "c8c7583ef063bc3c430f1d48298e5ad24f796a35c22ed5b14183325825a61106",
+            "bytes": 68004
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "bytes": 1057064
+          },
+          {
+            "name": "libgfortran",
+            "version": "16.2.0",
+            "build": "h69a702a_5",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran-16.2.0-h69a702a_5.conda",
+            "sha256": "7e694578cbabd46251d7a069d89da6479c5edd962d78bbc66a847c1b722a8365",
+            "bytes": 28520
+          },
+          {
+            "name": "libgfortran5",
+            "version": "16.2.0",
+            "build": "h6b99dfc_5",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgfortran5-16.2.0-h6b99dfc_5.conda",
+            "sha256": "cc767363e3148a18d3a3015eeaed722bbf8ca0acc3a29157df2965e97caa9803",
+            "bytes": 2528103
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "bytes": 641644
+          },
+          {
+            "name": "liblapack",
+            "version": "3.11.0",
+            "build": "11_h47877c9_openblas",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblapack-3.11.0-11_h47877c9_openblas.conda",
+            "sha256": "1ad3f43c9319ef398a8ef45989f4903a06e3965b51e77fc669a4c894168a8411",
+            "bytes": 18227
+          },
+          {
+            "name": "liblzma",
+            "version": "5.8.3",
+            "build": "hb03c661_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+            "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+            "bytes": 112995
+          },
+          {
+            "name": "libnsl",
+            "version": "2.0.1",
+            "build": "hb9d3cd8_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libnsl-2.0.1-hb9d3cd8_1.conda",
+            "sha256": "927fe72b054277cde6cb82597d0fcf6baf127dcbce2e0a9d8925a68f1265eef5",
+            "bytes": 33731
+          },
+          {
+            "name": "libopenblas",
+            "version": "0.3.34",
+            "build": "pthreads_hf13c14d_2",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libopenblas-0.3.34-pthreads_hf13c14d_2.conda",
+            "sha256": "69a722751e14eab2eb3bfdcb9acb1187afbd962b0c49b48d829341e0f6787f60",
+            "bytes": 6845411
+          },
+          {
+            "name": "libpython",
+            "version": "3.12.14",
+            "build": "h0c77377_3_cpython",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.12.14-h0c77377_3_cpython.conda",
+            "sha256": "6be16a4906d83eb8e9e04375d524f339f426a847cffd294f1ceb0611988dc17a",
+            "bytes": 8770625
+          },
+          {
+            "name": "libsqlite",
+            "version": "3.53.4",
+            "build": "h13e7031_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+            "sha256": "f20d70da54e5b31dd4a51fb1efeaafafd5ab6dd8d7ac9d1438eaa2526ac4ed3d",
+            "bytes": 974348
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "bytes": 6618916
+          },
+          {
+            "name": "libuuid",
+            "version": "2.42.4",
+            "build": "hcfc3c73_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+            "sha256": "f34b8d1de9a2bf62476d8608057d9b8a918d97444236dc53a47128f2fae79041",
+            "bytes": 34442
+          },
+          {
+            "name": "libxcrypt",
+            "version": "4.4.38",
+            "build": "h280c20c_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libxcrypt-4.4.38-h280c20c_0.conda",
+            "sha256": "f7e9292dd219a6435bbb1223da9586c3e70d66d169c5a92f08db3f2127df04e9",
+            "bytes": 101957
+          },
+          {
+            "name": "libzlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+            "bytes": 63713
+          },
+          {
+            "name": "ncurses",
+            "version": "6.6",
+            "build": "hdb14827_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+            "sha256": "5d46557214ed184381dafe835b7c94a474a1c3b307a08a250b1ea4779b44ffb3",
+            "bytes": 911196
+          },
+          {
+            "name": "numpy",
+            "version": "2.5.3",
+            "build": "py312he827f4e_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/numpy-2.5.3-py312he827f4e_0.conda",
+            "sha256": "5b0e4c7757a2df883c5615a8f64bc4c113c4cd303ae6caa3ada5d397d114ce2a",
+            "bytes": 9230861
+          },
+          {
+            "name": "openssl",
+            "version": "3.6.4",
+            "build": "h781a0a9_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+            "sha256": "4747b2d6a8336f52343bceb8a1ebf41a9e6e665b9d2e3f989972de53a310599e",
+            "bytes": 3202955
+          },
+          {
+            "name": "packaging",
+            "version": "26.3",
+            "build": "pyhc364b38_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda",
+            "sha256": "c432626b16768b8dab228bfb706f7060c2d462a21c516d240f68f2f902b5a044",
+            "bytes": 116363
+          },
+          {
+            "name": "pip",
+            "version": "26.2.1",
+            "build": "pyh8b19718_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh8b19718_0.conda",
+            "sha256": "c205bae42eb11b364fe3663a817cbcbc20a8ef544c6b2ff6f391013487117259",
+            "bytes": 1199593
+          },
+          {
+            "name": "python",
+            "version": "3.12.14",
+            "build": "h5f976f7_3_cpython",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.14-h5f976f7_3_cpython.conda",
+            "sha256": "14c579b1016da04e4c9f1c5c857272d83ec447317d8c4074a07d59de3cef70ef",
+            "bytes": 23044161
+          },
+          {
+            "name": "python_abi",
+            "version": "3.12",
+            "build": "9_cp312",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-9_cp312.conda",
+            "sha256": "ee9c2922e07afc85fc82d5fa82c9ac2c79da3be3283a5e17bf2f2ae38dbd02fb",
+            "bytes": 6751
+          },
+          {
+            "name": "readline",
+            "version": "8.3",
+            "build": "hd6e31c0_1",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+            "sha256": "01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d",
+            "bytes": 348899
+          },
+          {
+            "name": "setuptools",
+            "version": "84.0.0",
+            "build": "pyh332efcf_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/setuptools-84.0.0-pyh332efcf_0.conda",
+            "sha256": "9e200ee5f9ff19a4d94e4b51c4856d53dec849f91032f345cf0c6bc3d51a7183",
+            "bytes": 524488
+          },
+          {
+            "name": "tk",
+            "version": "8.6.13",
+            "build": "noxft_h1df4ec4_4",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+            "sha256": "a1a241d172c1ccab067ba245206dd048bc3c2d1b84504b53c9468e99adfc16a1",
+            "bytes": 3566806
+          },
+          {
+            "name": "tzdata",
+            "version": "2026c",
+            "build": "h151e31d_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+            "sha256": "b928c30ddcb0e3f544c6eade8352737e6e610e263276b90232db6a578ef899d8",
+            "bytes": 118849
+          },
+          {
+            "name": "wheel",
+            "version": "0.48.0",
+            "build": "pyhd8ed1ab_0",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda",
+            "sha256": "ba64b29b6d418024cb565081a1799262cb2780d2534ff4c14f76aa858c4286cd",
+            "bytes": 34528
+          },
+          {
+            "name": "zstd",
+            "version": "1.5.7",
+            "build": "hb78ec9c_7",
+            "subdir": "",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda",
+            "sha256": "47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+            "bytes": 601301
+          }
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "PDB4HHB-four-hemes-complete-globin-complex",
+          "recipe": "real-heme-pocket-burial",
+          "execution": "completed",
+          "runtime_seconds": 41.86980156699428,
+          "verification": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "input_sha256": {
+            "query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6"
+          },
+          "contract_sha256": "96fcf9ab8290f527b5a4e7a46c56aecc4b84c0adbbfa71482eb6b6c663ebe4cb",
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb"
+          },
+          "artifact_rows": {
+            "contacts.tsv": 290,
+            "residues.tsv": 2296,
+            "heme_atoms.tsv": 172
+          },
+          "positive_controls": {
+            "native": 1,
+            "reordered_rows_and_columns": 1
+          },
+          "negative_controls": {
+            "changed_contact_distance": 0,
+            "changed_residue_distance": 0,
+            "changed_residue_burial": 0,
+            "changed_heme_atom_exposure": 0,
+            "changed_author_chain": 0,
+            "changed_iron_neighbor": 0,
+            "halved_total_burial": 0,
+            "reversed_protein_burial": 0,
+            "pairs_as_residue_count": 0,
+            "missing_artifact:contacts.tsv": 0,
+            "missing_row:contacts.tsv": 0,
+            "duplicate_row:contacts.tsv": 0,
+            "missing_artifact:residues.tsv": 0,
+            "missing_row:residues.tsv": 0,
+            "duplicate_row:residues.tsv": 0,
+            "missing_artifact:heme_atoms.tsv": 0,
+            "missing_row:heme_atoms.tsv": 0,
+            "duplicate_row:heme_atoms.tsv": 0,
+            "missing_noncontact_residue": 0
+          },
+          "grading_seconds": 1.7572786449745763
+        }
+      ]
+    }
+  ]
+}

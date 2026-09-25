@@ -1,0 +1,94 @@
+{
+  "source": "GSE81682",
+  "lineage": "GSE81682:Nestorowa-mouse-HSPC",
+  "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE81682",
+  "citation": "Nestorowa et al., Blood (2016), doi:10.1182/blood-2016-05-716480; GSE81682.",
+  "redistribution_review": {
+    "checked_at": "2026-09-24",
+    "policy": "https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html",
+    "access_guidance": "https://www.ncbi.nlm.nih.gov/geo/info/faq.html",
+    "finding": "NCBI imposes no GEO data use or distribution restrictions and describes public release as permitting access, download and reuse. Its policy preserves any submitter intellectual-property claims. No dataset-specific restriction was found in the inspected GSE81682 series record; do not relabel the observations CC0 or infer the dataset licence from the paper copyright.",
+    "attribution": "Nestorowa et al., Blood (2016), doi:10.1182/blood-2016-05-716480; GSE81682.",
+    "scope": "Original GEO counts and metadata; does not license copying the article, figures, author-website assets or benchmark fixtures."
+  },
+  "original_source_file_sha256": {
+    "cells.tsv": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+    "features.tsv": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+    "matrix.mtx.gz": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769"
+  },
+  "qc_reference_sha256": {
+    "filtered_counts.mtx.gz": "8f732a3fa80db45908f1d6661527e9ca8c33dc94dd64c4653ddf9456d64a4f6d",
+    "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+    "feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357"
+  },
+  "protocol": {
+    "source": "GSE81682",
+    "required_package_versions": {
+      "scanpy": "1.12.4",
+      "anndata": "0.13.4",
+      "scikit-learn": "1.9.1",
+      "numpy": "2.5.3",
+      "pandas": "3.0.6",
+      "scipy": "1.18.1",
+      "h5py": "3.16.0"
+    },
+    "qc_reference_sha256": {
+      "filtered_counts.mtx.gz": "8f732a3fa80db45908f1d6661527e9ca8c33dc94dd64c4653ddf9456d64a4f6d",
+      "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+      "feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357"
+    },
+    "qc_policy": {
+      "minimum_endogenous_counts": 100000,
+      "minimum_detected_endogenous": 2000,
+      "ercc_fraction_numerator": 1,
+      "ercc_fraction_denominator": 5,
+      "minimum_retained_cells_per_gene": 3
+    },
+    "expected_qc_matrix": {
+      "cells": 1422,
+      "features": 40312,
+      "nonzeros": 17332418,
+      "read_counts": 2677371925
+    },
+    "minimum_cells_per_representation_gene": 10,
+    "normalization": {
+      "method": "scanpy.pp.normalize_total",
+      "target_sum": 10000,
+      "exclude_highly_expressed": false,
+      "transform": "scanpy.pp.log1p",
+      "denominator": "eligible_gene_reads_after_min10_prevalence"
+    },
+    "hvg": {
+      "method": "scanpy.pp.highly_variable_genes",
+      "flavor": "seurat",
+      "n_bins": 20,
+      "n_top_genes": 2000,
+      "tie_break": "feature_id_ascending"
+    },
+    "pca": {
+      "method": "scanpy.tl.pca",
+      "n_components": 30,
+      "audit_components": 31,
+      "zero_center": true,
+      "scale": false,
+      "svd_solver": "arpack",
+      "random_state": 0,
+      "dtype": "float64",
+      "minimum_adjacent_relative_eigen_gap": 1e-05
+    },
+    "diagnostics": {
+      "singleton_percentage": "100 * number_of_input_filtered_positive_entries_equal_to_one / input_filtered_nonzero_entries",
+      "depth_median": "median_input_filtered_reads_per_cell",
+      "hvg_prevalence": "median_number_of_cells_with_positive_counts_among_selected_hvgs",
+      "depth_correlation": "Pearson_of_each_PC1_to_PC5_score_against_log1p_original_endogenous_reads_before_gene_filter",
+      "loading": "maximum_absolute_PC1_loading_among_selected_hvgs"
+    },
+    "summary_rounding": "decimal_half_even_to_three_places_only_for_pc1_top_abs_load_and_max_top5_depth_corr"
+  },
+  "input_h5ad": {
+    "sha256": "79c457a3bd1df2f0040be257f32ca0599ebd2606317d304d1efd0a7b01a8ae1d",
+    "bytes": 105610244
+  },
+  "input_counts_sha256": "e93402bac315f2b551736a01817f75946b0dce1a049358832d47afc88fc19629",
+  "labels": "Original broad sorting gates; no donor, mitochondrial or fine cell-type labels inferred."
+}

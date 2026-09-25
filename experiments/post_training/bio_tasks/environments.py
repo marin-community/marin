@@ -22,6 +22,7 @@ class EnvironmentProfile:
 
 
 PROFILES = {
+    "real-heme-pocket-burial": EnvironmentProfile(19, "native_validation_runs/1d21faa8f7b0.json", 2048),
     "real-fastq-pair-filter": EnvironmentProfile(35, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-fastq-quality-yield": EnvironmentProfile(15, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-protein-alignment": EnvironmentProfile(43, "native_validation_runs/035bb3a42edc.json", 2048),
@@ -40,6 +41,7 @@ PROFILES = {
     "real-proteome-domain-search": EnvironmentProfile(11, "native_validation_runs/a619ee74f5b8.json", 2048),
     "real-proteome-clustering": EnvironmentProfile(42, "native_validation_runs/9d28dd15e082.json", 2048),
     "real-phix-assembly": EnvironmentProfile(27, "native_validation_runs/cd4c5520958b.json", 4096),
+    "real-phix-bam-read-structure": EnvironmentProfile(3, "native_validation_runs/81c78459a53b.json", 2048),
 }
 
 

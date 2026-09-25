@@ -28,7 +28,9 @@
     "real-mmcif-contact-degree": "bio.structure-geometry",
     "real-proteome-domain-search": "bio.protein-function",
     "real-proteome-clustering": "bio.protein-function",
-    "real-phix-assembly": "bio.assembly-qc"
+    "real-phix-assembly": "bio.assembly-qc",
+    "real-phix-bam-read-structure": "bio.read-quality",
+    "real-heme-pocket-burial": "bio.ligand-structure-affinity"
   },
   "validated_assignments": [],
   "release_ready_assignments": [],

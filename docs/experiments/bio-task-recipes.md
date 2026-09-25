@@ -87,6 +87,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Supplied formats | Skills | Repository operations |
 |---|---|---|---|
+| `real-phix-bam-read-structure` | paired FASTQ, reference FASTA, BAM, BAI, TSV, JSON | paired-read identity, native BAM/BAI, SAM flag interpretation, MAPQ filtering, read-record accounting | SAMtools, BWA, pysam |
 | `real-fastq-pair-filter` | FASTQ | paired-read-qc, threshold-boundaries, native-fastq-output | fastp |
 | `real-fastq-fixed-trim` | FASTQ | paired-reads, sequence-quality-synchronization, native-fastq-output | cutadapt, fastp |
 | `real-fastq-cycle-quality` | FASTQ | phred-encoding, sequencing-cycles, quality-denominators | FastQC, MultiQC, fastp |
@@ -183,6 +184,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Supplied formats | Skills | Repository operations |
 |---|---|---|---|
+| `real-heme-pocket-burial` | mmCIF, TSV, JSON | author-residue identity, heavy-atom contacts, ligand pocket geometry, solvent-accessible area, ligand-induced burial | Biopython |
 | `real-proteome-domain-search` | FASTA, Pfam HMM, HMMER domtblout, TSV protein metadata, JSON query | profile search, domain coordinates, sequence extraction, overlap-aware proteome coverage | HMMER |
 | `real-proteome-clustering` | FASTA, MMseqs2 cluster TSV, TSV protein metadata, JSON query | protein similarity clustering, representative extraction, metadata joins, proteome accounting | MMseqs2 |
 | `real-mmcif-chain-geometry` | mmCIF | experimental-structures, author-residue-identifiers, alternate-conformers, coordinate-geometry | Biopython |

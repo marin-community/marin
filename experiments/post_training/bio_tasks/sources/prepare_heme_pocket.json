@@ -1,0 +1,32 @@
+{
+  "source_id": "PDB:4HHB",
+  "pdb_sha256": "abf382e0fd84b53bd4c08b373d37c0d7fe9fbe1a9a9c3851b2f5f2fbbe627101",
+  "cif_sha256": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+  "required_packages": {
+    "biopython": "1.88",
+    "numpy": "2.5.3"
+  },
+  "query": {
+    "structure": "4HHB",
+    "model": 1,
+    "protein_record": "ATOM",
+    "ligand_residue_name": "HEM",
+    "contact_cutoff": 4.0,
+    "probe_radius": 1.4,
+    "surface_points": 960,
+    "radii": {
+      "C": 1.7,
+      "N": 1.55,
+      "O": 1.52,
+      "S": 1.8,
+      "FE": 2.0
+    },
+    "expected_hemes": 4,
+    "expected_protein_residues": 574,
+    "solvent_accessibility": "Biopython ShrakeRupley with fixed golden-spiral sampling; same deposited coordinates for isolated and combined systems",
+    "surface_context": "All selected globin chains plus one HEM at a time; exclude water, phosphate, other HEM instances, hydrogens and symmetry mates",
+    "alternate_selection": "Highest positive occupancy per author atom identity; then lexicographically smallest alternate ID with dot/question treated as blank",
+    "identity": "kind:auth_chain:auth_seq_id:insertion_or_dot:residue_name[:atom_name]",
+    "buried_area": "SASA_without_partner minus SASA_with_partner; total is protein plus HEM burial, without dividing by two"
+  }
+}

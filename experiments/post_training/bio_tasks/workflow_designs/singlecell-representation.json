@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "status": "frozen-design-no-validated-coverage",
+  "proposed_id": "real-singlecell-representation-audit",
+  "scientific_question": "Which variable genes and principal axes emerge from declared normalization of observed mouse hematopoietic progenitor read counts, and how strongly do the first axes track original library depth?",
+  "source": {
+    "accession": "GSE81682",
+    "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE81682",
+    "origin": "Observed mouse hematopoietic progenitor Smart-seq2 read counts",
+    "citation": "Nestorowa et al., Blood (2016), doi:10.1182/blood-2016-05-716480",
+    "repository_provenance": "experiments/post_training/bio_tasks/data_sources.json:GSE81682",
+    "input_preparation": "experiments/post_training/bio_tasks/sources/prepare_singlecell_qc.py",
+    "protocol": "experiments/post_training/bio_tasks/sources/prepare_singlecell_representation.json",
+    "input": "Byte-checked H5AD made from the existing filtered_counts.mtx.gz, cell_qc.tsv and feature_qc.tsv; 1422 retained cells, 40312 endogenous genes, 17332418 nonzero integer read counts. Preserve cell and feature order and original pre-gene-filter endogenous library depth from cell_qc.tsv. The task uses this QC-filtered cohort, not all 1920 GEO count columns."
+  },
+  "method": {
+    "input_statistics": "Across all 1422 cells and 40312 input genes, report median filtered read counts per cell and the percentage of positive sparse entries equal to one. These are reads, not UMIs.",
+    "feature_filter": "Select genes detected in at least 10 of the 1422 input cells; retain original feature order.",
+    "normalization": "On eligible genes only, scanpy.pp.normalize_total(target_sum=10000, exclude_highly_expressed=False), then scanpy.pp.log1p once. Keep integer counts unchanged in layers['counts']. The normalization denominator is eligible_gene_reads after the 10-cell filter.",
+    "hvg": "Scanpy 1.12.4 seurat-flavor normalized dispersion, n_bins=20, exactly 2000 HVGs; resolve boundary score ties by ascending feature ID. Report each gene's raw prevalence across all 1422 cells and the median selected-gene prevalence.",
+    "pca": "On exactly those 2000 log-normalized HVGs, centered unscaled one-thread ARPACK PCA with random_state=0 and 31 audit components; publish PC1-30. No depth regression, scaling, UMAP, neighbor graph or clustering. Admit only if adjacent eigenvalue relative gaps through PC30 are at least 1e-5.",
+    "diagnostics": "From the same PCA, report max absolute PC1 gene loading and max absolute Pearson correlation of PC1-5 scores with log1p(original_endogenous_reads). Original pre-gene-filter depth is distinct from the normalization denominator. Round only final two summary values to three decimals, decimal half-even; retain unrounded artifacts."
+  },
+  "required_artifacts": [
+    "answer.json: one id=study record with median_input_reads_per_cell, pct_positive_counts_equal_one, median_hvg_prevalence, pc1_top_abs_load, max_top5_depth_corr",
+    "cell_depth.tsv: all 1422 cell IDs, GEO accession, broad sorting gate, original_endogenous_reads, input_filtered_reads, input_detected_genes, eligible_gene_reads, normalization_factor, log_original_depth",
+    "gene_hvg.tsv: all 40312 feature IDs, input order, raw prevalence and sum, eligible, native mean/dispersion/normalized_dispersion, rank, selected; null scores for ineligible genes",
+    "normalized.h5ad: all cells and eligible genes in order, unchanged sparse integer counts layer, sparse log1p(CP10k) X, IDs and method metadata",
+    "pca_scores.tsv: every cell ID and PC1-30; pca_loadings.tsv: exactly 2000 selected feature IDs and PC1-30; pca_variance.tsv: component, eigenvalue, variance_fraction",
+    "diagnostics.tsv: signed and absolute PC1-5 depth correlations and sample counts, PC1 max absolute loading and source gene ID"
+  ],
+  "verification": {
+    "oracle": "Read packaged H5AD and run the pinned Scanpy environment; derive private reference from input, not a fixed answer table.",
+    "independent_checks": "Check source hashes, all ordered IDs, integer count preservation, eligible-gene denominator, every normalized nonzero, full cell/gene prevalence, HVG boundary and selected set, summaries and complete artifact schemas. At reference admission, check score projection, loading orthonormality and covariance/eigenvalue consistency against the centered selected matrix. At grading, compare every row-keyed score, loading, eigenvalue and diagnostic to the admitted reference after jointly aligning each component's score, loading and signed depth correlation. Do not accept independent score-only sign flips or arbitrary rotations under the eigen-gap gate.",
+    "negative_mutations": [
+      "change one count or cell ID",
+      "normalize using original, ERCC or HVG-only depth",
+      "double-log the matrix or include a gene seen in nine cells",
+      "change one boundary HVG or shuffle a PCA score row",
+      "flip a loading without its paired score or concentrate one loading vector",
+      "use normalization depth for the PCA correlation",
+      "submit correct summary fields with corrupt H5AD or TSV artifacts"
+    ],
+    "admission_gates": "Measure full remote runtime below 30 minutes, peak memory and repeatability in the pinned environment; derive tight numeric tolerances from repeated native runs. Specify file-size, row, finite-number and verifier-time bounds before packaging."
+  },
+  "endpoint_relations": [
+    {
+      "benchmark": "scBench",
+      "task_id": "dr_05_pca_preprocessing_sentinels",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/dimensionality_reduction/dr_05_pca_preprocessing_sentinels.json",
+      "source_sha256": "d9965187ad47254bfc879088bdcf35ea4f20180a7be41df2f214b4f039d763e9",
+      "relation": "Both diagnostics from one PCA on independent observations; original 4T1 input and computed values are excluded. Provisional workflow adaptation only."
+    },
+    {
+      "benchmark": "scBench",
+      "task_id": "NRM01_sparse_normalization",
+      "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/normalization/NRM01_sparse_normalization.json",
+      "source_sha256": "506b4c69b8661aa9cfae71e127532feb1016fd5b35651b6a519d6cd861c1e5a5",
+      "relation": "10-cell filter, 2000 HVGs and depth/prevalence diagnostics on observed read counts; source asks for UMI counts and depth-sensitive variance-stabilizing selection. Component only."
+    },
+    {
+      "benchmark": "ScienceAgentBench",
+      "task_id": "69",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "relation": "Gene filtering and PCA30 only; source also requires a cell-type-colored UMAP PNG. Component only."
+    },
+    {
+      "benchmark": "ScienceAgentBench",
+      "task_id": "79",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "relation": "Detected-gene counts and numeric distribution only; source also requires violin and strip plot, and existing GSE81682 QC work overlaps. Component only."
+    }
+  ],
+  "limits": [
+    "No validated benchmark mapping or coverage credit follows from this design.",
+    "Smart-seq2 read counts are not UMI observations; broad sorting gates are not fine cell types or donor identities.",
+    "Depth and biological gate can covary, so PCA depth correlation is descriptive and no favorable threshold is imposed.",
+    "No mitochondrial transcript signal is documented for this source. No mitochondrial, doublet, donor, clustering, UMAP or plot endpoint is claimed.",
+    "Independence from every source benchmark study is not certified by question-only metadata; no benchmark fixture, answer or biological input is used."
+  ]
+}

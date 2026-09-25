@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import zlib
+from collections.abc import Iterator
 from itertools import combinations
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from tasktrove_verify.grade import Reward, infra_error, invalid_task, scored, write_reward
 
+from experiments.post_training.bio_tasks.bam_artifacts import BamContract, check_bam
+from experiments.post_training.bio_tasks.h5ad_contract import H5adNormalizationContract
 from experiments.post_training.bio_tasks.solvers.newick import newick, weighted_splits
 
 MAX_ANSWER_BYTES = 2 * 1024 * 1024
@@ -380,11 +383,10 @@ def matches(column: Column, actual: object, expected: Scalar) -> bool:
     return abs(actual - expected) <= column.atol + column.rtol * abs(expected)
 
 
-def check_table(path: Path, target: TableContract) -> dict:
-    """Check every TSV quantity while bounding bytes, rows and diagnostic output."""
+def table_rows(path: Path, target: TableContract) -> Iterator[tuple[str, dict[str, str]]]:
+    """Read bounded TSV records with exact columns and unique known identities."""
     identifiers = set()
     consumed = 0
-    failures = []
     with path.open("rb") as handle:
         header = handle.readline(target.max_bytes + 1)
         consumed += len(header)
@@ -405,18 +407,36 @@ def check_table(path: Path, target: TableContract) -> dict:
             if key not in target.expected or key in identifiers:
                 raise ValueError("table_identity")
             identifiers.add(key)
-            for name, column in target.columns.items():
-                value = row[name]
-                if value == "NA" and column.nullable:
-                    actual = None
-                elif column.kind == "integer":
-                    actual = int(value)
-                elif column.kind == "number":
-                    actual = float(value)
-                else:
-                    actual = value
-                if not matches(column, actual, target.expected[key][name]) and len(failures) < 20:
-                    failures.append({"id": key, "field": name})
+            yield key, row
+
+
+def check_table(
+    path: Path,
+    target: TableContract,
+    column_signs: dict[str, int] | None = None,
+    cell_signs: dict[tuple[str, str], int] | None = None,
+) -> dict:
+    """Check every TSV quantity, allowing declared joint PCA sign changes."""
+    identifiers = set()
+    failures = []
+    for key, row in table_rows(path, target):
+        identifiers.add(key)
+        for name, column in target.columns.items():
+            value = row[name]
+            if value == "NA" and column.nullable:
+                actual = None
+            elif column.kind == "integer":
+                actual = int(value)
+            elif column.kind == "number":
+                actual = float(value)
+                if column_signs:
+                    actual *= column_signs.get(name, 1)
+                if cell_signs:
+                    actual *= cell_signs.get((key, name), 1)
+            else:
+                actual = value
+            if not matches(column, actual, target.expected[key][name]) and len(failures) < 20:
+                failures.append({"id": key, "field": name})
     missing = sorted(set(target.expected) - identifiers)
     return {
         "passed": not failures and not missing,
@@ -424,6 +444,18 @@ def check_table(path: Path, target: TableContract) -> dict:
         "missing": missing[:20],
         "failures": failures,
     }
+
+
+class PcaSignContract(BaseModel):
+    """Link score, loading and signed diagnostic tables for one PCA fit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    score_table: str
+    loading_table: str
+    components: list[str] = Field(min_length=1)
+    correlation_table: str
+    correlation_column: str
 
 
 class Contract(BaseModel):
@@ -438,6 +470,9 @@ class Contract(BaseModel):
     tables: dict[str, TableContract] = Field(default_factory=dict)
     trees: dict[str, TreeContract] = Field(default_factory=dict)
     matrices: dict[str, MatrixMarketContract] = Field(default_factory=dict)
+    h5ad: dict[str, H5adNormalizationContract] = Field(default_factory=dict)
+    bams: dict[str, BamContract] = Field(default_factory=dict)
+    pca_signs: PcaSignContract | None = None
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
@@ -446,13 +481,45 @@ class Contract(BaseModel):
             raise ValueError("Artifacts must use simple filenames")
         if len(set(self.artifacts())) != len(self.artifacts()) or "answer.json" in self.artifacts():
             raise ValueError("Artifact filenames must be distinct")
+        if self.pca_signs is not None:
+            pca = self.pca_signs
+            names = (pca.score_table, pca.loading_table, pca.correlation_table)
+            if len(set(names)) != 3 or not set(names) <= self.tables.keys():
+                raise ValueError("PCA requires three distinct complete table contracts")
+            if len(set(pca.components)) != len(pca.components):
+                raise ValueError("PCA components must be unique")
+            for name in (pca.score_table, pca.loading_table):
+                table = self.tables[name]
+                for component in pca.components:
+                    column = table.columns.get(component)
+                    if column is None or column.kind != "number" or column.nullable:
+                        raise ValueError("PCA components require nonnullable numeric columns")
+            loadings = self.tables[pca.loading_table]
+            if any(not any(row[component] != 0 for row in loadings.expected.values()) for component in pca.components):
+                raise ValueError("PCA loading components must be nonzero")
+            correlations = self.tables[pca.correlation_table]
+            column = correlations.columns.get(pca.correlation_column)
+            if column is None or column.kind != "number" or column.nullable:
+                raise ValueError("PCA correlations require a nonnullable numeric column")
+            if not correlations.expected.keys() <= set(pca.components):
+                raise ValueError("PCA diagnostic identities must be declared components")
         return self
 
     def answer(self) -> list[dict]:
         return [{"id": key, **value} for key, value in self.expected.items()]
 
     def artifacts(self) -> tuple[str, ...]:
-        return (*self.fasta, *self.fastq, *self.alignments, *self.tables, *self.trees, *self.matrices)
+        return (
+            *self.fasta,
+            *self.fastq,
+            *self.alignments,
+            *self.tables,
+            *self.trees,
+            *self.matrices,
+            *self.h5ad,
+            *self.bams,
+            *(name + ".bai" for name in self.bams),
+        )
 
     def instructions(self) -> str:
         lines = [
@@ -476,6 +543,31 @@ class Contract(BaseModel):
             nullable = "; use null when specified" if column.nullable else ""
             lines.append(f"- {name}: {column.kind} ({column.unit}); {column.description}{nullable}{tolerance}.")
         lines.append("Numeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).")
+        for name, target in self.h5ad.items():
+            lines.append(
+                f"Also write /app/{name} as H5AD, with CSR integer counts in layers['counts'] and "
+                f"CSR X = log1p({target.target_sum} * count / eligible_gene_reads). Preserve the requested "
+                "cell and feature identities in order and all specified obs/var metadata. Both matrices "
+                "must have identical sorted nonzero coordinates, without duplicates or explicit zeros. "
+                f"Every count and transformed entry is checked (atol {target.atol}, rtol {target.rtol}); "
+                f"maximum file size {target.max_bytes} bytes and decoded size {target.max_decoded_bytes} bytes. "
+                "External links, external storage and virtual datasets are not accepted."
+            )
+        for name, target in self.bams.items():
+            lines.append(
+                f"Also write /app/{name} as coordinate-sorted BAM with its index /app/{name}.bai. "
+                "Every alignment, sequence, quality and auxiliary tag is checked, including duplicate records. "
+                "BAM compression and header program records may differ. The BAI must retrieve the complete "
+                f"corresponding intervals. Maximum sizes: {target.max_bytes} bytes for BAM, "
+                f"{target.index_max_bytes} bytes for BAI."
+            )
+        if self.pca_signs is not None:
+            pca = self.pca_signs
+            lines.append(
+                f"PCA signs are arbitrary: each component in {pca.score_table} and {pca.loading_table} may "
+                f"jointly change sign, provided its {pca.correlation_column} in {pca.correlation_table} "
+                "changes with it. Component order is fixed; independent score/loading flips and rotations fail."
+            )
         for name, target in self.fasta.items():
             lines.append(
                 f"Also write /app/{name} as unaligned FASTA, at most {target.max_bytes} bytes. "
@@ -581,6 +673,29 @@ def grade_answer(contract: Contract, text: str) -> Reward:
     return scored(float(all(check["passed"] for check in checks)), checks=checks)
 
 
+def pca_column_signs(directory: Path, target: TableContract, components: list[str], name: str) -> dict[str, int]:
+    """Align each component by its largest absolute reference loading."""
+    path = directory / name
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("missing_or_nonregular_table")
+    anchors = {
+        component: min(target.expected, key=lambda key: (-abs(target.expected[key][component]), key))
+        for component in components
+    }
+    signs = {}
+    for key, row in table_rows(path, target):
+        for component, anchor in anchors.items():
+            if key != anchor:
+                continue
+            actual = float(row[component])
+            if not math.isfinite(actual):
+                raise ValueError("pca_nonfinite_loading")
+            signs[component] = 1 if actual * target.expected[key][component] >= 0 else -1
+    if signs.keys() != anchors.keys():
+        raise ValueError("pca_missing_loading_anchor")
+    return signs
+
+
 def grade_files(reference: Path, answer: Path) -> Reward:
     try:
         contract = Contract.model_validate_json(reference.read_text())
@@ -637,13 +752,30 @@ def grade_files(reference: Path, answer: Path) -> Reward:
                 checks[name] = check_alignment(path, target)
             except ValueError as error:
                 checks[name] = {"passed": False, "reason": str(error)}
+        signs = {}
+        pca = contract.pca_signs
+        if pca is not None:
+            try:
+                signs = pca_column_signs(
+                    answer.parent, contract.tables[pca.loading_table], pca.components, pca.loading_table
+                )
+            except (ValueError, csv.Error) as error:
+                checks[pca.loading_table] = {"passed": False, "reason": str(error)}
         for name, target in contract.tables.items():
+            if name in checks:
+                continue
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
                 checks[name] = {"passed": False, "reason": "missing_or_nonregular_table"}
                 continue
             try:
-                checks[name] = check_table(path, target)
+                columns = signs if pca is not None and name in (pca.score_table, pca.loading_table) else None
+                cells = (
+                    {(component, pca.correlation_column): sign for component, sign in signs.items()}
+                    if pca is not None and name == pca.correlation_table
+                    else None
+                )
+                checks[name] = check_table(path, target, columns, cells)
             except (ValueError, csv.Error) as error:
                 checks[name] = {"passed": False, "reason": str(error)}
         for name, target in contract.trees.items():
@@ -664,6 +796,22 @@ def grade_files(reference: Path, answer: Path) -> Reward:
                 checks[name] = check_matrix(path, target)
             except ValueError as error:
                 checks[name] = {"passed": False, "reason": str(error)}
+        if contract.h5ad:
+            # HDF5 dependencies are installed only for tasks that emit H5AD.
+            from experiments.post_training.bio_tasks.h5ad_verifier import check_h5ad  # noqa: PLC0415
+
+            for name, target in contract.h5ad.items():
+                path = answer.parent / name
+                if path.is_symlink() or not path.is_file():
+                    checks[name] = {"passed": False, "reason": "missing_or_nonregular_h5ad"}
+                    continue
+                try:
+                    checks[name] = check_h5ad(path, target)
+                except (ValueError, OSError, KeyError) as error:
+                    checks[name] = {"passed": False, "reason": str(error)[:160]}
+        for name, target in contract.bams.items():
+            checks[name] = check_bam(answer.parent / name, target)
+            checks[name + ".bai"] = {"passed": checks[name]["index_passed"]}
         passed = verdict.reward == 1 and all(check["passed"] for check in checks.values())
         return scored(float(passed), **verdict.detail, artifact_checks=checks)
     except OSError as error:

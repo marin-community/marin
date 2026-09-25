@@ -121,6 +121,9 @@ def verifier_archive() -> bytes:
         prefix + "solvers/__init__.py": b"",
         prefix + "solvers/newick.py": (SOURCE_DIR / "solvers/newick.py").read_bytes(),
         prefix + "contract.py": (SOURCE_DIR / "contract.py").read_bytes(),
+        prefix + "bam_artifacts.py": (SOURCE_DIR / "bam_artifacts.py").read_bytes(),
+        prefix + "h5ad_contract.py": (SOURCE_DIR / "h5ad_contract.py").read_bytes(),
+        prefix + "h5ad_verifier.py": (SOURCE_DIR / "h5ad_verifier.py").read_bytes(),
     }
     return python_archive(files)
 
@@ -271,6 +274,20 @@ def validate_instance(
             artifact.write_text(changed)
             artifact_checks[f"changed_branch:{name}"] = grade_files(reference, answer).reward
             artifact.write_text(original)
+        for name in (
+            *instance.contract.h5ad,
+            *instance.contract.bams,
+            *(name + ".bai" for name in instance.contract.bams),
+        ):
+            artifact = root / name
+            original = root / (name + ".original")
+            artifact.rename(original)
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            with original.open("rb") as source, artifact.open("wb") as destination:
+                destination.write(source.read(8))
+            artifact_checks[f"truncated_artifact:{name}"] = grade_files(reference, answer).reward
+            artifact.unlink()
+            original.rename(artifact)
         for name, target in instance.contract.matrices.items():
             artifact = root / name
             original = root / (name + ".original")
@@ -355,14 +372,14 @@ def task_files(
         "generation_seed": str(task.seed),
         "scientific_review": "pending",
     }
-    verification_timeout = MATRIX_VERIFICATION_TIMEOUT if instance.contract.matrices else 60
+    verification_timeout = MATRIX_VERIFICATION_TIMEOUT if instance.contract.matrices or instance.contract.h5ad else 60
     config = tomlkit.parse(render_task_toml(1800, verification_timeout, metadata))
     config["artifacts"] = ["/app/answer.json", *(f"/app/{name}" for name in instance.contract.artifacts())]
     # A fresh verifier environment receives only the declared submitted artifacts.
     config["verifier"] = {
         "timeout_sec": verification_timeout,
         "environment_mode": "separate",
-        "environment": {"allow_internet": False, "cpus": 1, "memory_mb": 1024},
+        "environment": {"allow_internet": False, "cpus": 1, "memory_mb": 2048 if instance.contract.h5ad else 1024},
     }
     config["environment"] = {
         "allow_internet": False,
@@ -370,6 +387,11 @@ def task_files(
         "memory_mb": profile.memory_mb if profile else 1024,
         "storage_mb": 8192,
     }
+    optional_dependencies = []
+    if instance.contract.h5ad:
+        optional_dependencies.extend(['"numpy==2.5.3"', '"h5py==3.16.0"'])
+    if instance.contract.bams:
+        optional_dependencies.append('"pysam==0.24.1"')
     verifier = (
         f"FROM {base_image}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends git "
@@ -377,7 +399,7 @@ def task_files(
         "RUN python3 -m venv /opt/verifier && /opt/verifier/bin/pip install --no-cache-dir "
         '"pydantic==2.12.5" "tomlkit==0.13.3" '
         f'"tasktrove-verify @ git+https://github.com/marin-community/marin@{tool_ref}'
-        '#subdirectory=lib/tasktrove-verify"\n'
+        '#subdirectory=lib/tasktrove-verify" ' + " ".join(optional_dependencies) + "\n"
         "COPY test.sh verifier.pyz reference.json /tests/\n"
         "RUN chmod 755 /tests/test.sh\n"
         "WORKDIR /app\n"
@@ -456,6 +478,22 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
                 "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
                 "trees": {name: target.model_dump() for name, target in instance.contract.trees.items()},
                 "matrices": {name: target.model_dump() for name, target in instance.contract.matrices.items()},
+                "h5ad": {
+                    name: {
+                        "cells": len(target.cell_ids),
+                        "features": len(target.feature_ids),
+                        "nonzeros": target.nonzeros,
+                        "counts_sha256": target.counts_sha256,
+                        "target_sum": target.target_sum,
+                        "obs_metadata": list(target.obs_metadata),
+                        "var_metadata": list(target.var_metadata),
+                    }
+                    for name, target in instance.contract.h5ad.items()
+                },
+                "bams": {
+                    name: {"references": target.references, "records": target.records, "index": name + ".bai"}
+                    for name, target in instance.contract.bams.items()
+                },
                 "tables": {
                     name: {
                         "columns": {column: spec.model_dump() for column, spec in target.columns.items()},

@@ -468,7 +468,20 @@
           "content_bytes": 473850,
           "vendored_bytes": 107461,
           "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "4hhb-heme-pocket-reference.json.gz": {
+          "url": "https://doi.org/10.2210/pdb4HHB/pdb",
+          "content_sha256": "fc57ae687ea6dfc12961f9173f2cc3dbbfe54d593764b9697318bf908f98fb45",
+          "vendored_sha256": "52b7834724ad29254612d4187eee4c30af018b4c668df69353666c3375422e5e",
+          "content_bytes": 1242033,
+          "vendored_bytes": 111733,
+          "transformation": "Private paired-PDB parse, complete heavy-atom distances and independent sampled SASA reference; never supplied to solver."
         }
+      },
+      "heme_pocket_native_check": {
+        "checks_file": "native_validation_runs/1d21faa8f7b0.json",
+        "checks_sha256": "1d21faa8f7b0fdd0d9d064ee172a2ac4781da0a6348582fe81e6b7ef9fff9aee",
+        "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009"
       }
     },
     "RefSeq:NC_001422.1": {
@@ -757,6 +770,14 @@
           "content_bytes": 347920,
           "vendored_bytes": 17849,
           "transformation": "Private complete assembly and alignment reference measured with Biopython/CIGAR and checked by a fresh native run using independent standard-library long-cs measurements. Never supplied as solver input."
+        },
+        "err266411-bam-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/1755831cb3f221f6a4eff93e2fa5bb81be6bb246d601d906b11f86f60cf93586/outputs.tar.zst",
+          "content_sha256": "f07e8449fd28d54bc6f677fcb0bfc1ecd88b0a9452842eef32092e771ac5503d",
+          "content_bytes": 15840481,
+          "vendored_sha256": "73763e9bd6391567576f969b01fc8230d74b7205963c3e2f14cb33f15111516d",
+          "vendored_bytes": 3072591,
+          "transformation": "Private complete pysam-derived BAM record identities, per-read tables and summary, checked against a fresh native BWA/SAMtools run with independent SAM-text measurements. Never supplied as solver input."
         }
       },
       "systematic_sampling": {
@@ -830,6 +851,11 @@
         "negative_cases": 3,
         "status": "passed",
         "cleanup_remaining": 0
+      },
+      "bam_native_check": {
+        "checks_file": "native_validation_runs/81c78459a53b.json",
+        "checks_sha256": "81c78459a53b865bf4a2996e19f82e52e2cf69ccb7101829b84db34463e9f54c",
+        "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009"
       }
     },
     "UniProt:globins-20260923": {
@@ -1396,6 +1422,14 @@
           "content_bytes": 8939327,
           "vendored_bytes": 567808,
           "transformation": "Actual Scanpy outputs from full original counts; independent streaming oracle and complete artifacts agree. Private reference, never solver input."
+        },
+        "gse81682-representation-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/ea01c8adf91b145a403bc77e2ddf04af4e3c5a04dce92694d4159b4a2b9b6797/outputs.tar.zst",
+          "vendored_sha256": "3371404bf02666ee896d9c409f9d14ed789a490993e9da3c815dfa15ffd75f6e",
+          "vendored_bytes": 3107466,
+          "content_sha256": "4538878a768f14b419178db5794c79920c3b14a6001f74fb67e4fafbb0f69804",
+          "content_bytes": 13427195,
+          "transformation": "Private complete Scanpy normalization, variable-gene and PCA reference for the QC-retained observed read matrix; never supplied to solver. Native reference admission passed; fresh oracle and artifact validation remain separate."
         }
       },
       "file_inputs": {
@@ -1413,6 +1447,11 @@
           "sha256": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
           "bytes": 76277182,
           "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769"
+        },
+        "gse81682-representation-input.h5ad": {
+          "sha256": "79c457a3bd1df2f0040be257f32ca0599ebd2606317d304d1efd0a7b01a8ae1d",
+          "bytes": 105610244,
+          "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/79c457a3bd1df2f0040be257f32ca0599ebd2606317d304d1efd0a7b01a8ae1d/input.h5ad"
         }
       }
     },

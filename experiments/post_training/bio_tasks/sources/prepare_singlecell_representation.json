@@ -1,0 +1,64 @@
+{
+  "source": "GSE81682",
+  "required_package_versions": {
+    "scanpy": "1.12.4",
+    "anndata": "0.13.4",
+    "scikit-learn": "1.9.1",
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "h5py": "3.16.0"
+  },
+  "qc_reference_sha256": {
+    "filtered_counts.mtx.gz": "8f732a3fa80db45908f1d6661527e9ca8c33dc94dd64c4653ddf9456d64a4f6d",
+    "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+    "feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357"
+  },
+  "qc_policy": {
+    "minimum_endogenous_counts": 100000,
+    "minimum_detected_endogenous": 2000,
+    "ercc_fraction_numerator": 1,
+    "ercc_fraction_denominator": 5,
+    "minimum_retained_cells_per_gene": 3
+  },
+  "expected_qc_matrix": {
+    "cells": 1422,
+    "features": 40312,
+    "nonzeros": 17332418,
+    "read_counts": 2677371925
+  },
+  "minimum_cells_per_representation_gene": 10,
+  "normalization": {
+    "method": "scanpy.pp.normalize_total",
+    "target_sum": 10000,
+    "exclude_highly_expressed": false,
+    "transform": "scanpy.pp.log1p",
+    "denominator": "eligible_gene_reads_after_min10_prevalence"
+  },
+  "hvg": {
+    "method": "scanpy.pp.highly_variable_genes",
+    "flavor": "seurat",
+    "n_bins": 20,
+    "n_top_genes": 2000,
+    "tie_break": "feature_id_ascending"
+  },
+  "pca": {
+    "method": "scanpy.tl.pca",
+    "n_components": 30,
+    "audit_components": 31,
+    "zero_center": true,
+    "scale": false,
+    "svd_solver": "arpack",
+    "random_state": 0,
+    "dtype": "float64",
+    "minimum_adjacent_relative_eigen_gap": 1e-5
+  },
+  "diagnostics": {
+    "singleton_percentage": "100 * number_of_input_filtered_positive_entries_equal_to_one / input_filtered_nonzero_entries",
+    "depth_median": "median_input_filtered_reads_per_cell",
+    "hvg_prevalence": "median_number_of_cells_with_positive_counts_among_selected_hvgs",
+    "depth_correlation": "Pearson_of_each_PC1_to_PC5_score_against_log1p_original_endogenous_reads_before_gene_filter",
+    "loading": "maximum_absolute_PC1_loading_among_selected_hvgs"
+  },
+  "summary_rounding": "decimal_half_even_to_three_places_only_for_pc1_top_abs_load_and_max_top5_depth_corr"
+}

@@ -13,6 +13,7 @@ from experiments.post_training.bio_tasks.solvers.assays import SOLVERS as ASSAYS
 from experiments.post_training.bio_tasks.solvers.assembly import SOLVERS as ASSEMBLY_SOLVERS
 from experiments.post_training.bio_tasks.solvers.expression import SOLVERS as EXPRESSION_SOLVERS
 from experiments.post_training.bio_tasks.solvers.formats import table
+from experiments.post_training.bio_tasks.solvers.heme_pocket import solve_heme_pocket
 from experiments.post_training.bio_tasks.solvers.imaging import SOLVERS as IMAGING_SOLVERS
 from experiments.post_training.bio_tasks.solvers.intervals import SOLVERS as INTERVAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETWORKS_SOLVERS
@@ -20,6 +21,7 @@ from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHY
 from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_assembly import solve_assembly
+from experiments.post_training.bio_tasks.solvers.real_bam import solve_bam
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clusters
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
@@ -31,6 +33,7 @@ from experiments.post_training.bio_tasks.solvers.real_phylogeny import solve_phy
 from experiments.post_training.bio_tasks.solvers.real_reads import OUTPUT_SOLVERS as READ_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_rnaseq import OUTPUT_SOLVERS as RNASEQ_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_singlecell import solve_singlecell
+from experiments.post_training.bio_tasks.solvers.real_singlecell_representation import solve_representation
 from experiments.post_training.bio_tasks.solvers.real_structure import SOLVERS as REAL_STRUCTURE_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_formats import SOLVERS as REPO_FORMATS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_sequences import SOLVERS as REPO_SEQUENCES_SOLVERS
@@ -41,6 +44,7 @@ from experiments.post_training.bio_tasks.solvers.variants import SOLVERS as VARI
 from experiments.post_training.bio_tasks.solvers.workflow import SOLVERS as WORKFLOW_SOLVERS
 
 OUTPUT_SOLVERS = {
+    "real-heme-pocket-burial": solve_heme_pocket,
     **READ_OUTPUT_SOLVERS,
     **ALIGNMENT_OUTPUT_SOLVERS,
     **RNASEQ_OUTPUT_SOLVERS,
@@ -50,7 +54,9 @@ OUTPUT_SOLVERS = {
     "real-proteome-clustering": solve_clusters,
     "real-rnaseq-population-interaction": solve_interaction,
     "real-phix-assembly": solve_assembly,
+    "real-phix-bam-read-structure": solve_bam,
     "real-rnaseq-shrinkage-enrichment-audit": solve_enrichment,
+    "real-singlecell-representation-audit": solve_representation,
 }
 
 

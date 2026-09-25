@@ -26,7 +26,8 @@
       "name": "SAMtools",
       "recipes": [
         "sam-cigar-coverage",
-        "sam-inclusion"
+        "sam-inclusion",
+        "real-phix-bam-read-structure"
       ],
       "source_url": "https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1",
       "tool_execution": {
@@ -38,13 +39,22 @@
         "scope": "sam-cigar-coverage"
       },
       "scope": "Read-depth calculation with explicit flag, base-quality, deletion, and overlapping-mate rules.",
-      "limitations": "Compute depth from a generated SAM/CIGAR ledger. The manual distinguishes depth from mpileup defaults, including swapped quality-option meanings; matching their defaults is not an independent check."
+      "limitations": "Compute depth from a generated SAM/CIGAR ledger. The manual distinguishes depth from mpileup defaults, including swapped quality-option meanings; matching their defaults is not an independent check.",
+      "additional_native_checks": [
+        {
+          "recipe": "real-phix-bam-read-structure",
+          "evidence": "native_validation_runs/81c78459a53b.json",
+          "status": "passed",
+          "limits": "One observed PhiX technical subset already used by the assembly task; no additional biological lineage. Reference and oracle share BWA/SAMtools with independent pysam versus SAM-text measurements. Harbor execution and reviewed competency assignment remain pending."
+        }
+      ]
     },
     {
       "index": 3,
       "name": "BWA",
       "recipes": [
-        "dna-unique-mapping"
+        "dna-unique-mapping",
+        "real-phix-bam-read-structure"
       ],
       "source_url": "https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c",
       "tool_execution": {
@@ -56,7 +66,15 @@
         "scope": "dna-unique-mapping"
       },
       "scope": "Map fresh, uniquely placed reads; recover coordinates, orientation, and edit operations.",
-      "limitations": "Check against planted placements and independently replay CIGARs. Include reverse-strand and unmapped cases. Repeats, clipping, secondary alignments, and MAPQ prevent a universal exact-output oracle."
+      "limitations": "Check against planted placements and independently replay CIGARs. Include reverse-strand and unmapped cases. Repeats, clipping, secondary alignments, and MAPQ prevent a universal exact-output oracle.",
+      "additional_native_checks": [
+        {
+          "recipe": "real-phix-bam-read-structure",
+          "evidence": "native_validation_runs/81c78459a53b.json",
+          "status": "passed",
+          "limits": "One observed PhiX technical subset already used by the assembly task; no additional biological lineage. Reference and oracle share BWA/SAMtools with independent pysam versus SAM-text measurements. Harbor execution and reviewed competency assignment remain pending."
+        }
+      ]
     },
     {
       "index": 4,
@@ -173,7 +191,8 @@
       "name": "pysam",
       "recipes": [
         "sam-allele-pileup",
-        "sam-inclusion"
+        "sam-inclusion",
+        "real-phix-bam-read-structure"
       ],
       "source_url": "https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py",
       "tool_execution": {
@@ -185,7 +204,15 @@
         "scope": "sam-cigar-coverage"
       },
       "scope": "Count eligible bases or alleles at specified loci with explicit read and base filters.",
-      "limitations": "Use a generated per-read ledger and CIGAR interpreter. Inspect overlapping mates, orphans, deletions, and BAQ policy. pysam and SAMtools share underlying code; their agreement is not independent validation."
+      "limitations": "Use a generated per-read ledger and CIGAR interpreter. Inspect overlapping mates, orphans, deletions, and BAQ policy. pysam and SAMtools share underlying code; their agreement is not independent validation.",
+      "additional_native_checks": [
+        {
+          "recipe": "real-phix-bam-read-structure",
+          "evidence": "native_validation_runs/81c78459a53b.json",
+          "status": "passed",
+          "limits": "One observed PhiX technical subset already used by the assembly task; no additional biological lineage. Reference and oracle share BWA/SAMtools with independent pysam versus SAM-text measurements. Harbor execution and reviewed competency assignment remain pending."
+        }
+      ]
     },
     {
       "index": 10,
@@ -379,7 +406,8 @@
         "real-genome-codon-counts",
         "real-genome-promoters",
         "real-genome-restriction-digest",
-        "real-cox1-tree-comparison"
+        "real-cox1-tree-comparison",
+        "real-heme-pocket-burial"
       ],
       "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
       "tool_execution": {
@@ -391,7 +419,15 @@
         "scope": "gtf-splicing"
       },
       "scope": "Extract compound, strand-aware features and translate explicitly defined coding sequences.",
-      "limitations": "Use direct slicing, complementing, exon concatenation, and a frozen codon table. Check source-record IDs, frame, and alternative genetic codes. Reject unresolved remote references under an explicit input contract."
+      "limitations": "Use direct slicing, complementing, exon concatenation, and a frozen codon table. Check source-record IDs, frame, and alternative genetic codes. Reject unresolved remote references under an explicit input contract.",
+      "additional_native_checks": [
+        {
+          "recipe": "real-heme-pocket-burial",
+          "evidence": "native_validation_runs/1d21faa8f7b0.json",
+          "status": "passed",
+          "limits": "Paired-PDB independent arithmetic and fresh Biopython mmCIF/SASA oracle; no hydrogen-bond or affinity inference."
+        }
+      ]
     },
     {
       "index": 20,

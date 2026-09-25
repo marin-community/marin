@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "design_id": "bam-read-structure",
+  "recipe_id": "real-phix-bam-read-structure",
+  "status": "native-validated-harbor-pending-no-benchmark-coverage",
+  "scientific_question": "How do the observed paired PhiX reads align to their deposited reference, and how many primary read records satisfy a declared proper-pair and mapping-quality rule?",
+  "source": {
+    "run": "ENA:ERR266411",
+    "run_url": "https://www.ebi.ac.uk/ena/browser/view/ERR266411",
+    "reference": "RefSeq:NC_001422.1",
+    "reference_url": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001422.1",
+    "input_design": "12,000 systematically spaced original paired FASTQ records from one observed PhiX run and the deposited reference FASTA; one technical subset, not biological replicates. The task creates its own coordinate-sorted BAM and BAI with pinned BWA-MEM and SAMtools.",
+    "provenance": "data_sources.json:ENA:ERR266411 and RefSeq:NC_001422.1; sources/prepare_bam.py; sources/bam-preparation.lock.json",
+    "independence_limit": "Permitted question-only benchmark metadata does not identify the biological origin of its mt.sorted.bam. No benchmark BAM, answers or fixtures are used, but source-lineage independence from that undisclosed input cannot be certified."
+  },
+  "benchmark_relationships": [
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "bam-infer-read-length-q1",
+      "question_sha256": "620e39a4c540ba6c9b6b1be9dab65a8b156a5992079f32248bb35f3044a61fd9",
+      "inventory": "benchmark_tasks/compbiobench.json",
+      "relation": "Adapts native BAM inspection of pairing and read length to independent paired FASTQ plus newly aligned BAM. The source asks for a single-end/paired-end classification and one dataset-specific read length; this task reports declared paired layout and a full mate-specific length histogram, with one modal length only if unique.",
+      "status": "workflow-adaptation-not-exact-endpoint-validation"
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "bam-ops-q1",
+      "question_sha256": "478704728826d55216c14053bdf7fba242d201ce73bb90d95f0e4dd5473953ac",
+      "inventory": "benchmark_tasks/compbiobench.json",
+      "relation": "Adapts properly paired, mapping-quality-filtered read counting to independent observations. The source leaves exact flag, MAPQ boundary, duplicate and supplementary policies implicit, so the authored count fixes these choices and cannot claim the source's unknown grader convention.",
+      "status": "workflow-adaptation-not-exact-endpoint-validation"
+    }
+  ],
+  "frozen_method": {
+    "alignment": "BWA-MEM 0.7.19, bwa index and bwa mem -t 1, followed by SAMtools 1.24 view, coordinate sort and index; no crossing-origin rescue for the circular PhiX genome.",
+    "input_identity": "Both original FASTQ mate files contain the same ordered 12,000 unique read IDs. Retain every native alignment record in BAM; primary per-read tables exclude only secondary 0x100 and supplementary 0x800 records.",
+    "length": "Read length is original FASTQ sequence length, separately tabulated for mates 1 and 2. This avoids conflating original length, aligned-query CIGAR length and reference span.",
+    "eligibility": "Primary read record is mapped, proper-pair bit 0x2 set, and 30 <= MAPQ < 255. Keep duplicate and QC-fail records if they otherwise qualify; MAPQ 255 means unavailable. Count read records, with two passing mates contributing two, and additionally count pairs with both mates passing.",
+    "identity": "Use read_id:mate as table key within this unique-ID subset; preserve complete BAM records and duplicate multiplicity. Hash SAM-oriented SEQ and QUAL strings for each primary record."
+  },
+  "artifacts": {
+    "reads.bam": "Complete coordinate-sorted native alignment, including secondary and supplementary records and all auxiliary tags",
+    "reads.bam.bai": "Index that retrieves the same records as sequential BAM traversal on declared intervals",
+    "primary_reads.tsv": "Every original mate, keyed read_id:mate, with original length, flags, coordinates, MAPQ, CIGAR, mate location, eligibility and SEQ/QUAL hashes",
+    "read_lengths.tsv": "Complete mate-by-original-length read-record histogram",
+    "flag_counts.tsv": "Each named SAM flag bit count over every native alignment record",
+    "eligible_reads.tsv": "Every passing primary read key with MAPQ and flag",
+    "answer.json": "One read_audit record with input pairs, native and primary record totals, mate totals, modal length and count, eligible records and both-mate pairs, unmapped and unavailable-MAPQ totals"
+  },
+  "verification": {
+    "reference": "Independent source preparation parses the native BAM through pinned pysam and retains a private per-row and complete BAM digest reference. The packaged oracle independently reconstructs summary and tables from SAM text.",
+    "artifact_checker": "Compare all keyed TSV rows and complete BAM record-digest multiset, including auxiliary tags and duplicate multiplicity; accept valid BAM re-encoding and header program changes. Require BAI indexed fetches to match sequentially decoded records on fixed reference intervals, including placed-unmapped records.",
+    "controls": [
+      "Fresh native oracle gives reward 1 with every required artifact",
+      "Correct summary plus wrong primary MAPQ or mate, wrong length count or missing eligible ID gives reward 0",
+      "Changed BAM record with rebuilt valid BAI gives BAM failure but index success",
+      "Truncated BAM and corrupt BAI give reward 0; package validation also removes and truncates both binary artifacts"
+    ],
+    "evidence": "native_validation_runs/81c78459a53b.json; seven independent artifact mutations passed under the declared reference; Harbor package and terminal validation pending",
+    "scoring": "Deterministic verifier only; no model or LLM judge"
+  },
+  "limits": [
+    "The exact source benchmark BAM and its dataset-specific numeric answer are intentionally excluded.",
+    "This one paired library cannot test inference of an actually single-ended or mixed-layout library.",
+    "The task exercises BWA/SAMtools mapping as well as BAM inspection; successful mapping alone gives no credit without the complete native BAM/BAI and read-level outputs.",
+    "Scientific endpoint fit and benchmark coverage remain provisional after native validation."
+  ]
+}

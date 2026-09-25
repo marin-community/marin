@@ -25,7 +25,7 @@ source inspection limits and context adaptations remain useful provenance.
 Previously validated benchmark mappings do not automatically become competency
 coverage; each bounded outcome needs a reviewed task/verifier assignment.
 
-The registry has **146 recipes across 13 domains**, with one task per
+The registry has **148 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -99,14 +99,14 @@ Downloads, stars, and citations remain available in the unchanged
 | # | Repository | Implemented scientific operations | Actual CLI/API execution |
 |---:|---|---|---|
 | 1 | [BLAST+](https://github.com/ncbi/ncbi-cxx-toolkit-public/blob/cf49184dc38476b1c9f605c38f47758a96e72d6b/src/algo/blast/unit_tests/api/bl2seq_unit_test.cpp) | `dna-unique-mapping`, `protein-local-search` | 3 reference checks passed (`dna-unique-mapping`) |
-| 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
-| 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
+| 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
+| 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping`, `real-phix-bam-read-structure` | 3 reference checks passed (`dna-unique-mapping`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
 | 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction`, `real-rnaseq-shrinkage-enrichment-audit` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed; 1 fresh shrinkage/enrichment task oracle passed; Harbor passed |
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | 3 reference checks passed (`dna-unique-mapping`) |
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
-| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
+| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment`, `real-cox1-tree-comparison` | 3 reference checks passed (`real-protein-alignment`) |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction`, `real-proteome-domain-search` | 1 observed proteome reference and artifact check passed |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
@@ -116,7 +116,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions`, `real-genome-promoters` | 3 reference checks passed (`fasta-indexed-regions`) |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
-| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest`, `real-cox1-tree-comparison` | 3 reference checks passed (`gtf-splicing`) |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest`, `real-cox1-tree-comparison`, `real-heme-pocket-burial` | 3 reference checks passed (`gtf-splicing`); heme-pocket two positive and nineteen negative checks passed; Harbor pending |
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | 3 reference checks passed (`protein-local-search`) |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | 3 reference checks passed (`vcf-sample-qc`) |
@@ -230,7 +230,7 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-The 146 registered recipes include 31 using real observations and 115 simulated component
+The 148 registered recipes include 33 using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -546,7 +546,13 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-The 31 real-data candidates use unchanged biological observations or declared observed subsets:
+The 33 real-data candidates use unchanged biological observations or declared observed subsets:
+
+The observed BAM read-structure and 4HHB heme-pocket additions are native-validated
+candidates awaiting Harbor checks. The BAM workflow grades every record and its
+coordinate index, with seven corrupted-output controls. The heme workflow grades
+290 atom contacts, 2,296 residue/HEM rows and 172 HEM atoms, including solvent
+exposure; all nineteen controls fail. Both reuse existing study lineages.
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
