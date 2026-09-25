@@ -644,8 +644,8 @@ WITH samples AS (
     GROUP BY 1, 2, 3, 4, 5, 6, 7
 ), per_rank AS (
     SELECT t, execution_uid, step, worker_rank,
-           MAX(CASE WHEN counter IN ('rank_tokens_real', 'tokens_real') THEN value END) AS tokens_real,
-           MAX(CASE WHEN counter IN ('rank_tokens_padded', 'tokens_padded') THEN value END) AS tokens_padded,
+           MAX(CASE WHEN counter = 'rank_tokens_real' THEN value END) AS tokens_real,
+           MAX(CASE WHEN counter = 'rank_tokens_padded' THEN value END) AS tokens_padded,
            MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work,
            MAX(CASE WHEN counter = 'micro_step_count' THEN value END) AS micro_steps
     FROM samples WHERE name = 'policy_train_count'

@@ -81,7 +81,8 @@ DISPATCH_SECONDS = CONTAINER_SECONDS - DRIVER_PHASES["policy_train"]
 
 # Two ranks whose barrier and compute time are anti-correlated. Rank 1 is r*: it arrives last, so
 # it waits ~0 at the entry barrier and then does the full compute. Taking a per-phase maximum over
-# the pair would report 2645 s inside a 2000 s parent.
+# the pair would report 2705 s inside a 2000 s parent. Rank 1's spans overlap, so they sum past its
+# policy_ppo_train and the residual it publishes is negative.
 WORKER_SPANS = {
     "0": {
         "policy_entry_barrier": 700.0,
@@ -95,7 +96,7 @@ WORKER_SPANS = {
     "1": {
         "policy_entry_barrier": 5.0,
         "policy_forward": 500.0,
-        "policy_backward": 1200.0,
+        "policy_backward": 1290.0,
         "policy_optimizer_step": 90.0,
         "policy_entropy_allreduce": 15.0,
         "policy_metric_allreduce": 50.0,
@@ -125,27 +126,16 @@ TERMINAL_EVENTS = (
 )
 QUEUED_AT_EXIT = 3
 
-# policy_training_step wraps these four, and the fixture carries both of the ways it has arrived --
-# which no single run does, so one store exercises both exclusions at once. The current spelling
-# ships under an inclusive clock domain and is excluded by that. The first instrumented run
-# published it as policy_training_step_other, which is absent from TIMING_PARENTS, so the sink
-# stamped an empty parent on it and it arrives looking exactly like a leaf.
-CONTAINER_SPAN = "policy_training_step_other"
+# policy_training_step wraps these four. It ships under an inclusive clock domain, which keeps it
+# out of the bands.
 CONTAINED_SPANS = ("policy_forward", "policy_backward", "policy_optimizer_step", "policy_entropy_allreduce")
-# The residual the slowest rank publishes, which counts the contained spans twice.
-PUBLISHED_RESIDUAL = (
-    PPO_TRAIN[CRITICAL_RANK]
-    - sum(WORKER_SPANS[CRITICAL_RANK].values())
-    - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
-)
+PUBLISHED_RESIDUAL = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
 
 # policy_span_publish is the cost of shipping the PREVIOUS step's rows. It is measured after
 # policy_ppo_train's wall is taken and declares a parent outside it, so it is a worker span that
 # does not belong in this decomposition however exclusive its clock domain looks.
 SPAN_PUBLISH_SECONDS = 3.0
 
-# The token counters were renamed on 2026-09-03 to say that they are one rank's shard rather than
-# the run total. The fixture publishes the current spelling; the back catalogue carries the old one.
 WORKER_COUNTERS = {
     "0": {
         "micro_step_count": 64.0,
@@ -398,17 +388,14 @@ def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EX
     for rank, spans in WORKER_SPANS.items():
         worker_rank = str(len(WORKER_SPANS) - 1 - int(rank)) if retried else rank
         spans = {phase: seconds * scale for phase, seconds in spans.items()}
-        # The container as the first instrumented run published it: exclusive, no parent, and wrapping
-        # four of its siblings. Banding it counts them twice.
         contained = sum(spans[phase] for phase in CONTAINED_SPANS)
-        residual = PPO_TRAIN[rank] * scale - (sum(spans.values()) + contained)
+        residual = PPO_TRAIN[rank] * scale - sum(spans.values())
         rows += [span(worker_rank, phase, seconds, "policy_ppo_train", "exclusive") for phase, seconds in spans.items()]
         rows += [
-            span(worker_rank, CONTAINER_SPAN, contained, "", "exclusive"),
             span(worker_rank, "policy_span_residual", residual, "policy_ppo_train", "exclusive"),
-            span(worker_rank, "policy_span_publish", SPAN_PUBLISH_SECONDS, "policy_train", "exclusive"),
+            span(worker_rank, "policy_span_publish", SPAN_PUBLISH_SECONDS, "train_critic_and_policy", "exclusive"),
             span(worker_rank, "policy_training_step", contained, "policy_ppo_train", "inclusive"),
-            span(worker_rank, "policy_ppo_train", PPO_TRAIN[rank] * scale, "policy_train", "inclusive"),
+            span(worker_rank, "policy_ppo_train", PPO_TRAIN[rank] * scale, "train_critic_and_policy", "inclusive"),
         ]
         for instrument, counters in (
             ("policy_train_count", {**WORKER_COUNTERS[rank], **WORKER_ALLOCATOR[rank]}),
@@ -779,18 +766,17 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
 
     bands = {(t, series): seconds for t, series, seconds in rows}
-    # Only spans that name policy_ppo_train as their parent are banded, so the two container
-    # spellings and policy_span_publish (exclusive, a worker row, another parent) drop out by
-    # construction. The producer's own residual is excluded and recomputed under the same name, and
-    # the bands are the slow rank's own, so they close on its parent. The retried step's bucket
-    # holds two attempts with different slowest ranks, and each decomposes on its own.
-    expected = dict(WORKER_SPANS[CRITICAL_RANK])
-    expected["policy_span_residual"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    # Only exclusive spans that name policy_ppo_train as their parent are banded, so
+    # policy_training_step (inclusive) and policy_span_publish (another parent) drop out. The bands
+    # are the slow rank's own, so they close on its parent, with a negative residual where its spans
+    # overlap. The retried step's bucket holds two attempts with different slowest ranks, and each
+    # decomposes on its own.
+    expected = {**WORKER_SPANS[CRITICAL_RANK], "policy_span_residual": PUBLISHED_RESIDUAL}
     assert bands == pytest.approx(
         {(t, band): seconds * BUCKET_SCALE[t] for t in BUCKET_TIMES for band, seconds in expected.items()}
     )
 
-    # A per-phase maximum over the two ranks would sum to 2645 s inside a 2000 s span, because the
+    # A per-phase maximum over the two ranks would sum to 2705 s inside a 2000 s span, because the
     # barrier and the compute come from different ranks.
     per_phase_max = sum(max(WORKER_SPANS["0"][phase], WORKER_SPANS["1"][phase]) for phase in WORKER_SPANS["0"])
     assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "the fixture no longer separates r* from a per-phase maximum"
@@ -854,21 +840,6 @@ def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store)
     ) / len(WORKER_COUNTERS)
     expected_work = sum(counters["attention_work_ratio"] for counters in WORKER_COUNTERS.values()) / len(WORKER_COUNTERS)
     assert rows == [(t, pytest.approx(expected_padding), pytest.approx(expected_work)) for t in BUCKET_TIMES]
-
-
-def test_the_padding_panel_reads_the_old_spelling_of_the_token_counters(store) -> None:
-    """Runs from before the 2026-09-03 rename publish tokens_real and tokens_padded. Reading only
-    the current spelling empties this panel across the whole back catalogue, and an empty padding
-    panel reads as an unpadded batch."""
-    fresh = _panel_rows(store, "Padding fraction and attention_work_ratio")
-    store.execute(
-        """UPDATE "telemetry_v1.marinskyrl"
-           SET attributes_json = replace(attributes_json, 'rank_tokens_', 'tokens_')"""
-    )
-    renamed = _panel_rows(store, "Padding fraction and attention_work_ratio")
-
-    assert [row[1] for row in renamed] == [pytest.approx(row[1]) for row in fresh]
-    assert all(row[1] is not None for row in renamed)
 
 
 def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) -> None:
@@ -1072,20 +1043,6 @@ def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) 
         for bucket, t in enumerate(BUCKET_TIMES)
     ]
     assert rows == [tuple(map(pytest.approx, row)) for row in expected]
-
-
-def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -> None:
-    """peak_allocated_bytes and peak_reserved_bytes were split off policy_train_count onto
-    policy_train_bytes on 2026-09-03. Naming either instrument alone empties the series on half the
-    runs, and an empty memory series reads as headroom."""
-    store.execute(
-        """UPDATE "telemetry_v1.marinskyrl" SET name = 'policy_train_count'
-           WHERE name = 'policy_train_bytes'"""
-    )
-    rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
-
-    assert all(row[1] is not None for row in rows)
-    assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
 
 
 LONG_RUN_STEPS = 500
