@@ -51,6 +51,7 @@ The testbed starts with these cases; it is not yet an automated regression suite
 
 ## Open decisions
 
+- [Extraction rules for code and notebooks](task-authoring.md#work-item-extraction-rules-for-code-and-notebooks): define candidate boundaries for functions, classes, cells or chunks, and complete analysis documents across languages and formats.
 - Recipe boundaries, composition and permitted variation axes, to be calibrated through [transcriptomics examples](examples/transcriptomics.md).
 - The vocabulary for operations and scientific contexts, and how demand and missing coverage influence selection. No uniform allocation rule or numerical weighting formula is adopted.
 - How much retrieval-only or generic statistical work belongs in the corpus, and how much benchmark analysis to retain.

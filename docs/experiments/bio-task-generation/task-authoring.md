@@ -49,6 +49,14 @@ The rule is a discovery unit; the recipe is the scientific generation contract. 
 
 For each selected boundary, stage compatible upstream artifacts, expose meaningful scientific decisions, define a deterministic verifier and identify variation sufficient for the initial ten-instance target. Record whether the task executes the source workflow or reuses its component packages. See the [STAR–DESeq2 worked example](examples/star-deseq2.md).
 
+## Work item: extraction rules for code and notebooks
+
+Define how to identify candidate recipes from functions, methods, entire classes, individual cells or chunks, connected groups of cells, and complete notebooks or analysis documents. Cover multiple languages and formats, including Python and R, Jupyter notebooks, R Markdown and Quarto. The extraction rules and recipe boundaries for these artifacts remain to be designed.
+
+Compare tasks that ask the solver to use existing code, compose operations or implement specified functionality against the project's scientific-analysis goal. Determine when an artifact supports a useful focused task, when several artifacts should form an integrated task, and when code only supplies setup or implementation details. Include dependencies and hidden state, meaningful instance variation, and deterministic verification in that design.
+
+Use the [pipeline development testbed](index.md#pipeline-development-testbed) to develop and review these rules. Revisit the [Scanpy example](examples/transcriptomics.md#scanpy-focused-and-integrated-recipes) and select additional examples that expose different languages, document formats or code organization. Record source-specific examples as the rules are developed; this work item does not establish recipes or validated tasks.
+
 ## Proposal contract
 
 | Field | Required contents |
