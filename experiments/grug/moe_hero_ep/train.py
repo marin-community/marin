@@ -107,6 +107,18 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
+_SYMMETRIC_BUFFERS_FLAG = "--xla_enable_nccl_symmetric_buffers_for_collectives"
+assert _SYMMETRIC_BUFFERS_FLAG in _RAGGED_REQUIRED_XLA_FLAG_NAMES
+# The transport requires symmetric buffers only for its own op. The hero also registers the
+# model's all-gather and reduce-scatter collectives.
+_RAGGED_XLA_FLAGS = tuple(
+    (
+        f"{_SYMMETRIC_BUFFERS_FLAG}=raggedalltoall,allgather,reducescatter"
+        if flag.partition("=")[0] == _SYMMETRIC_BUFFERS_FLAG
+        else flag
+    )
+    for flag in RAGGED_REQUIRED_XLA_FLAGS
+)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
@@ -253,7 +265,7 @@ def _apply_hero_ep_runtime_defaults(
         # nothing here measures. Drop any conflicting entry rather than relying on which
         # occurrence XLA's parser keeps.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
-        xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
+        xla_flags.extend(_RAGGED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
