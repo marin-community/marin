@@ -965,8 +965,6 @@ def reference_datakit_steps(
     )
     cluster_text = cluster_text_step(
         name="datakit/fuzzy_cluster_text",
-        normalized_steps=list(sources.values()),
-        candidates=dedup,
         plan=cluster_plan,
         params=fuzzy.text,
         max_workers=fuzzy.max_workers,
