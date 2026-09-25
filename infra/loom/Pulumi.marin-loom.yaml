@@ -111,7 +111,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 60
       maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
@@ -138,7 +138,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 900
+      idleArchiveSeconds: 60
       maxConcurrent: 4
       turnBudget: 200
       prelude: weaver
@@ -160,7 +160,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 60
       maxConcurrent: 4
       turnBudget: 200
       prelude: weaver
@@ -182,7 +182,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 1800
       maxConcurrent: 12
       turnBudget: 250
       prelude: weaver
@@ -204,7 +204,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 600
+      idleArchiveSeconds: 60
       maxConcurrent: 3
       turnBudget: 40
       prelude: weaver
@@ -226,7 +226,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 60
       maxConcurrent: 1
       turnBudget: 400
       prelude: weaver
