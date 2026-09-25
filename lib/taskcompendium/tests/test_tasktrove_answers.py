@@ -19,8 +19,8 @@ from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import AnswerKind
-from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
+from taskcompendium.models import AnswerType
+from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -42,18 +42,19 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
     assert "/" not in specification.id
     assert specification.requirements.capabilities == ()
-    assert specification.answer_kind is AnswerKind.OPTION_LETTER
+    assert specification.answer_type is AnswerType.TEXT
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
-    public = render_instruction(specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN))
+    assert "Choose one option letter from A through J." in specification.instructions
+    public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
 
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
 
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
-    rendering = Rendering(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
     for source_response, response, reward in (
         ("Answer: C", "C", 1.0),
         ("Answer: D", "D", 0.0),
@@ -61,12 +62,12 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
-        result = grade_answer(specification, rendering, response, object())
+        result = grade_answer(specification, convention, response, object())
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
     json_result = grade_answer(
-        specification, Rendering(id="json", answer_format=AnswerFormat.JSON), '{"answer":"C"}', object()
+        specification, SubmissionConvention(id="json", answer_format=AnswerFormat.JSON), '{"answer":"C"}', object()
     )
-    malformed = grade_answer(specification, rendering, "Answer: C", object())
+    malformed = grade_answer(specification, convention, "Answer: C", object())
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
     assert (malformed.status, malformed.reward) == (Outcome.EXTRACTION_ERROR, None)
 
@@ -77,6 +78,31 @@ def test_import_rejects_non_mcqa_source_before_lowering():
 
     with pytest.raises(ValueError, match="MCQ verifier"):
         import_task(archive)
+
+
+def test_import_rejects_unknown_source_submission_format():
+    archive = _archive()
+    archive.files["instruction.md"] = archive.files["instruction.md"].replace(
+        b"The last line of your response should be in the following format:",
+        b"The last line of your response should be JSON in the following format:",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported MCQA instruction format"):
+        import_task(archive)
+
+
+def test_import_accepts_plain_source_answer_line_template():
+    archive = _archive()
+    archive.files["instruction.md"] = (
+        archive.files["instruction.md"]
+        .replace(b"Answer: \\boxed{A/B/C/D/E/F/G/H/I/J}", b"Answer: A/B/C/D/E/F/G/H/I/J")
+        .replace(b"Answer: \\boxed{B}", b"Answer: B")
+    )
+
+    specification = import_task(archive)
+
+    assert specification.answer_type is AnswerType.TEXT
+    assert "Choose one option letter from A through J." in specification.instructions
 
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
@@ -98,7 +124,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     specification = import_task(_archive())
     binding = HarborTaskBinding()
     task = lower_to_harbor(
-        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
 
     result = await run_trial(
@@ -117,17 +143,17 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     task = lower_to_harbor(
         import_task(_archive()),
-        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         HarborTaskBinding(),
         tmp_path / "task",
     )
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.lowering import read_rendering, read_specification; "
+        "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_answer(read_specification(root / 'specification.json'), "
-        "read_rendering(root / 'rendering.json'), 'C', object()); "
+        "read_submission_convention(root / 'submission_convention.json'), 'C', object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

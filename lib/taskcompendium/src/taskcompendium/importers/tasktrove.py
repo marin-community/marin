@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from taskcompendium.models import Source
 
-IMPORTER_REVISION = "taskcompendium-tasktrove-v0.1"
+IMPORTER_REVISION = "taskcompendium-tasktrove-v0.2"
 TASK_MANIFEST = "task.toml"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024

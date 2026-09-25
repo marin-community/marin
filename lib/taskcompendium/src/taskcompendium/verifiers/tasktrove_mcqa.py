@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, VerifierHandler
 from taskcompendium.models import VerifierSpec
-from taskcompendium.rendering import extract_answer
+from taskcompendium.submission import extract_answer
 
 TASKTROVE_MCQA_KIND = "tasktrove_mcqa"
 
@@ -41,7 +41,7 @@ def tasktrove_mcqa(expected: str, options: int) -> VerifierSpec:
 
 def _grade_tasktrove_mcqa(payload: TaskTroveMcqaPayload, attempt: GradingAttempt) -> GradeResult:
     try:
-        candidate = extract_answer(attempt.response, attempt.rendering).strip().upper()
+        candidate = extract_answer(attempt.response, attempt.convention).strip().upper()
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
     if len(candidate) != 1 or not "A" <= candidate <= "Z":

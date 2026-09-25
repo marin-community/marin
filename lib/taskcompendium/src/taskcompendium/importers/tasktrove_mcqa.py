@@ -10,7 +10,7 @@ import tomllib
 from tasktrove_verify.spec import McqSpec, parse_spec
 
 from taskcompendium.importers.tasktrove import TASK_MANIFEST, TaskArchive
-from taskcompendium.models import AnswerFormat, AnswerKind, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
 from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa
 
 FAMILY = "qa-short-answer"
@@ -22,17 +22,27 @@ _PREFIX = (
     "the simplest valid output is a file containing exactly\n`Answer: X` (where X is your chosen letter).\n\n"
     "---\n\n"
 )
-_FORMAT_PREFIX = "Answer the following multiple choice question. The last line of your response should be"
+_FORMAT_PREFIX = (
+    "Answer the following multiple choice question. The last line of your response "
+    "should be in the following format: "
+)
 
 
-def _clean_instructions(instructions: str) -> str:
+def _clean_instructions(instructions: str, options: int) -> str:
     if not instructions.startswith(_PREFIX):
         raise ValueError("Unsupported MCQA instruction template")
     prompt = instructions.removeprefix(_PREFIX)
     first_line, separator, question = prompt.partition("\n\n")
-    if not separator or not first_line.startswith(_FORMAT_PREFIX) or not question.strip():
-        raise ValueError("MCQA instruction template has no question")
-    return question.strip()
+    letters = tuple(chr(ord("A") + index) for index in range(options))
+    option_list = "/".join(letters)
+    valid_formats = set()
+    for wrapper in ("{}", "\\boxed{{{}}}"):
+        expected_format = f"{_FORMAT_PREFIX}'Answer: {wrapper.format(option_list)}'"
+        for example in letters:
+            valid_formats.add(f"{expected_format} (e.g. 'Answer: {wrapper.format(example)}').")
+    if not separator or first_line not in valid_formats or not question.strip():
+        raise ValueError("Unsupported MCQA instruction format")
+    return f"{question.strip()}\n\nChoose one option letter from A through {letters[-1]}."
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
@@ -44,7 +54,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         contract = parse_spec(archive.files["tests/verifier.toml"].decode())
         if not isinstance(contract, McqSpec):
             raise ValueError("TaskTrove MCQA archive must declare an MCQ verifier")
-        instructions = _clean_instructions(archive.files["instruction.md"].decode())
+        instructions = _clean_instructions(archive.files["instruction.md"].decode(), contract.options)
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove MCQA archive: {error}") from error
     identity = json.dumps(
@@ -57,6 +67,6 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         verifier=tasktrove_mcqa(contract.expected, contract.options),
         source=archive.source,
         requirements=TaskRequirements(),
-        answer_kind=AnswerKind.OPTION_LETTER,
-        permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
+        answer_type=AnswerType.TEXT,
+        permitted_submission_conventions=("plain", "json"),
     )

@@ -1,12 +1,12 @@
 # TaskCompendium direct-chat slice
 
-`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, answer kind, permitted answer formats, and a private verifier descriptor. This slice supports exact answers and multiple-choice option letters. The task, rendering, binding, and verifier records are frozen Pydantic models, validated again when read from a Harbor export. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. MCQA renderings ask for the selected letter. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. `compatible_lowerings` enumerates allowed rendering and environment pairs. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
+`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, coarse answer type, permitted submission conventions when needed, and a private verifier descriptor. A `SubmissionConvention` decides how a result is requested, delivered, and extracted. This slice supports plain final answers and JSON objects with an `answer` string for text and number results. An importer can restrict conventions when source instructions require a particular submission shape. `compatible_lowerings` enumerates convention and environment pairs that satisfy the task. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
-The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
+The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `submission_convention.json`, and `binding.json`. The specification and convention files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the resulting instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
 
-The custom verifier has Harbor's verifier-side environment available for tasks that need workspace state. The registry dispatches by private verifier kind and passes the environment to each handler. The exact-answer handler reads the saved final response, extracts the answer according to the rendering, and compares it directly with the private reference. It does not create an answer file or use a TaskTrove grading runtime.
+The custom verifier has Harbor's verifier-side environment available for tasks that need workspace state. The registry dispatches by private verifier kind and passes the environment to each handler. The exact-answer handler reads the saved final response, extracts the answer according to the convention, and compares it directly with the private reference. It does not create an answer file or use a TaskTrove grading runtime.
 
-The MCQA importer reads an archive from the cleaned TaskTrove release artifact. Its caller resolves that artifact and passes `release.path()` and `release.version` to `read_archive`; TaskCompendium does not depend on Marin's `Artifact` type. The source row is in the original [TaskTrove Parquet](https://huggingface.co/datasets/open-thoughts/TaskTrove/blob/0292300/laion__nemotron-gym-knowledge-mcqa-v2/tasks.parquet); the cleaned release archive is the imported form. The importer keeps the expected option private, and the MCQA verifier compares the extracted letter directly.
+The MCQA importer reads an archive from the cleaned TaskTrove release artifact. Its caller resolves that artifact and passes `release.path()` and `release.version` to `read_archive`; TaskCompendium does not depend on Marin's `Artifact` type. The source row is in the original [TaskTrove Parquet](https://huggingface.co/datasets/open-thoughts/TaskTrove/blob/0292300/laion__nemotron-gym-knowledge-mcqa-v2/tasks.parquet); the cleaned release archive is the imported form. The importer verifies the source's answer-line template before replacing it with a one-letter instruction and permits the `plain` and `json` submission conventions. The expected option stays private, and the MCQA verifier compares the extracted letter directly.
 
 For an authenticated model run, pass the environment variable name as `HarborLaunch("chat", model="...", agent_kwargs={"api_base": "...", "api_key_env": "MODEL_API_KEY"})`. The agent reads its value at request time; Harbor trial configuration retains only the variable name. The variable must be set in the trial process environment.
 
@@ -15,8 +15,8 @@ from pathlib import Path
 
 from taskcompendium.grading import exact_answer
 from taskcompendium.lowering import HarborTaskBinding, SelectionPolicy, compatible_lowerings, lower_to_harbor, select_lowerings
-from taskcompendium.models import AnswerFormat, Source, TaskRequirements, TaskSpec
-from taskcompendium.rendering import Rendering
+from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
@@ -24,20 +24,20 @@ spec = TaskSpec(
     verifier=exact_answer("12"),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     requirements=TaskRequirements(),
-    permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
+    answer_type=AnswerType.NUMBER,
 )
-renderings = (Rendering(id="plain", answer_format=AnswerFormat.PLAIN), Rendering(id="json", answer_format=AnswerFormat.JSON))
-candidates = compatible_lowerings(spec, renderings, (HarborTaskBinding(),))
+conventions = (SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), SubmissionConvention(id="json", answer_format=AnswerFormat.JSON))
+candidates = compatible_lowerings(spec, conventions, (HarborTaskBinding(),))
 for candidate in select_lowerings(candidates, SelectionPolicy.ALL):
-    lower_to_harbor(spec, candidate.rendering, candidate.binding, Path(f"/tmp/arithmetic-{candidate.rendering.id}"))
+    lower_to_harbor(spec, candidate.convention, candidate.binding, Path(f"/tmp/arithmetic-{candidate.convention.id}"))
 
 # A training caller can choose one variant reproducibly instead:
 sampled = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)
 ```
 
-The caller records the selection policy, RNG key, and library revision in its dataset or rollout manifest. Each exported Harbor package records the chosen rendering and binding. An arbitrary source prompt does not become format-agnostic automatically: the importer must allow only rewrites that preserve its instructions.
+The caller records the selection policy, RNG key, and library revision in its dataset or rollout manifest. Each exported Harbor package records the chosen convention and binding. The importer must allow only rewrites that preserve source instructions.
 
-`VerifierSpec(kind, parameters)` is the private serialized form. Each `taskcompendium.verifiers` entry point names a kind and resolves to a zero-argument factory returning a `VerifierHandler(payload_type, grade)`. The payload type is a frozen Pydantic model that validates its parameters. The grade function receives that typed payload plus a `GradingAttempt` containing the response, rendering, and Harbor's verifier-side environment. Validation loads the factory by kind before export or launch. An unknown kind or invalid parameters fail preflight; `Rendering` determines answer extraction but does not select the verifier. The exact-answer handler compares extracted text directly; other handlers may inspect the verifier-side environment. Its `collapse_whitespace` option reduces each whitespace run to one space; it does not remove all internal spaces.
+`VerifierSpec(kind, parameters)` is the private serialized form. Each `taskcompendium.verifiers` entry point names a kind and resolves to a zero-argument factory returning a `VerifierHandler(payload_type, grade)`. The payload type is a frozen Pydantic model that validates its parameters. The grade function receives that typed payload plus a `GradingAttempt` containing the response, convention, and Harbor's verifier-side environment. Validation loads the factory by kind before export or launch. An unknown kind or invalid parameters fail preflight; `SubmissionConvention` determines answer extraction but does not select the verifier. The exact-answer handler compares extracted text directly; other handlers may inspect the verifier-side environment. Its `collapse_whitespace` option reduces each whitespace run to one space; it does not remove all internal spaces.
 
 Run the Python-only package tests from the repository root:
 
