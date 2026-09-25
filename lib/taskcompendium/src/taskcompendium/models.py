@@ -13,11 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serial
 SCHEMA_VERSION = "0.3"
 
 
-class AnswerFormat(StrEnum):
-    """A model-visible envelope for the semantic answer."""
+class AnswerType(StrEnum):
+    """The kind of result the task asks the model to produce."""
 
-    PLAIN = "plain"
-    JSON = "json"
+    TEXT = "text"
+    NUMBER = "number"
+    FILE = "file"
+    WORKSPACE_STATE = "workspace_state"
+    NATIVE_ACTION = "native_action"
 
 
 class Source(BaseModel):
@@ -86,7 +89,8 @@ class TaskSpec(BaseModel):
     verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
-    permitted_answer_formats: tuple[AnswerFormat, ...] = (AnswerFormat.PLAIN,)
+    answer_type: AnswerType
+    permitted_submission_conventions: tuple[str, ...] | None = None
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -95,8 +99,9 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
             raise ValueError("A task id and instructions are required")
-        if not self.permitted_answer_formats:
-            raise ValueError("At least one answer format must be permitted")
-        if len(set(self.permitted_answer_formats)) != len(self.permitted_answer_formats):
-            raise ValueError("Permitted answer formats must be unique")
+        if self.permitted_submission_conventions is not None:
+            if not self.permitted_submission_conventions:
+                raise ValueError("At least one submission convention must be permitted")
+            if len(set(self.permitted_submission_conventions)) != len(self.permitted_submission_conventions):
+                raise ValueError("Permitted submission conventions must be unique")
         return self
