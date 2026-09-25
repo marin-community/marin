@@ -3,11 +3,13 @@
 
 from dataclasses import replace
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+from haliax.state_dict import from_torch_compatible_state_dict
 from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import load_checkpoint
 from levanter.checkpoint import save_checkpoint as save_levanter_checkpoint
@@ -28,12 +30,12 @@ from experiments.grug.moe_pipeline.pipeline import (
 from experiments.grug.moe_pipeline.train import PipelineSchedule, _validate_local_mesh
 
 
-def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:
+def _tiny_model(*, num_layers: int = 2, shared_expert_intermediate_dim: int = 0) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
         intermediate_dim=8,
-        shared_expert_intermediate_dim=0,
+        shared_expert_intermediate_dim=shared_expert_intermediate_dim,
         num_experts=2,
         num_experts_per_token=1,
         num_layers=num_layers,
@@ -68,6 +70,19 @@ def _assert_trees_close(actual, expected) -> None:
     assert len(actual_leaves) == len(expected_leaves)
     for actual_leaf, expected_leaf in zip(actual_leaves, expected_leaves, strict=True):
         np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("shared_expert_intermediate_dim", [0, 4])
+def test_hf_state_dict_roundtrip_preserves_weights_and_logits(shared_expert_intermediate_dim: int):
+    mesh, model = _tiny_model(shared_expert_intermediate_dim=shared_expert_intermediate_dim)
+    with jax.set_mesh(mesh):
+        model = eqx.tree_at(lambda m: m.blocks[0].mlp.router_bias, model, jnp.array([1.0, -2.0]))
+        state_dict = model.to_state_dict()
+        restored = from_torch_compatible_state_dict(model, state_dict)
+
+        for name, weight in state_dict.items():
+            np.testing.assert_allclose(restored.to_state_dict()[name], weight)
+        np.testing.assert_allclose(restored.logits(_batch().tokens), model.logits(_batch().tokens))
 
 
 def _staged_loss(stages, batch: GrugLmExample, *, logsumexp_weight: float | None = None):

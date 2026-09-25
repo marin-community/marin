@@ -939,21 +939,22 @@ def snowball_block_from_state_dict(
         m,
         _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
     )
-    m = eqx.tree_at(
-        lambda t: t.shared.w_gate,
-        m,
-        _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P(_FSDP_AXES, "model")),
-    )
-    m = eqx.tree_at(
-        lambda t: t.shared.w_up,
-        m,
-        _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P(_FSDP_AXES, "model")),
-    )
-    m = eqx.tree_at(
-        lambda t: t.shared.w_down,
-        m,
-        _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", _FSDP_AXES)),
-    )
+    if m.shared is not None:
+        m = eqx.tree_at(
+            lambda t: t.shared.w_gate,
+            m,
+            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P(_FSDP_AXES, "model")),
+        )
+        m = eqx.tree_at(
+            lambda t: t.shared.w_up,
+            m,
+            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P(_FSDP_AXES, "model")),
+        )
+        m = eqx.tree_at(
+            lambda t: t.shared.w_down,
+            m,
+            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", _FSDP_AXES)),
+        )
     return m
 
 

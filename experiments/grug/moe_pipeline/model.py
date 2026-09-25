@@ -36,6 +36,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head
+from levanter.models.snowball import snowball_from_state_dict
 from levanter.tracker.histogram import SummaryStats
 from transformers import PretrainedConfig as HfConfig
 
@@ -330,6 +331,9 @@ class Transformer(eqx.Module):
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
+
+    def from_state_dict(self, state_dict: dict[str, jax.Array], prefix: str | None = None) -> "Transformer":
+        return snowball_from_state_dict(self, state_dict, prefix=prefix)
 
     def next_token_loss(
         self,
