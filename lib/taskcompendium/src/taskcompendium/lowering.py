@@ -15,6 +15,9 @@ from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequire
 from taskcompendium.rendering import Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
+SPECIFICATION_FILE = "specification.json"
+RENDERING_FILE = "rendering.json"
+BINDING_FILE = "binding.json"
 
 
 @dataclass(frozen=True)
@@ -134,7 +137,7 @@ def lower_to_harbor(
     (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
-    (destination / "specification.json").write_text(json.dumps(dataclasses.asdict(specification), indent=2) + "\n")
-    (destination / "binding.json").write_text(json.dumps(dataclasses.asdict(binding), indent=2) + "\n")
-    (destination / "rendering.json").write_text(json.dumps(dataclasses.asdict(rendering), indent=2) + "\n")
+    (destination / SPECIFICATION_FILE).write_text(json.dumps(dataclasses.asdict(specification), indent=2) + "\n")
+    (destination / BINDING_FILE).write_text(json.dumps(dataclasses.asdict(binding), indent=2) + "\n")
+    (destination / RENDERING_FILE).write_text(json.dumps(dataclasses.asdict(rendering), indent=2) + "\n")
     return destination

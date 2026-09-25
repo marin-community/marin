@@ -19,7 +19,7 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
-from taskcompendium.lowering import read_rendering, read_specification
+from taskcompendium.lowering import RENDERING_FILE, SPECIFICATION_FILE, read_rendering, read_specification
 
 RESPONSE_FILE = "response.txt"
 
@@ -154,8 +154,8 @@ class SemanticVerifier(BaseVerifier):
     async def verify(self) -> VerifierResult:
         try:
             root = self.task.paths.task_dir
-            specification = read_specification(root / "specification.json")
-            rendering = read_rendering(root / "rendering.json")
+            specification = read_specification(root / SPECIFICATION_FILE)
+            rendering = read_rendering(root / RENDERING_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
             result = grade_answer(specification, rendering, response)
