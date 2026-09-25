@@ -254,8 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
         raise SystemExit(
-            "usage: python -m iris.jax.multigpu_main --nproc N [--devices-per-proc D] "
-            "[--wrap 'CMD'] -- <command...>"
+            "usage: python -m iris.jax.multigpu_main --nproc N [--devices-per-proc D] " "[--wrap 'CMD'] -- <command...>"
         )
     split = raw.index("--")
     own_args, child_argv = raw[:split], raw[split + 1 :]
