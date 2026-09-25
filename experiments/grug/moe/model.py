@@ -8,8 +8,6 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
-import operator
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -791,71 +789,52 @@ def _linear_inference_tensor(value: jax.Array) -> jax.Array:
     return jnp.swapaxes(value, -1, -2)
 
 
-@dataclass(frozen=True)
-class GrugHfTensorSpec:
-    """One canonical HF tensor and the corresponding Grug model leaf."""
-
-    name: str
-    path: str
-    layer: int | None
-    transpose: bool
-
-
-_ROOT_HF_TENSORS = (
-    ("model.embed_tokens.weight", "token_embed", False),
-    ("model.embed_norm.weight", "embed_norm.weight", False),
-    ("model.embed_gated_norm.down_proj.weight", "embed_gated_norm.w_down", True),
-    ("model.embed_gated_norm.up_proj.weight", "embed_gated_norm.w_up", True),
-    ("model.norm.weight", "final_norm.weight", False),
-    ("model.final_gated_norm.down_proj.weight", "final_gated_norm.w_down", True),
-    ("model.final_gated_norm.up_proj.weight", "final_gated_norm.w_up", True),
-    ("lm_head.weight", "output_proj", True),
-)
-_BLOCK_HF_TENSORS = (
-    ("input_layernorm.weight", "rms_attn.weight", False),
-    ("attn_gated_norm.down_proj.weight", "attn_gated_norm.w_down", True),
-    ("attn_gated_norm.up_proj.weight", "attn_gated_norm.w_up", True),
-    ("self_attn.q_proj.weight", "attn.w_q", True),
-    ("self_attn.k_proj.weight", "attn.w_k", True),
-    ("self_attn.v_proj.weight", "attn.w_v", True),
-    ("self_attn.o_proj.weight", "attn.w_o", True),
-    ("self_attn.attn_gate.weight", "attn.attn_gate", True),
-    ("post_attention_layernorm.weight", "rms_mlp.weight", False),
-    ("mlp_gated_norm.down_proj.weight", "mlp_gated_norm.w_down", True),
-    ("mlp_gated_norm.up_proj.weight", "mlp_gated_norm.w_up", True),
-    ("mlp.router.weight", "mlp.router", True),
-    ("mlp.router.bias", "mlp.router_bias", False),
-    ("mlp.experts.gate_proj.weight", "mlp.expert_mlp.w_gate", True),
-    ("mlp.experts.up_proj.weight", "mlp.expert_mlp.w_up", True),
-    ("mlp.experts.down_proj.weight", "mlp.expert_mlp.w_down", True),
-)
-_SHARED_HF_TENSORS = (
-    ("shared_expert.gate_proj.weight", "shared.w_gate", True),
-    ("shared_expert.up_proj.weight", "shared.w_up", True),
-    ("shared_expert.down_proj.weight", "shared.w_down", True),
-)
-
-
-def grugmoe_hf_tensor_specs(num_layers: int, *, has_shared_expert: bool) -> Iterator[GrugHfTensorSpec]:
-    """Yield canonical HF names, Grug leaf paths, and transposes for each tensor."""
-    for name, path, transpose in _ROOT_HF_TENSORS:
-        yield GrugHfTensorSpec(name, path, None, transpose)
-    for layer in range(num_layers):
-        for name, path, transpose in (*_BLOCK_HF_TENSORS, *(_SHARED_HF_TENSORS if has_shared_expert else ())):
-            yield GrugHfTensorSpec(f"model.layers.{layer}.{name}", path, layer, transpose)
-
-
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
-    assert model.blocks is not None
-    has_shared_expert = model.config.shared_expert_intermediate_dim > 0
-    tensors: dict[str, jax.Array] = {}
-    for spec in grugmoe_hf_tensor_specs(len(model.blocks), has_shared_expert=has_shared_expert):
-        source = model if spec.layer is None else model.blocks[spec.layer]
-        value = operator.attrgetter(spec.path)(source)
-        tensors[_with_state_dict_prefix(prefix, spec.name)] = (
-            _linear_inference_tensor(value) if spec.transpose else value
+    tensors: dict[str, jax.Array] = {
+        "model.embed_tokens.weight": model.token_embed,
+        "model.embed_norm.weight": model.embed_norm.weight,
+        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
+        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
+        "model.norm.weight": model.final_norm.weight,
+        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
+        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
+        "lm_head.weight": _linear_inference_tensor(model.output_proj),
+    }
+
+    for layer_index, block in enumerate(model.blocks):
+        layer_prefix = f"model.layers.{layer_index}"
+        tensors.update(
+            {
+                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
+                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
+                    block.attn_gated_norm.w_down
+                ),
+                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
+                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
+                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
+                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
+                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
+                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
+                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
+                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
+                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
+                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
+                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
+                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
+            }
         )
-    return tensors
+        if block.shared is not None:
+            tensors.update(
+                {
+                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(block.shared.w_gate),
+                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(block.shared.w_up),
+                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
+                }
+            )
+
+    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
 
 __all__ = [
@@ -867,7 +846,6 @@ __all__ = [
     "CausalSelfAttention",
     "DenseMLP",
     "GatedNorm",
-    "GrugHfTensorSpec",
     "GrugModelConfig",
     "GrugMoeHfConfig",
     "MoEMLP",
@@ -875,6 +853,5 @@ __all__ = [
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
-    "grugmoe_hf_tensor_specs",
     "grugmoe_inference_state_dict",
 ]

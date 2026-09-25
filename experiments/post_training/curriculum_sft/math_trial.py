@@ -1,35 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Judge-free math curriculum SFT trial on the September Grug checkpoint."""
+"""Judge-free math curriculum SFT trial on the September Snowball HF checkpoint."""
 
 import dataclasses
+import hashlib
+import json
 
 import click
 from fray.types import ResourceConfig
-from levanter.optim.config import OptimizerConfig
+from levanter.optim.config import AdamConfig
+from levanter.utils.mesh import MeshConfig
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
-from experiments.post_training.curriculum_sft.grug_pipeline import (
-    GRUG_CHECKPOINTS_DIR,
+from experiments.post_training.curriculum_sft.pipeline import (
     CurriculumGenerationSpec,
     curriculum_generation_steps,
-    curriculum_grug_sft,
-    september_grug_model,
+    prepare_curriculum_chat_step,
 )
-from experiments.post_training.curriculum_sft.hf_export import grug_hf_export
-from experiments.post_training.curriculum_sft.hf_import import snowball_hf_to_grug
+from experiments.sft.launcher import ArtifactDatasetSpec, HFModel, SFTSpec, sft_step
 
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
@@ -48,7 +47,6 @@ CURRICULUM_IDS = (
 )
 EVALS = "olympiadbench-deterministic,math500"
 CONTEXT_LENGTH = 4096
-EXPORT_CONTEXT_LENGTH = 262144
 BATCH_SIZE = 64
 STEPS = 4
 ACCEPTED_PER_CAPABILITY = 256
@@ -82,10 +80,9 @@ def _gpu_resources(nodes: int) -> ResourceConfig:
     )
 
 
-def _optimizer() -> OptimizerConfig:
-    return GrugMoeAdamHConfig(
+def _optimizer() -> AdamConfig:
+    return AdamConfig(
         learning_rate=5e-5,
-        adam_lr=5e-5,
         beta1=0.9,
         beta2=0.95,
         epsilon=1e-8,
@@ -143,42 +140,46 @@ def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
 
 
 def build_trial(version: str) -> dict[str, ArtifactStep]:
-    """Bind a baseline evaluation, packed SFT, export, and matched re-evaluation."""
-    training_model = september_grug_model(CONTEXT_LENGTH)
-    imported = snowball_hf_to_grug(
-        HF_MODEL,
-        hf_revision=HF_REVISION,
-        model=training_model,
-        version=SOURCE_VERSION,
-        resources=_gpu_resources(1),
-    )
-    trained: ArtifactStep[LevanterCheckpoint] = curriculum_grug_sft(
-        CURRICULUM_IDS,
+    """Bind baseline and trained evaluations to Levanter's Snowball SFT run."""
+    curriculum_key = hashlib.sha256(json.dumps(sorted(CURRICULUM_IDS)).encode()).hexdigest()[:12]
+    generated = _staged_generation(SOURCE_VERSION)
+    datasets = [
+        ArtifactDatasetSpec(
+            slug=capability_id,
+            artifact=prepare_curriculum_chat_step(
+                generated[capability_id], capability_id=capability_id, version=version
+            ),
+            train_glob="*.parquet",
+            weight=1.0,
+        )
+        for capability_id in CURRICULUM_IDS
+    ]
+    spec = SFTSpec(
+        name=user_owned_name(f"checkpoints/curriculum-sft/{curriculum_key}/snowball"),
         version=version,
-        generation=GENERATION,
-        generated=_staged_generation(SOURCE_VERSION),
-        checkpoint=imported,
-        checkpoint_subpath=GRUG_CHECKPOINTS_DIR,
-        tokenizer=HF_MODEL,
+        model=HFModel(
+            model_ref=f"{HF_MODEL}@{HF_REVISION}",
+            tokenizer_path=HF_MODEL,
+            model_type="snowball",
+            eos_token_ids=(128001, 128009),
+        ),
+        chat_template=MARIN_CHAT_TEMPLATE,
+        datasets=datasets,
         optimizer=_optimizer(),
-        resources=_gpu_resources(8),
-        context_length=CONTEXT_LENGTH,
+        mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1}),
+        seq_len=CONTEXT_LENGTH,
+        pack=False,
         batch_size=BATCH_SIZE,
-        steps=STEPS,
-        expert_parallel=8,
+        num_train_steps=STEPS,
+        hf_save_dtype="bfloat16",
+        wandb_project="marin_moe_sft",
     )
-    exported: ArtifactStep[Artifact] = grug_hf_export(
-        trained,
-        model=dataclasses.replace(training_model, max_seq_len=EXPORT_CONTEXT_LENGTH),
-        tokenizer=HF_MODEL,
-        version=version,
-        resources=_gpu_resources(1),
-    )
+    trained = sft_step(spec, _gpu_resources(4))
     baseline_model = _eval_model("curriculum-math-sep20-base", HF_MODEL, HF_REVISION)
-    trained_model = _eval_model("curriculum-math-sep20-trained", "<export>", None)
+    trained_model = _eval_model("curriculum-math-sep20-trained", "<trained-hf>", None)
 
     def resolve_trained_model(ctx: StepContext) -> ModelConfig:
-        return dataclasses.replace(trained_model, location=ctx.artifact_path(exported))
+        return dataclasses.replace(trained_model, location=prefix_join(ctx.artifact_path(trained), "hf"))
 
     baseline: ArtifactStep[EvaluationResult] = eval_step(
         baseline_model,
@@ -191,18 +192,16 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
         trained_model,
         EVALS,
         version=version,
-        deps=(exported,),
+        deps=(trained,),
         resolve_model=resolve_trained_model,
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return {"baseline": baseline, "train": trained, "export": exported, "after": after}
+    return {"baseline": baseline, "train": trained, "after": after}
 
 
 @click.command()
-@click.option(
-    "--stage", type=click.Choice(["generate", "baseline", "train", "export", "after", "full"]), default="baseline"
-)
+@click.option("--stage", type=click.Choice(["generate", "baseline", "train", "after", "full"]), default="baseline")
 @build_options
 def main(stage: str) -> dict[str, ArtifactStep]:
     version = resolve_version("curriculum-math-sep20", None)

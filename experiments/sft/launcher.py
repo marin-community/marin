@@ -6,7 +6,7 @@
 ``sft_step(spec, resources)`` expresses a full chat-SFT run as a lazy
 ``ArtifactStep[LevanterCheckpoint]``:
 
-    dataset transform (ShareGPT/OpenAI -> canonical messages)
+    dataset transform or prepared messages artifact
         -> chat tokenize/pack (a pluggable chat template + completions-only masking)
         -> weights init from a :class:`ModelSource`
         -> SFT training (Levanter ``train_lm`` or a vendored backend)
@@ -43,9 +43,9 @@ runtime arg, so the same recipe fingerprints identically whether it runs on TPU 
 
 Why a custom step rather than ``marin.experiment.train.train_lm``: that helper cannot emit a chat
 cache (``marin.experiment.data.tokenized`` has no template + completions-only masking) and only
-inits from a checkpoint handle. The dataset side uses the native ``transform_dataset_step`` +
-``multi_turn_adapter`` (``experiments/datasets/instruction.py``) to canonicalize each source into an
-OpenAI-messages cache the chat tokenizer reads.
+inits from a checkpoint handle. Hugging Face sources use ``transform_dataset_step`` +
+``multi_turn_adapter`` (``experiments/datasets/instruction.py``). An upstream
+``ArtifactDatasetSpec`` can supply canonical OpenAI messages directly.
 
 Identity vs execution: the ``ArtifactStep`` graph is cluster-agnostic; the training backend
 dispatches the job onto whatever ``resources`` name (Fray -> Iris on TPU/CoreWeave). On a
@@ -73,6 +73,7 @@ from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
 import click
+import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -126,6 +127,20 @@ class DatasetSpec:
     hf_dataset_id: str
     revision: str  # 7-char commit pin, for fingerprint stability
     adapter_kwargs: Mapping[str, object]
+    weight: float
+
+
+@dataclass(frozen=True)
+class ArtifactDatasetSpec:
+    """Canonical OpenAI messages supplied by an upstream artifact.
+
+    The artifact owns its schema conversion. ``train_glob`` selects its records,
+    allowing an existing Parquet preparation step to feed the shared chat trainer.
+    """
+
+    slug: str
+    artifact: ArtifactStep[Artifact]
+    train_glob: str
     weight: float
 
 
@@ -211,6 +226,7 @@ def _levanter_train_config(
         # at train_step trace. No-op when they already match (e.g. the Delphi prepared tokenizer).
         pad_tokenizer_to_match_model=True,
         hf_save_steps=num_train_steps,  # one HF export at the end
+        hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )
@@ -508,7 +524,7 @@ class SFTSpec:
     version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
     model: ModelSource  # arch + tokenizer + where the initial weights come from + training backend
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
-    datasets: Sequence[DatasetSpec]  # the instruction mixture
+    datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     mesh: MeshConfig | None = None
     seq_len: int = 4096
@@ -521,6 +537,7 @@ class SFTSpec:
     # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
+    hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
 
     def __post_init__(self) -> None:
@@ -577,7 +594,7 @@ def _chat_mixture_data_config(
     cache_dirs: Sequence[str],
     tokenizer: str,
     *,
-    build_component: Callable[[str, ChatLmDatasetFormat], DatasetComponent],
+    build_component: Callable[[DatasetSpec | ArtifactDatasetSpec, str, ChatLmDatasetFormat], DatasetComponent],
     auto_build_caches: bool,
 ) -> LmDataConfig:
     """The weighted chat mixture ``LmDataConfig`` shared by the auto-build and pre-built cache paths.
@@ -591,7 +608,7 @@ def _chat_mixture_data_config(
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
     for dataset, cache_dir in zip(spec.datasets, cache_dirs, strict=True):
-        components[dataset.slug] = build_component(cache_dir, fmt)
+        components[dataset.slug] = build_component(dataset, cache_dir, fmt)
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
         tokenizer=tokenizer,
@@ -605,16 +622,18 @@ def _chat_mixture_data_config(
 
 
 def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
-    """Chat caches built on the training pod from the ``transform_dataset_step`` outputs.
+    """Chat caches built on the training pod from canonical messages artifacts.
 
-    ``dep_paths`` are the resolved transform outputs, aligned with ``spec.datasets``; each component
-    reads the transformed ``jsonl.gz`` and Levanter builds (``auto_build_caches``) the chat cache at
-    train time.
+    ``dep_paths`` are the resolved source outputs, aligned with ``spec.datasets``.
+    Levanter builds the chat cache at train time.
     """
 
-    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
+    def build_component(
+        dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
+    ) -> DatasetComponent:
+        train_glob = dataset.train_glob if isinstance(dataset, ArtifactDatasetSpec) else "**/*.jsonl.gz"
         return DatasetComponent(
-            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
+            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, train_glob)]),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
@@ -630,7 +649,9 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     directly instead of rebuilding on the training pod.
     """
 
-    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
+    def build_component(
+        dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
+    ) -> DatasetComponent:
         return DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
             cache_dir=cache_dir,
@@ -675,22 +696,28 @@ def _trainer(
 
 
 def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
-    """One native ShareGPT/OpenAI -> canonical transform per source (schema from adapter_kwargs)."""
+    """Resolve each source to canonical messages, reusing already prepared artifacts."""
     return tuple(
-        transform_dataset_step(
-            InstructionDatasetConfig(
-                hf_dataset_id=dataset.hf_dataset_id,
-                revision=dataset.revision,
-                adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
-                metadata_columns=[],
-                name=dataset.slug,
+        (
+            dataset.artifact
+            if isinstance(dataset, ArtifactDatasetSpec)
+            else transform_dataset_step(
+                InstructionDatasetConfig(
+                    hf_dataset_id=dataset.hf_dataset_id,
+                    revision=dataset.revision,
+                    adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
+                    metadata_columns=[],
+                    name=dataset.slug,
+                )
             )
         )
         for dataset in spec.datasets
     )
 
 
-def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactStep) -> ArtifactStep[TokenizedCache]:
+def chat_tokenize(
+    spec: SFTSpec, dataset: DatasetSpec | ArtifactDatasetSpec, transform_dep: ArtifactStep
+) -> ArtifactStep[TokenizedCache]:
     """A chat-format ``TokenizedCache`` step: tokenize the canonical messages with the chat template +
     completions-only mask + packing, off the training pod.
 
@@ -704,8 +731,9 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
     name = f"tokenized/{dataset.slug}-chat-{key}"
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
+        train_glob = dataset.train_glob if isinstance(dataset, ArtifactDatasetSpec) else "**/*.jsonl.gz"
         return TokenizeConfig(
-            train_paths=[prefix_join(ctx.artifact_path(transform_dep), "**/*.jsonl.gz")],
+            train_paths=[prefix_join(ctx.artifact_path(transform_dep), train_glob)],
             validation_paths=[],
             cache_path=ctx.output_path,
             tokenizer=spec.model.resolve_tokenizer(ctx),
@@ -746,8 +774,8 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     runtime arg, so changing the accelerator never forks the checkpoint's identity. The data flow
     depends on how the training length is set:
 
-    - ``num_train_steps`` (a mixture, or an explicit count): the transforms are the deps and Levanter
-      builds the chat cache on the training pod (``auto_build_caches``).
+    - ``num_train_steps`` (a mixture, or an explicit count): the message sources are deps and
+      Levanter builds the chat cache on the training pod (``auto_build_caches``).
     - ``num_train_epochs`` (a single dataset): a ``chat_tokenize`` dep materializes the chat cache so
       the step count resolves from its token total, and training reads the pre-built cache.
     """
