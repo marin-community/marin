@@ -47,6 +47,28 @@ def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
 
 
+@pytest.mark.parametrize(
+    "path, extra_args, expect_distributed",
+    [
+        ("/tmp/staged-hf-model", ["--model-loader-extra-config", '{"distributed":true}'], False),
+        ("s3://bucket/model", ["--model-loader-extra-config", '{"distributed":true}'], True),
+        (
+            "/tmp/explicit-runai-model",
+            ["--load-format=runai_streamer", '--model-loader-extra-config={"distributed":true}'],
+            True,
+        ),
+    ],
+)
+def test_runai_loader_option_only_reaches_runai_format(path, extra_args, expect_distributed):
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="model", path=path, engine_kwargs={}), extra_args=extra_args
+    )
+
+    assert any("distributed" in arg for arg in environment.extra_cli_args) is expect_distributed
+    if not expect_distributed:
+        assert "--model-loader-extra-config" not in environment.extra_cli_args
+
+
 def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     cuda = IsolatedCudaVllm(version="test")
     preinstalled = PreinstalledVllm()

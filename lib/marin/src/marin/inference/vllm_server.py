@@ -705,6 +705,41 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     return args
 
 
+def _without_runai_distributed_config(args: list[str]) -> list[str]:
+    """Drop RunAI's distributed option when vLLM uses a different loader."""
+    load_format = None
+    for index, arg in enumerate(args):
+        if arg == "--load-format" and index + 1 < len(args):
+            load_format = args[index + 1]
+        elif arg.startswith("--load-format="):
+            load_format = arg.split("=", 1)[1]
+    if load_format in {"runai_streamer", "runai_streamer_sharded"}:
+        return args
+
+    compatible = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        separate_value = arg == "--model-loader-extra-config" and index + 1 < len(args)
+        inline_value = arg.startswith("--model-loader-extra-config=")
+        if separate_value or inline_value:
+            value = args[index + 1] if separate_value else arg.split("=", 1)[1]
+            try:
+                config = json.loads(value)
+            except json.JSONDecodeError:
+                config = None
+            if isinstance(config, dict) and "distributed" in config:
+                config.pop("distributed")
+                if config:
+                    encoded = json.dumps(config, separators=(",", ":"))
+                    compatible.extend((arg, encoded) if separate_value else (f"--model-loader-extra-config={encoded}",))
+                index += 2 if separate_value else 1
+                continue
+        compatible.append(arg)
+        index += 1
+    return compatible
+
+
 def _poll_until_ready(
     server_url: str,
     *,
@@ -779,7 +814,9 @@ class VllmEnvironment:
         self.host = host
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
-        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self.extra_cli_args = _without_runai_distributed_config(
+            [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        )
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
