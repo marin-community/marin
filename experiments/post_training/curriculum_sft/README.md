@@ -31,9 +31,11 @@ finance pilot used oracle-derived arithmetic conversations; this GLM recipe prod
 answers.
 
 `curriculum_grug_sft(curriculum_ids=[...], ...)` in `grug_pipeline.py` creates one generation and
-render step per capability, then mixes their Parquet sources at equal weight. Levanter packs the
-rendered conversations with attention blocked across conversation boundaries. Pass a native Grug
-checkpoint, its matching Hugging Face tokenizer ID, optimizer, resources, and an explicit training budget.
+chat-preparation step per capability, then mixes their Parquet sources at equal weight. Levanter
+packs complete conversations with attention blocked across their boundaries. The Marin chat
+template masks user turns from the loss; conversations longer than the configured context length
+are dropped without slicing. Pass a native Grug checkpoint, its matching Hugging Face tokenizer
+ID, optimizer, resources, and an explicit training budget.
 
 `math_trial.py` declares a bounded first loop: deterministic OlympiadBench and Math500 on the
 pinned September 20 HF model, three algebra capabilities, four Grug updates, an HF export, and
