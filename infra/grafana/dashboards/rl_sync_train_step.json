@@ -335,7 +335,7 @@
       "id": 213,
       "type": "timeseries",
       "title": "policy_train ÷ micro-step count",
-      "description": "Driver `policy_train` ÷ `micro_step_count`, with the count on the right axis. FSDP all-gathers parameters once per micro-step. If the count halves and this ratio stays flat, `policy_train` halved. If the ratio doubles, nothing was saved.",
+      "description": "Driver `policy_train` ÷ `micro_step_count`, with the count on the right axis. Sharded trainers gather parameters on every micro-step. If the count halves and this ratio stays flat, `policy_train` halved. If the ratio doubles, nothing was saved.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -457,7 +457,7 @@
       "id": 214,
       "type": "timeseries",
       "title": "policy_backward ÷ policy_forward on the slowest rank",
-      "description": "The ratio on r*. FSDP2 pays a second all-gather in backward when `reshard_after_forward` is on, and a third for gradient checkpointing, so the ratio climbs above 2:1 when the all-gathers cost more than the compute. Compare only within one `clock_domain`.",
+      "description": "The ratio on r*. Backward normally costs about twice forward. Gradient checkpointing recomputes forward inside backward, and a sharded trainer may gather parameters again in backward, so a ratio well above 2:1 means that recomputation or communication costs more than the compute. Compare only within one `clock_domain`.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1121,7 +1121,7 @@
       "id": 223,
       "type": "timeseries",
       "title": "NVLink against PCIe receive traffic",
-      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. The proxy for where the FSDP all-gather goes: NVLink is traffic that stayed in the tray, PCIe is what left it. It cannot identify the fabric beyond the host.",
+      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. The proxy for where the trainer's collectives go: NVLink is traffic that stayed in the tray, PCIe is what left it. It cannot identify the fabric beyond the host.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
