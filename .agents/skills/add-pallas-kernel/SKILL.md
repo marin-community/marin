@@ -20,8 +20,9 @@ Load only the detail files needed for the requested work:
    - Deep references live under `docs/reference/`; read them only when the
      routed detail files point there.
 
-Use `research` only when the user explicitly requests a multi-session
-research workflow.
+Use `research` when kernel work requires repeated tuning launches or controlled
+comparisons expected to produce reusable evidence. Ordinary implementation and
+correctness debugging do not need a logbook.
 
 ## Kernel Deliverables
 
