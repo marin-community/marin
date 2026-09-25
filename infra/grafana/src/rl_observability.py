@@ -296,76 +296,28 @@ WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte(("policy_ppo_train", 
       AND name = 'terminal'
     GROUP BY 1, 2, 3
 )
-SELECT 'driver' AS statistic, t,
-       CAST(NULL AS VARCHAR) AS role,
-       phase, parent, clock_domain,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       CAST(NULL AS BIGINT) AS ranks,
-       CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS failed_steps,
-       CAST(NULL AS VARCHAR) AS status,
-       CAST(NULL AS VARCHAR) AS reason,
-       CAST(NULL AS BIGINT) AS lost_records,
-       CAST(NULL AS BIGINT) AS queued_records
-FROM phase_rows
-WHERE role = 'trainer'
-  AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
-GROUP BY t, phase, parent, clock_domain
-UNION ALL
-SELECT 'critical_rank' AS statistic, t,
-       CAST(NULL AS VARCHAR) AS role,
-       phase, parent, clock_domain,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       CAST(NULL AS BIGINT) AS ranks,
-       CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS failed_steps,
-       CAST(NULL AS VARCHAR) AS status,
-       CAST(NULL AS VARCHAR) AS reason,
-       CAST(NULL AS BIGINT) AS lost_records,
-       CAST(NULL AS BIGINT) AS queued_records
-FROM tagged
-WHERE worker_rank = critical_rank AND phase = 'policy_span_residual'
-GROUP BY t, phase, parent, clock_domain
-UNION ALL
-SELECT 'coverage' AS statistic,
-       CAST(NULL AS BIGINT) AS t,
-       role,
-       CAST(NULL AS VARCHAR) AS phase,
-       CAST(NULL AS VARCHAR) AS parent,
-       clock_domain,
-       CAST(NULL AS DOUBLE) AS sum_value,
-       CAST(NULL AS BIGINT) AS sample_count,
-       CAST(NULL AS DOUBLE) AS max_value,
+SELECT statistic, t, phase, parent, clock_domain,
+       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
+FROM (
+    SELECT 'driver' AS statistic, t, phase, parent, clock_domain, value FROM phase_rows
+    WHERE role = 'trainer'
+      AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
+    UNION ALL
+    SELECT 'critical_rank', t, phase, parent, clock_domain, value FROM tagged
+    WHERE worker_rank = critical_rank AND phase = 'policy_span_residual'
+)
+GROUP BY statistic, t, phase, parent, clock_domain
+UNION ALL BY NAME
+SELECT 'coverage' AS statistic, role, clock_domain,
        NULLIF(COUNT(DISTINCT worker_rank), 0) AS ranks,
        COUNT(DISTINCT execution_uid || ' ' || step) AS steps,
        CASE WHEN COUNT(outcome) = 0 THEN NULL
             ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN execution_uid || ' ' || step END) END
-           AS failed_steps,
-       CAST(NULL AS VARCHAR) AS status,
-       CAST(NULL AS VARCHAR) AS reason,
-       CAST(NULL AS BIGINT) AS lost_records,
-       CAST(NULL AS BIGINT) AS queued_records
+           AS failed_steps
 FROM phase_rows
 GROUP BY role, clock_domain
-UNION ALL
-SELECT 'terminal' AS statistic,
-       CAST(NULL AS BIGINT) AS t,
-       role,
-       CAST(NULL AS VARCHAR) AS phase,
-       CAST(NULL AS VARCHAR) AS parent,
-       CAST(NULL AS VARCHAR) AS clock_domain,
-       CAST(NULL AS DOUBLE) AS sum_value,
-       CAST(NULL AS BIGINT) AS sample_count,
-       CAST(NULL AS DOUBLE) AS max_value,
-       CAST(NULL AS BIGINT) AS ranks,
-       CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS failed_steps,
-       status, reason, lost_records, queued_records
-FROM terminal
+UNION ALL BY NAME
+SELECT 'terminal' AS statistic, role, status, reason, lost_records, queued_records FROM terminal
 ORDER BY statistic, t
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
@@ -628,17 +580,13 @@ FROM rollout_steps GROUP BY 1 ORDER BY 1
         ),
         "environment_split": (
             """
-WITH banded AS (
-    SELECT t, 'rollout_env_queue' AS band, queued / NULLIF(env_seconds, 0) AS share FROM rollout_steps
-    UNION ALL
-    SELECT t, 'rollout_env_exec', executed / NULLIF(env_seconds, 0) FROM rollout_steps
-    UNION ALL
-    SELECT t, 'rollout_env_resume', resumed / NULLIF(env_seconds, 0) FROM rollout_steps
-    UNION ALL
-    SELECT t, 'remainder', (env_seconds - queued - executed - resumed) / NULLIF(env_seconds, 0)
-    FROM rollout_steps
-)
-SELECT t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1
+SELECT t, band AS series,
+       AVG(CASE band WHEN 'rollout_env_queue' THEN queued WHEN 'rollout_env_exec' THEN executed
+                     WHEN 'rollout_env_resume' THEN resumed ELSE env_seconds - queued - executed - resumed END
+           / NULLIF(env_seconds, 0)) AS value
+FROM rollout_steps
+CROSS JOIN (VALUES ('rollout_env_queue'), ('rollout_env_exec'), ('rollout_env_resume'), ('remainder')) AS bands(band)
+GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
     }
@@ -663,47 +611,21 @@ def rl_sync_train_step_dataset(
     spans_sql = f"""
 WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte()}
 SELECT 'critical_rank' AS statistic, t, execution_uid, step, phase, parent, clock_domain,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       CAST(NULL AS DOUBLE) AS min_value,
-       CAST(NULL AS DOUBLE) AS p50,
-       CAST(NULL AS DOUBLE) AS p95,
-       MAX(parent_seconds) AS parent_seconds,
-       MAX(covered_seconds) AS covered_seconds
+       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value,
+       MAX(parent_seconds) AS parent_seconds, MAX(covered_seconds) AS covered_seconds
 FROM tagged
 WHERE worker_rank = critical_rank
 GROUP BY t, execution_uid, step, phase, parent, clock_domain
-UNION ALL
-SELECT 'rank_spread' AS statistic, t,
-       CAST(NULL AS VARCHAR) AS execution_uid,
-       CAST(NULL AS VARCHAR) AS step,
-       'policy_ppo_train' AS phase,
-       CAST(NULL AS VARCHAR) AS parent,
-       CAST(NULL AS VARCHAR) AS clock_domain,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       MIN(value) AS min_value,
-       approx_percentile_cont(value, 0.50) AS p50,
-       approx_percentile_cont(value, 0.95) AS p95,
-       CAST(NULL AS DOUBLE) AS parent_seconds,
-       CAST(NULL AS DOUBLE) AS covered_seconds
+UNION ALL BY NAME
+SELECT 'rank_spread' AS statistic, t, 'policy_ppo_train' AS phase,
+       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value, MIN(value) AS min_value,
+       approx_percentile_cont(value, 0.50) AS p50, approx_percentile_cont(value, 0.95) AS p95
 FROM phase_rows
 WHERE role = 'worker' AND phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
 GROUP BY t
-UNION ALL
-SELECT 'driver' AS statistic, t, execution_uid, step, phase,
-       CAST(NULL AS VARCHAR) AS parent,
-       clock_domain,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       CAST(NULL AS DOUBLE) AS min_value,
-       CAST(NULL AS DOUBLE) AS p50,
-       CAST(NULL AS DOUBLE) AS p95,
-       CAST(NULL AS DOUBLE) AS parent_seconds,
-       CAST(NULL AS DOUBLE) AS covered_seconds
+UNION ALL BY NAME
+SELECT 'driver' AS statistic, t, execution_uid, step, phase, clock_domain,
+       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
 FROM phase_rows
 WHERE role = 'trainer' AND clock_domain = 'inclusive_wall' AND phase = 'policy_train'
 GROUP BY t, execution_uid, step, phase, clock_domain
@@ -748,15 +670,8 @@ WITH samples AS (
     FROM samples WHERE role = 'worker' AND counter IN ({sql_values(_ALLOCATOR_COUNTERS)})
     GROUP BY 1, 2, 3, 4, 5
 )
-SELECT 'per_rank' AS statistic, t, execution_uid, step, k.counter,
-       CASE k.counter WHEN 'padded_fraction' THEN padded_sum
-                      WHEN 'attention_work_ratio' THEN attention_sum END AS sum_value,
-       CASE k.counter WHEN 'padded_fraction' THEN padded_count
-                      WHEN 'attention_work_ratio' THEN attention_count END AS sample_count,
-       CASE k.counter WHEN 'micro_step_count' THEN micro_steps END AS max_value
-FROM per_step
-CROSS JOIN (VALUES ('padded_fraction'), ('attention_work_ratio'), ('micro_step_count')) AS k(counter)
-UNION ALL
+SELECT 'per_step' AS statistic, * FROM per_step
+UNION ALL BY NAME
 SELECT 'worker' AS statistic, t, execution_uid, step, counter,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
@@ -791,15 +706,12 @@ WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples A
            json_get(attributes_json, 'gpu_uuid') AS gpu,
            name,
            AVG(value) AS mean_value,
-           MAX(value) AS max_value,
-           CAST(NULL AS DOUBLE) AS increase
+           MAX(value) AS max_value
     FROM "telemetry_v1.node_agent"
     WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
     GROUP BY 1, 2, 3, 4, 5
-    UNION ALL
+    UNION ALL BY NAME
     SELECT origin_cluster, t, node, gpu, name,
-           CAST(NULL AS DOUBLE) AS mean_value,
-           CAST(NULL AS DOUBLE) AS max_value,
            SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
     FROM counter_samples
     GROUP BY 1, 2, 3, 4, 5
@@ -864,8 +776,8 @@ FROM banded GROUP BY 1, 2 ORDER BY 1
 WITH driver AS (
     SELECT t, execution_uid, step, max_value AS seconds FROM spans WHERE statistic = 'driver'
 ), micro AS (
-    SELECT execution_uid, step, MAX(max_value) AS micro_steps FROM counters
-    WHERE statistic = 'per_rank' AND counter = 'micro_step_count' GROUP BY 1, 2
+    SELECT execution_uid, step, MAX(micro_steps) AS micro_steps FROM counters
+    WHERE statistic = 'per_step' GROUP BY 1, 2
 )
 SELECT driver.t,
        AVG(driver.seconds / NULLIF(micro.micro_steps, 0)) AS seconds_per_micro_step,
@@ -887,12 +799,9 @@ GROUP BY 1 ORDER BY 1
         "padding": (
             """
 SELECT t,
-       SUM(CASE WHEN counter = 'padded_fraction' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN counter = 'padded_fraction' THEN sample_count END), 0) AS padded_fraction,
-       SUM(CASE WHEN counter = 'attention_work_ratio' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN counter = 'attention_work_ratio' THEN sample_count END), 0)
-           AS attention_work_ratio
-FROM counters WHERE statistic = 'per_rank' GROUP BY 1 ORDER BY 1
+       SUM(padded_sum) / NULLIF(SUM(padded_count), 0) AS padded_fraction,
+       SUM(attention_sum) / NULLIF(SUM(attention_count), 0) AS attention_work_ratio
+FROM counters WHERE statistic = 'per_step' GROUP BY 1 ORDER BY 1
 """.strip()
         ),
         "allocator": (
