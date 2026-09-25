@@ -9,9 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
-from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES, compact_grug_mesh
+from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
@@ -140,11 +139,7 @@ def full_sequence_logits(model, tokens):
 
 
 def test_logits_select_each_rows_last_input_position(spec, model):
-    mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape((1,) * len(_GRUG_MESH_AXIS_NAMES)),
-        _GRUG_MESH_AXIS_NAMES,
-        axis_types=(AxisType.Explicit,) * len(_GRUG_MESH_AXIS_NAMES),
-    )
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
         transformer = COMPUTE_POLICY.cast_to_compute(
             Transformer.init(draccus.decode(GrugModelConfig, model), key=jax.random.PRNGKey(7))

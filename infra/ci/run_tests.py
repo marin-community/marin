@@ -4,8 +4,8 @@
 
 The default comparison includes committed, staged, unstaged, and untracked
 changes from the branch point with main. Selected paths share one synced
-workspace environment. When Haliax, Levanter, or Marin are selected with other packages,
-the runner gives these suites one eight-device worker and runs the remaining workers
+workspace environment. When Haliax and other packages are selected together,
+the runner gives Haliax one eight-device worker and runs the remaining workers
 concurrently with the normal one-device topology. Dedicated accelerator and
 browser suites remain delegated to CI.
 
@@ -38,8 +38,7 @@ LOCAL_EXCLUDED_MODULE_MARKERS = frozenset(
     {"slow", "integration", "data_integration", "cluster", "requires_cluster", "docker", "manual", "torch"}
 )
 MAX_DISPLAYED_TEST_PATHS = 5
-MULTIDEVICE_CPU_DEVICE_COUNT = 8
-MULTIDEVICE_PACKAGES = frozenset({"haliax", "levanter", "marin"})
+HALIAX_CPU_DEVICE_COUNT = 8
 DEFAULT_WORKERS = max(2, os.cpu_count() or 2)
 JAX_CPU_DEVICE_ENV = "JAX_NUM_CPU_DEVICES"
 
@@ -223,15 +222,15 @@ def local_invocation(selection: SelectionResult) -> PytestInvocation | None:
 
 
 def pytest_lanes(invocation: PytestInvocation, workers: int) -> tuple[PytestLane, ...]:
-    """Group suites by CPU device count while preserving one worker budget."""
-    multidevice = tuple(package for package in invocation.packages if package.label in MULTIDEVICE_PACKAGES)
-    ordinary = tuple(package for package in invocation.packages if package.label not in MULTIDEVICE_PACKAGES)
-    if not multidevice:
+    """Partition Haliax from ordinary tests while preserving one worker budget."""
+    haliax = tuple(package for package in invocation.packages if package.label == "haliax")
+    ordinary = tuple(package for package in invocation.packages if package.label != "haliax")
+    if not haliax:
         return (PytestLane("workspace", invocation, workers, 1),)
     if not ordinary:
-        return (PytestLane("multidevice", invocation, workers, MULTIDEVICE_CPU_DEVICE_COUNT),)
+        return (PytestLane("haliax", invocation, workers, HALIAX_CPU_DEVICE_COUNT),)
     return (
-        PytestLane("multidevice", replace(invocation, packages=multidevice), 1, MULTIDEVICE_CPU_DEVICE_COUNT),
+        PytestLane("haliax", replace(invocation, packages=haliax), 1, HALIAX_CPU_DEVICE_COUNT),
         PytestLane("workspace", replace(invocation, packages=ordinary), workers - 1, 1),
     )
 

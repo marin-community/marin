@@ -4,6 +4,9 @@
 import dataclasses
 import math
 import os
+import subprocess
+import sys
+import textwrap
 import tomllib
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +36,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -46,27 +50,43 @@ GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject
 
 
 def test_muon_expert_stack_preserves_sharding_and_updates():
-    if jax.device_count() < 2:
-        pytest.skip("Requires 2 devices")
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    env.pop("JAX_NUM_CPU_DEVICES", None)
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding
+        from jax.sharding import PartitionSpec as P
 
-    devices = np.asarray(jax.devices()[:2])
-    mesh = Mesh(
-        devices.reshape(1, 1, 2, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
+        from experiments.grug.moe_hero_ep.grugmuon_hero import (
+            _newtonschulz_padded_stack_sharded,
+            _zeropower_via_newtonschulz_local,
+        )
+
+        devices = np.asarray(jax.devices())
+        mesh = Mesh(
+            devices.reshape(1, 1, -1, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
+        )
+        sharding = NamedSharding(mesh, P("expert", None, None))
+        values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
+        reference = jax.jit(jax.vmap(_zeropower_via_newtonschulz_local))(jnp.asarray(values, dtype=jnp.bfloat16))
+        with jax.set_mesh(mesh):
+            matrices = jax.device_put(jnp.asarray(values, dtype=jnp.bfloat16), sharding)
+            actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
+        assert actual.sharding == sharding
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    sharding = NamedSharding(mesh, P("expert", None, None))
-    values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
-    matrices = jnp.asarray(values, dtype=jnp.bfloat16)
-    reference = jax.jit(jax.vmap(grugmuon_hero._zeropower_via_newtonschulz_local))(matrices)
-
-    def update(x):
-        return grugmuon_hero._newtonschulz_padded_stack_sharded(x, target_sharding=sharding)
-
-    with set_mesh(mesh):
-        matrices = jax.device_put(matrices, sharding)
-        actual = jax.jit(update)(matrices)
-
-    assert actual.sharding == sharding
-    np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
+    assert result.returncode == 0, result.stderr
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
@@ -656,69 +676,101 @@ def test_ep_newton_schulz_preserves_context_bank_sharding():
 
 
 def test_ep_newton_schulz_matches_replicated_path():
-    if jax.device_count() < 2:
-        pytest.skip("Requires 2 devices")
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-    mesh = Mesh(
-        np.asarray(jax.devices()[:2]).reshape(1, 1, 1, 2, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
-    )
-    x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
-    x_sharded = jax.device_put(x, NamedSharding(mesh, P(None, "expert", "data", "model")))
-    path = (jax.tree_util.GetAttrKey("w_gate"),)
-    expected = jax.vmap(
-        jax.vmap(
-            lambda matrix: grugmuon_hero._zeropower_via_newtonschulz_replicated(
-                matrix, steps=1, eps=1e-7, coefficient_type="quintic"
+        from experiments.grug.moe_hero_ep.grugmuon_hero import (
+            _newtonschulz_4d_distributed,
+            _zeropower_via_newtonschulz_replicated,
+        )
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
+        x_sharded = jax.device_put(x, NamedSharding(mesh, P(None, "expert", "data", "model")))
+        path = (jax.tree_util.GetAttrKey("w_gate"),)
+        expected = jax.vmap(
+            jax.vmap(
+                lambda matrix: _zeropower_via_newtonschulz_replicated(
+                    matrix, steps=1, eps=1e-7, coefficient_type="quintic"
+                )
+            )
+        )(x)
+
+        apply_ns = jax.jit(
+            lambda y: _newtonschulz_4d_distributed(
+                path,
+                y,
+                steps=1,
+                eps=1e-7,
+                coefficient_type="quintic",
+                use_syrk=False,
             )
         )
-    )(x)
+        with jax.set_mesh(mesh):
+            actual = apply_ns(x_sharded)
 
-    apply_ns = jax.jit(
-        lambda y: grugmuon_hero._newtonschulz_4d_distributed(
-            path,
-            y,
-            steps=1,
-            eps=1e-7,
-            coefficient_type="quintic",
-            use_syrk=False,
-        )
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    with jax.set_mesh(mesh):
-        actual = apply_ns(x_sharded)
 
-    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
+    assert result.returncode == 0, result.stderr
 
 
 def test_ep_newton_schulz_context_bank_avoids_gather():
     # Output placement alone cannot detect an intermediate gather of the full bank.
-    if jax.device_count() < 4:
-        pytest.skip("Requires 4 devices")
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-    mesh = Mesh(
-        np.asarray(jax.devices()[:4]).reshape(1, 1, 4, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
-    )
-    spec = P(None, ("expert", "context"), "data", "model")
-    x = jax.device_put(jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32), NamedSharding(mesh, spec))
-    apply_ns = jax.jit(
-        lambda y: grugmuon_hero._newtonschulz_4d_distributed(
-            (jax.tree_util.GetAttrKey("w_gate"),),
-            y,
-            steps=1,
-            eps=1e-7,
-            coefficient_type="quintic",
-            use_syrk=False,
-            target_sharding=NamedSharding(mesh, spec),
+        from experiments.grug.moe_hero_ep.grugmuon_hero import _newtonschulz_4d_distributed
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 4, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
-    )
-    with jax.set_mesh(mesh):
-        hlo = apply_ns.lower(x).compile().as_text()
-        out = apply_ns(x)
-    assert out.sharding.spec == spec, out.sharding.spec
-    assert "all-gather" not in hlo, "the context-split expert bank was gathered whole"
+        spec = P(None, ("expert", "context"), "data", "model")
+        x = jax.device_put(
+            jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32), NamedSharding(mesh, spec)
+        )
+        apply_ns = jax.jit(
+            lambda y: _newtonschulz_4d_distributed(
+                (jax.tree_util.GetAttrKey("w_gate"),),
+                y,
+                steps=1,
+                eps=1e-7,
+                coefficient_type="quintic",
+                use_syrk=False,
+                target_sharding=NamedSharding(mesh, spec),
+            )
+        )
+        with jax.set_mesh(mesh):
+            hlo = apply_ns.lower(x).compile().as_text()
+            out = apply_ns(x)
+        assert out.sharding.spec == spec, out.sharding.spec
+        assert "all-gather" not in hlo, "the context-split expert bank was gathered whole"
+    """
+
+    run_on_cpu_devices(script, device_count=4)
 
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
@@ -857,50 +909,71 @@ def test_odd_depth_config_is_not_silently_rounded():
 
 
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
-    if jax.device_count() < 4:
-        pytest.skip("Requires 4 devices")
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import math
 
-    mesh = Mesh(
-        np.asarray(jax.devices()[:4]).reshape(1, 1, 1, 2, 2),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
-    )
-    cfg = model.GrugModelConfig(
-        vocab_size=128,
-        hidden_dim=32,
-        intermediate_dim=16,
-        shared_expert_intermediate_dim=16,
-        num_shared_experts=1,
-        num_experts=4,
-        num_experts_per_token=1,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=2,
-        local_kv_heads=2,
-        global_kv_heads=1,
-        head_dim=8,
-        max_seq_len=8,
-        sliding_window=4,
-        global_every=2,
-        capacity_factor=1.0,
-        initializer_std=0.5 / math.sqrt(32),
-        qk_mult=1.3,
-        attention_implementation="reference",
-        moe_implementation="fixed_all_to_all",
-        report_capacity_overflow=True,
-    )
-    tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
-    with set_mesh(mesh):
-        output = jax.eval_shape(
-            lambda token_ids: model.Transformer.init(cfg, key=jax.random.key(0))(token_ids)[0],
-            tokens,
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, set_mesh
+
+        from experiments.grug.moe_hero_ep import model
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 2),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
-    assert output.shape == (2, 8, 32)
+        cfg = model.GrugModelConfig(
+            vocab_size=128,
+            hidden_dim=32,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            local_kv_heads=2,
+            global_kv_heads=1,
+            head_dim=8,
+            max_seq_len=8,
+            sliding_window=4,
+            global_every=2,
+            capacity_factor=1.0,
+            initializer_std=0.5 / math.sqrt(32),
+            qk_mult=1.3,
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
+            report_capacity_overflow=True,
+        )
+        tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
+        with set_mesh(mesh):
+            output = jax.eval_shape(
+                lambda token_ids: model.Transformer.init(cfg, key=jax.random.key(0))(token_ids)[0],
+                tokens,
+            )
+        assert output.shape == (2, 8, 32)
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _explicit_mesh(*axis_sizes):
     return Mesh(
-        np.asarray(jax.devices()[: math.prod(axis_sizes)]).reshape(*axis_sizes),
+        np.asarray(jax.devices()).reshape(*axis_sizes),
         ("replica_dcn", "data", "context", "expert", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
