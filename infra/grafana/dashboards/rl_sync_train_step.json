@@ -165,40 +165,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "ppo_decomposition"
-              }
-            ]
-          },
+          "view": "ppo_decomposition",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -266,40 +236,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "rank_skew"
-              }
-            ]
-          },
+          "view": "rank_skew",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -398,40 +338,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "micro_steps"
-              }
-            ]
-          },
+          "view": "micro_steps",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -499,40 +409,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "backward_over_forward"
-              }
-            ]
-          },
+          "view": "backward_over_forward",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -595,40 +475,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "waiting_share"
-              }
-            ]
-          },
+          "view": "waiting_share",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -713,40 +563,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "padding"
-              }
-            ]
-          },
+          "view": "padding",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -835,40 +655,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "allocator"
-              }
-            ]
-          },
+          "view": "allocator",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -961,40 +751,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "sm_activity"
-              }
-            ]
-          },
+          "view": "sm_activity",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -1062,40 +822,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "gpu_memory"
-              }
-            ]
-          },
+          "view": "gpu_memory",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -1164,40 +894,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "fabric_receive"
-              }
-            ]
-          },
+          "view": "fabric_receive",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -1244,40 +944,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "link_faults"
-              }
-            ]
-          },
+          "view": "link_faults",
+          "format": "table",
           "columns": [
             {
               "selector": "node",

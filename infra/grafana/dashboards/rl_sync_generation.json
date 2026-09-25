@@ -168,40 +168,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/generation",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "generation_vs_training"
-              }
-            ]
-          },
+          "view": "generation_vs_training",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -302,40 +272,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "rl_run",
           "url": "/v1/rl/generation",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "tail_over_mean"
-              }
-            ]
-          },
+          "view": "tail_over_mean",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -392,40 +332,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "workload"
-              }
-            ]
-          },
+          "view": "workload",
+          "format": "table",
           "columns": [
             {
               "selector": "stat",
@@ -508,40 +418,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "latency"
-              }
-            ]
-          },
+          "view": "latency",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -617,40 +497,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "latency"
-              }
-            ]
-          },
+          "view": "latency",
+          "format": "table",
           "columns": [
             {
               "selector": "metric",
@@ -725,40 +575,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation"
-              }
-            ]
-          },
+          "view": "saturation",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -833,40 +653,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation"
-              }
-            ]
-          },
+          "view": "saturation",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",
@@ -942,40 +732,10 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
+          "targetRef": "vllm_run",
           "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "run_id"
-              },
-              {
-                "key": "identity",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation"
-              }
-            ]
-          },
+          "view": "saturation",
+          "format": "timeseries",
           "columns": [
             {
               "selector": "t",

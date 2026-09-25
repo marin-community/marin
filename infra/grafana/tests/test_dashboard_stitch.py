@@ -21,6 +21,41 @@ def test_stitch_dashboard_merges_fragment_with_local_id_and_grid_pos():
     assert panel == {**FRAGMENT, "id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}}
 
 
+def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows():
+    columns = [{"selector": "t", "text": "t", "type": "timestamp"}]
+    short = {"refId": "A", "targetRef": "rl_run", "url": "/v1/rl/overview", "view": "spans", "format": "table"}
+    fragment = {"type": "timeseries", "targets": [{**short, "columns": columns, "filterExpression": "x == 1"}]}
+    source = {
+        "panels": [
+            {"id": 1, "gridPos": {"y": 0}, "panelRef": "shared"},
+            {"id": 2, "type": "row", "panels": [{"id": 3, "targets": [{**short, "columns": columns}]}]},
+        ]
+    }
+
+    first, row = stitch_dashboard(source, {"shared": fragment})["panels"]
+
+    params = [
+        {"key": "clusters", "value": "${cluster:csv}"},
+        {"key": "run", "value": "${run}"},
+        {"key": "from", "value": "${__from}"},
+        {"key": "to", "value": "${__to}"},
+        {"key": "bucket_ms", "value": "${__interval_ms}"},
+        {"key": "view", "value": "spans"},
+    ]
+    expanded = {
+        "refId": "A",
+        "type": "json",
+        "source": "url",
+        "format": "table",
+        "parser": "backend",
+        "url": "/v1/rl/overview",
+        "url_options": {"method": "GET", "params": params},
+        "columns": columns,
+    }
+    assert first["targets"] == [{**expanded, "filterExpression": "x == 1"}]
+    assert row["panels"] == [{"id": 3, "targets": [expanded]}]
+
+
 def test_stitch_dashboard_leaves_non_ref_panels_untouched():
     inline_panel = {"id": 1, "type": "row", "title": "Section"}
     source = {"panels": [inline_panel]}
