@@ -211,7 +211,7 @@ def export_checkpoint_streaming(
     *,
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
 ) -> None:
-    """Read each native checkpoint chunk once and publish HF shards and metadata."""
+    """Publish a stacked Grug checkpoint as a BF16 HF model directory."""
     manifest = read_manifest(checkpoint_path)
     if manifest is None or manifest.array_driver != ARRAY_DRIVER or manifest.kvstore_driver != KVSTORE_DRIVER:
         raise ValueError(f"Expected an OCDBT zarr3 checkpoint with a manifest at {checkpoint_path}")

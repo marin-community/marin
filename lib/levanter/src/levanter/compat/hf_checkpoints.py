@@ -999,7 +999,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return self.hf_config_dict(model.config, model.Vocab.size)
 
     def hf_config_dict(self, config: HFCompatConfig, vocab_size: int) -> dict:
-        """Construct saved HF metadata without materializing model weights."""
+        """Return saved HF metadata for the model config and vocabulary size."""
         dict_config = config.to_hf_config(vocab_size).to_dict()
 
         try:

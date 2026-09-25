@@ -837,7 +837,7 @@ _SHARED_HF_TENSORS = (
 
 
 def grugmoe_hf_tensor_specs(num_layers: int, *, has_shared_expert: bool) -> Iterator[GrugHfTensorSpec]:
-    """Describe the HF state dict without materializing model arrays."""
+    """Yield canonical HF names, Grug leaf paths, and transposes for each tensor."""
     for name, path, transpose in _ROOT_HF_TENSORS:
         yield GrugHfTensorSpec(name, path, None, transpose)
     for layer in range(num_layers):
