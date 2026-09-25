@@ -243,6 +243,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
+    lm_head_group: str = "adamh"
+    """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
+    embed_group: str = "adam"
+    """LR group of ``token_embed``: ``adam`` or ``adamh``."""
     neuron_norm_beta2: float | None = None
     """NorMuon neuron-wise normalization of the MuonH direction with this second-moment decay (None: off)."""
     """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
@@ -315,6 +319,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             adam_lr=adam_lr_schedule,
         )
 
+    def __post_init__(self):
+        if self.lm_head_group not in ("adamh", "muonh"):
+            raise ValueError(f"lm_head_group must be adamh or muonh, got {self.lm_head_group!r}")
+        if self.embed_group not in ("adam", "adamh"):
+            raise ValueError(f"embed_group must be adam or adamh, got {self.embed_group!r}")
+
     def create_mask(self, params):
         paths = leaf_key_paths(params)
 
@@ -332,10 +342,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if ".rel_pos." in path_lower or re.search(r"\.(value_embed|ve_lambda|ve_gate|bias_\w+)$", path_lower):
                 return "adam"
-            if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
+            if "token_embed" in path_lower:
+                return self.embed_group
+            if "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
-                return "adamh"
+                return self.lm_head_group
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
