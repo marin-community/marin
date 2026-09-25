@@ -271,6 +271,11 @@ def verify_cluster_text(
     if not StoragePath(success_path).exists():
         raise FileNotFoundError(f"Cluster-text artifact is incomplete: {success_path} is absent")
     manifest = read_cluster_text_manifest(cluster_text)
+    if limits.maximum_document_chars > manifest.maximum_document_chars:
+        raise ValueError(
+            f"Verification maximum_document_chars ({limits.maximum_document_chars}) exceeds "
+            f"materialized maximum_document_chars ({manifest.maximum_document_chars})"
+        )
     if not manifest.shards:
         raise ValueError(f"{cluster_text} manifest names no normalized shards")
     shards = {shard.file_idx: shard for shard in manifest.shards}

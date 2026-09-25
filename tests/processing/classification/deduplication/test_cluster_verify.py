@@ -13,6 +13,7 @@ from marin.processing.classification.deduplication.cluster_dedup import ClusterD
 from marin.processing.classification.deduplication.cluster_text import (
     CLUSTER_TEXT_SUCCESS_FILENAME,
     ClusterTextManifest,
+    ClusterTextParams,
     ClusterTextShard,
     write_cluster_text_manifest,
     write_cluster_text_success,
@@ -49,7 +50,9 @@ UNRELATED = (
 SOURCES = {"datakit/normalize/left": "source_000", "datakit/normalize/right": "source_001"}
 
 
-def _write_cluster_text(root: Path, rows: list[dict]) -> str:
+def _write_cluster_text(
+    root: Path, rows: list[dict], maximum_document_chars: int = ClusterTextParams().maximum_document_chars
+) -> str:
     """Materialize one grouped text file and the manifest that names the shards.
 
     The cluster-text stage writes ``file_idx`` 0 for the left source's only
@@ -66,6 +69,7 @@ def _write_cluster_text(root: Path, rows: list[dict]) -> str:
         output_shards=1,
         groups_per_shard=1,
         split_ngram_size=5,
+        maximum_document_chars=maximum_document_chars,
         oversized_clusters={},
         oversized_cluster_members=0,
         shards=[
@@ -220,6 +224,24 @@ def test_incomplete_cluster_text_is_rejected(tmp_path):
             cluster_text=cluster_text,
             output_path=str(tmp_path / "verified"),
             params=ClusterDedupParams(),
+        )
+
+
+def test_verifier_rejects_a_document_limit_above_the_materialized_limit(tmp_path):
+    cluster_text = _write_cluster_text(
+        tmp_path / "cluster_text",
+        [_member(cluster="c1", doc_id="left-original", text=ORIGINAL, file_idx=0)],
+        maximum_document_chars=10,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Verification maximum_document_chars \(11\).*materialized maximum_document_chars \(10\)",
+    ):
+        verify_cluster_text(
+            cluster_text=cluster_text,
+            output_path=str(tmp_path / "verified"),
+            limits=ClusterVerificationLimits(maximum_document_chars=11),
         )
 
 

@@ -880,6 +880,12 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
+    fuzzy = scale.fuzzy
+    if fuzzy.plan.minimum_size > fuzzy.text.max_cluster_size:
+        raise ValueError(
+            f"Fuzzy cluster plan minimum_size ({fuzzy.plan.minimum_size}) exceeds "
+            f"text max_cluster_size ({fuzzy.text.max_cluster_size})"
+        )
     unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
     if unknown_exempt:
         raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
@@ -954,7 +960,6 @@ def reference_datakit_steps(
 
     dedup = zephyr_steps.fuzzy_dedup
 
-    fuzzy = scale.fuzzy
     cluster_plan = large_clusters_step(
         name="datakit/large_fuzzy_clusters",
         candidates=dedup,

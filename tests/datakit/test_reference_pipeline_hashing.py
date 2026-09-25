@@ -14,8 +14,10 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
+from marin.processing.classification.deduplication.large_clusters import LargeClusterParams
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
@@ -181,6 +183,17 @@ def test_external_path_requires_version_tag():
             domain_centroids="gs://r/centroids",
             centroids_version=None,
         )
+
+
+def test_fuzzy_plan_threshold_cannot_exceed_text_cap():
+    fuzzy = dataclasses.replace(
+        SMOKE_SCALE.fuzzy,
+        plan=LargeClusterParams(minimum_size=11),
+        text=ClusterTextParams(max_cluster_size=10),
+    )
+
+    with pytest.raises(ValueError, match=r"minimum_size \(11\).*max_cluster_size \(10\)"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, fuzzy=fuzzy))
 
 
 def test_quality_model_version_not_path_drives_identity():
