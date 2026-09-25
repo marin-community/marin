@@ -16,6 +16,8 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, materialized_config, resolve, run
 from marin.execution.remote import remote
+from marin.execution.step_runner import _write_executor_info
+from marin.execution.step_spec import StepSpec
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
 
@@ -83,7 +85,7 @@ def dclm_1b(*, lr: float = 3e-3) -> ArtifactStep[Ckpt]:
     )
 
 
-def test_remote_env_values_do_not_leak_from_step_repr():
+def test_remote_env_values_do_not_leak_from_step_repr(tmp_path):
     secret = "example-secret-value"
     wrapped = remote(_make_tokens, env_vars={"WANDB_API_KEY": secret})
     step = ArtifactStep(
@@ -95,8 +97,14 @@ def test_remote_env_values_do_not_leak_from_step_repr():
     )
 
     assert wrapped.env_vars["WANDB_API_KEY"] == secret
+    assert "WANDB_API_KEY" in repr(wrapped)
+    assert "WANDB_API_KEY" in repr(step)
     assert secret not in repr(wrapped)
     assert secret not in repr(step)
+    _write_executor_info(StepSpec(name="remote", override_output_path=str(tmp_path), fn=wrapped))
+    executor_info = (tmp_path / ".executor_info").read_text()
+    assert "WANDB_API_KEY" in executor_info
+    assert secret not in executor_info
 
 
 # --- Identity vs execution -----------------------------------------------------

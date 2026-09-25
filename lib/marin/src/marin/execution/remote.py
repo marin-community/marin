@@ -51,10 +51,18 @@ class RemoteCallable(Generic[P, R]):
 
     fn: Callable[P, R]
     resources: ResourceConfig
-    env_vars: dict[str, str] = field(default_factory=dict, repr=False)
+    env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] | None = None
     pip_packages: list[str] | None = None
     name: str | None = None
+
+    def __repr__(self) -> str:
+        env_vars = {key: "<redacted>" for key in self.env_vars}
+        return (
+            f"RemoteCallable(fn={self.fn!r}, resources={self.resources!r}, env_vars={env_vars!r}, "
+            f"pip_dependency_groups={self.pip_dependency_groups!r}, pip_packages={self.pip_packages!r}, "
+            f"name={self.name!r})"
+        )
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
