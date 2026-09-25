@@ -707,44 +707,27 @@ def create_app(
             ),
         )
 
-    def rl_overview(request: Request) -> JSONResponse:
-        return dashboard_dataset_response(
-            request,
-            "RL overview",
-            lambda params, start_ms, end_ms: rl_overview_dataset(
-                _csv_values(params, "clusters"),
-                _require(params, "run"),
-                start_ms,
-                end_ms,
-                int(_require(params, "bucket_ms")),
-            ),
-        )
+    def rl_run_handler(
+        label: str, build_dataset: Callable[[tuple[str, ...], str, int, int, int], DashboardDataset]
+    ) -> Callable[[Request], JSONResponse]:
+        def handler(request: Request) -> JSONResponse:
+            return dashboard_dataset_response(
+                request,
+                label,
+                lambda params, start_ms, end_ms: build_dataset(
+                    _csv_values(params, "clusters"),
+                    _require(params, "run"),
+                    start_ms,
+                    end_ms,
+                    int(_require(params, "bucket_ms")),
+                ),
+            )
 
-    def rl_sync_generation(request: Request) -> JSONResponse:
-        return dashboard_dataset_response(
-            request,
-            "RL generation",
-            lambda params, start_ms, end_ms: rl_sync_generation_dataset(
-                _csv_values(params, "clusters"),
-                _require(params, "run"),
-                start_ms,
-                end_ms,
-                int(_require(params, "bucket_ms")),
-            ),
-        )
+        return handler
 
-    def rl_sync_train_step(request: Request) -> JSONResponse:
-        return dashboard_dataset_response(
-            request,
-            "RL train step",
-            lambda params, start_ms, end_ms: rl_sync_train_step_dataset(
-                _csv_values(params, "clusters"),
-                _require(params, "run"),
-                start_ms,
-                end_ms,
-                int(_require(params, "bucket_ms")),
-            ),
-        )
+    rl_overview = rl_run_handler("RL overview", rl_overview_dataset)
+    rl_sync_generation = rl_run_handler("RL generation", rl_sync_generation_dataset)
+    rl_sync_train_step = rl_run_handler("RL train step", rl_sync_train_step_dataset)
 
     def recent_rl_runs(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
