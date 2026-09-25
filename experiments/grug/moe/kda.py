@@ -350,7 +350,7 @@ def chunk_kda(
 def _sequential_chunk_recurrence(
     q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay, state, strict_upper, mm, scan_unroll
 ):
-    """Original serial ``lax.scan`` over chunks. Correct, but its depth is L/C
+    """Serial ``lax.scan`` over chunks. Correct, but its depth is L/C
     sequential steps -- latency-bound on GPU (see ``_parallel_chunk_recurrence``)."""
 
     def move_chunk_front(x: jax.Array) -> jax.Array:

@@ -6,9 +6,6 @@ layers and either sliding-window attention or KDA on the local layers."""
 
 import functools
 import math
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import equinox as eqx
@@ -21,6 +18,7 @@ from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 from experiments.grug.fast_track import model as model_module
 from experiments.grug.fast_track.heuristic import MoeHeuristic
@@ -322,12 +320,8 @@ def check_kma_train_steps() -> None:
 
 
 def test_kma_train_steps_are_finite():
-    env = {**os.environ, "JAX_PLATFORMS": "cpu", "XLA_FLAGS": "--xla_force_host_platform_device_count=2"}
-    script = (
+    run_on_cpu_devices(
         f"import sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); "
-        "import test_fast_track_attn_res as t; t.check_kma_train_steps()"
+        "import test_fast_track_attn_res as t; t.check_kma_train_steps()",
+        device_count=2,
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], env=env, cwd=Path(__file__).parents[2], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr[-4000:]

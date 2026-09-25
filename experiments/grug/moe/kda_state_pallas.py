@@ -34,6 +34,8 @@ from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
+from experiments.grug.moe.kda_prep_pallas import dot_f32
+
 f32 = jnp.float32
 
 
@@ -46,12 +48,6 @@ class StateConfig(NamedTuple):
     save_states: bool
 
 
-def _dot(a, b, trans_a=False, trans_b=False):
-    ca = 0 if trans_a else 1
-    cb = 1 if trans_b else 0
-    return lax.dot_general(a, b, (((ca,), (cb,)), ((), ())), preferred_element_type=f32)
-
-
 def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, h_ref, vnew_ref, st_ref):
     n = kw_ref.shape[0]
 
@@ -62,11 +58,11 @@ def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_r
 
     def body(i, s):
         h_ref[i] = s.astype(h_ref.dtype)
-        vn = vp_ref[i] - _dot(kcd_ref[i].astype(f32), s)
+        vn = vp_ref[i] - dot_f32(kcd_ref[i].astype(f32), s)
         vnew_ref[i] = vn
-        out = _dot(qi_ref[i].astype(f32), s) + _dot(attn_ref[i].astype(f32), vn)
+        out = dot_f32(qi_ref[i].astype(f32), s) + dot_f32(attn_ref[i].astype(f32), vn)
         out_ref[pl.ds(pl.multiple_of(i * c, c), c), :] = out.astype(out_ref.dtype)
-        return decay_ref[i][:, None] * s + _dot(kw_ref[i].astype(f32), vn, trans_a=True)
+        return decay_ref[i][:, None] * s + dot_f32(kw_ref[i].astype(f32), vn, trans_a=True)
 
     st_ref[...] = lax.fori_loop(0, n, body, s0_ref[...])
 
@@ -79,10 +75,10 @@ def _state_bwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, ds
         i = n - 1 - j
         ds_ref[i] = ds
         dout = dout_ref[pl.ds(pl.multiple_of(i * c, c), c), :].astype(f32)
-        dvn = _dot(attn_ref[i].astype(f32), dout, trans_a=True) + _dot(kw_ref[i].astype(f32), ds)
+        dvn = dot_f32(attn_ref[i].astype(f32), dout, trans_a=True) + dot_f32(kw_ref[i].astype(f32), ds)
         dvp_ref[i] = dvn
-        ds_in = decay_ref[i][:, None] * ds - _dot(kcd_ref[i].astype(f32), dvn, trans_a=True)
-        return ds_in + _dot(qi_ref[i].astype(f32), dout, trans_a=True)
+        ds_in = decay_ref[i][:, None] * ds - dot_f32(kcd_ref[i].astype(f32), dvn, trans_a=True)
+        return ds_in + dot_f32(qi_ref[i].astype(f32), dout, trans_a=True)
 
     ds0_ref[...] = lax.fori_loop(0, n, body, dst_ref[...])
 

@@ -4,9 +4,6 @@
 """fast_track stacked Muon: orthogonalizing same-shaped matrices of different leaves in one batched
 Newton-Schulz call gives the per-leaf directions."""
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import jax
@@ -14,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon
 
@@ -60,12 +58,8 @@ def check_bucketed_newton_schulz_matches_per_leaf() -> None:
 
 
 def test_bucketed_newton_schulz_matches_per_leaf():
-    env = {**os.environ, "JAX_PLATFORMS": "cpu", "XLA_FLAGS": "--xla_force_host_platform_device_count=2"}
-    script = (
+    run_on_cpu_devices(
         f"import sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); "
-        "import test_fast_track_muon_bucketing as t; t.check_bucketed_newton_schulz_matches_per_leaf()"
+        "import test_fast_track_muon_bucketing as t; t.check_bucketed_newton_schulz_matches_per_leaf()",
+        device_count=2,
     )
-    result = subprocess.run(
-        [sys.executable, "-c", script], env=env, cwd=Path(__file__).parents[2], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr[-4000:]

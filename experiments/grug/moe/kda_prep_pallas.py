@@ -77,7 +77,7 @@ def _iota2(n: int, dim: int) -> jax.Array:
     return lax.broadcasted_iota(jnp.int32, (n, n), dim)
 
 
-def _dot(a, b, trans_a=False, trans_b=False):
+def dot_f32(a, b, trans_a=False, trans_b=False):
     """fp32-accumulated 2-D matmul with optional operand transposes."""
     ca = 0 if trans_a else 1
     cb = 1 if trans_b else 0
@@ -85,7 +85,7 @@ def _dot(a, b, trans_a=False, trans_b=False):
 
 
 def _mm(a, b, mm_dtype, trans_a=False, trans_b=False):
-    return _dot(a.astype(mm_dtype), b.astype(mm_dtype), trans_a, trans_b)
+    return dot_f32(a.astype(mm_dtype), b.astype(mm_dtype), trans_a, trans_b)
 
 
 def _block_inverse(a, mm_dtype):
@@ -156,7 +156,7 @@ def _exact_mask_matmul(mask, x, trans_mask: bool = False):
     rest = x - hi.astype(f32)
     mid = rest.astype(jnp.bfloat16)
     lo = (rest - mid.astype(f32)).astype(jnp.bfloat16)
-    return sum(_dot(mask, part, trans_a=trans_mask) for part in (hi, mid, lo))
+    return sum(dot_f32(mask, part, trans_a=trans_mask) for part in (hi, mid, lo))
 
 
 def _doc_lower_mask(starts_ref):
