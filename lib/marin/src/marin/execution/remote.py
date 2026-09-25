@@ -56,14 +56,6 @@ class RemoteCallable(Generic[P, R]):
     pip_packages: list[str] | None = None
     name: str | None = None
 
-    def __repr__(self) -> str:
-        env_vars = {key: "<redacted>" for key in self.env_vars}
-        return (
-            f"RemoteCallable(fn={self.fn!r}, resources={self.resources!r}, env_vars={env_vars!r}, "
-            f"pip_dependency_groups={self.pip_dependency_groups!r}, pip_packages={self.pip_packages!r}, "
-            f"name={self.name!r})"
-        )
-
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
         if self.name:
