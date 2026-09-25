@@ -28,7 +28,7 @@ from experiments.post_training.curriculum_sft.pipeline import (
     curriculum_generation_steps,
     prepare_curriculum_chat_step,
 )
-from experiments.sft.launcher import ArtifactDatasetSpec, HFModel, SFTSpec, sft_step
+from experiments.sft.launcher import LLAMA3_CHAT_EOS_TOKEN_IDS, ArtifactDatasetSpec, HFModel, SFTSpec, sft_step
 
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
@@ -161,7 +161,7 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
             model_ref=f"{HF_MODEL}@{HF_REVISION}",
             tokenizer_path=HF_MODEL,
             model_type="snowball",
-            eos_token_ids=(128001, 128009),
+            eos_token_ids=LLAMA3_CHAT_EOS_TOKEN_IDS,
         ),
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=datasets,

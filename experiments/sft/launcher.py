@@ -112,6 +112,7 @@ _CHAT_CACHE_VERSION = "2026.07.17"
 _GPU_HOST_CPU_PER_DEVICE = 8
 _GPU_HOST_RAM_GB_PER_DEVICE = 96
 _GPU_HOST_DISK_GB_PER_DEVICE = 48
+LLAMA3_CHAT_EOS_TOKEN_IDS = (128001, 128009)  # <|end_of_text|> and <|eot_id|>
 
 
 @dataclass(frozen=True)
@@ -132,10 +133,9 @@ class DatasetSpec:
 
 @dataclass(frozen=True)
 class ArtifactDatasetSpec:
-    """Canonical OpenAI messages supplied by an upstream artifact.
+    """An artifact containing rows with canonical OpenAI ``messages``.
 
-    The artifact owns its schema conversion. ``train_glob`` selects its records,
-    allowing an existing Parquet preparation step to feed the shared chat trainer.
+    ``train_glob`` selects records within the artifact; ``slug`` names the mixture component.
     """
 
     slug: str
@@ -288,7 +288,7 @@ class HFModel:
     model_ref: str  # HF id or staged prepared-checkpoint dir
     tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
-    eos_token_ids: Sequence[int] = (128001, 128009)  # Delphi: <|end_of_text|> + <|eot_id|>
+    eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -338,7 +338,7 @@ class PreparedModel:
 
     step: ArtifactStep[Artifact]
     model_type: str = "qwen3"
-    eos_token_ids: Sequence[int] = (128001, 128009)
+    eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
         # The step's name is stable at graph-construction time; the output path is not yet known.
@@ -419,7 +419,7 @@ class ConvertedCheckpointModel:
     """
 
     conversion: HfToLevanterCheckpoint
-    eos_token_ids: Sequence[int] = (128001, 128009)
+    eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
         # The conversion emits the tokenizer; its step name is a stable construction-time id.
@@ -471,7 +471,7 @@ class LevanterCheckpointModel:
     init_from: str | ArtifactStep
     model: LmConfig
     tokenizer_path: str
-    eos_token_ids: Sequence[int] = (128001, 128009)
+    eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path
@@ -591,32 +591,19 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
 
 def _chat_mixture_data_config(
     spec: SFTSpec,
-    cache_dirs: Sequence[str],
+    components: Mapping[str, DatasetComponent],
     tokenizer: str,
     *,
-    build_component: Callable[[DatasetSpec | ArtifactDatasetSpec, str, ChatLmDatasetFormat], DatasetComponent],
     auto_build_caches: bool,
 ) -> LmDataConfig:
-    """The weighted chat mixture ``LmDataConfig`` shared by the auto-build and pre-built cache paths.
-
-    One component per dataset (``build_component`` turns a cache dir + the chat format into the
-    ``DatasetComponent`` — the two paths differ only in that source shape and in
-    ``auto_build_caches``). ``tokenizer`` is the resolved model tokenizer, so data and model stay
-    consistent.
-    """
-    fmt = _chat_format(spec)
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
-    for dataset, cache_dir in zip(spec.datasets, cache_dirs, strict=True):
-        components[dataset.slug] = build_component(dataset, cache_dir, fmt)
-        weights[dataset.slug] = dataset.weight
+    """Apply mixture weights to either raw-message or prebuilt-cache components."""
     return LmDataConfig(
         tokenizer=tokenizer,
         chat_template=spec.chat_template,  # data-level default; the component format overrides it
         enforce_eos=True,
         auto_build_caches=auto_build_caches,
-        components=components,
-        train_weights=weights,
+        components=dict(components),
+        train_weights={dataset.slug: dataset.weight for dataset in spec.datasets},
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
     )
 
@@ -628,18 +615,18 @@ def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: s
     Levanter builds the chat cache at train time.
     """
 
-    def build_component(
-        dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
-    ) -> DatasetComponent:
+    fmt = _chat_format(spec)
+    components: dict[str, DatasetComponent] = {}
+    for dataset, cache_dir in zip(spec.datasets, dep_paths, strict=True):
         train_glob = dataset.train_glob if isinstance(dataset, ArtifactDatasetSpec) else "**/*.jsonl.gz"
-        return DatasetComponent(
+        components[dataset.slug] = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, train_glob)]),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
         )
 
-    return _chat_mixture_data_config(spec, dep_paths, tokenizer, build_component=build_component, auto_build_caches=True)
+    return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=True)
 
 
 def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
@@ -649,19 +636,18 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     directly instead of rebuilding on the training pod.
     """
 
-    def build_component(
-        dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
-    ) -> DatasetComponent:
-        return DatasetComponent(
+    fmt = _chat_format(spec)
+    components = {
+        dataset.slug: DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
         )
+        for dataset, cache_dir in zip(spec.datasets, cache_paths, strict=True)
+    }
 
-    return _chat_mixture_data_config(
-        spec, cache_paths, tokenizer, build_component=build_component, auto_build_caches=False
-    )
+    return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=False)
 
 
 def _trainer(
