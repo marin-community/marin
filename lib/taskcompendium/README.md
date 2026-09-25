@@ -27,7 +27,7 @@ lower_to_harbor(spec, Rendering("plain", AnswerFormat.PLAIN), binding, Path("/tm
 lower_to_harbor(spec, Rendering("json", AnswerFormat.JSON), binding, Path("/tmp/arithmetic-json"))
 ```
 
-`VerifierSpec(kind, parameters)` is the private serialized form. Each `taskcompendium.verifiers` entry point names a kind and resolves to a zero-argument factory returning a frozen `VerifierHandler(payload_type, grade)`. The payload type is a `msgspec.Struct` that validates its own parameters. The grade function receives that typed payload plus a `GradingAttempt`. Validation loads the factory by kind before export or launch. An unknown kind or invalid parameters fail preflight; `Rendering` does not select the verifier. The current attempt carries a rendered answer and transcript. Script and judge handlers will need verifier-side resources and runtime context added to that input before they can run.
+`VerifierSpec(kind, parameters)` is the private serialized form. Each `taskcompendium.verifiers` entry point names a kind and resolves to a zero-argument factory returning a `VerifierHandler(payload_type, grade)`. The payload type is a frozen Pydantic model that validates its parameters. The grade function receives that typed payload plus a `GradingAttempt` containing the response, rendering, transcript, and Harbor's verifier-side environment. Validation loads the factory by kind before export or launch. An unknown kind or invalid parameters fail preflight; `Rendering` determines answer extraction but does not select the verifier. The exact-answer handler compares extracted text directly; other handlers may inspect the verifier-side environment.
 
 Run the Python-only package tests from the repository root:
 

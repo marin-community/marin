@@ -7,7 +7,7 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
-dependencies = ["msgspec>=0.18", "tasktrove-verify[answer]"]
+dependencies = ["pydantic>=2.0"]
 
 [project.entry-points."taskcompendium.verifiers"]
 exact_answer = "taskcompendium.grading:exact_answer_handler"
@@ -21,7 +21,6 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 [tool.uv.workspace]
 
 [tool.uv.sources]
-tasktrove-verify = { git = "https://github.com/marin-community/marin.git", rev = "b76d03131cd88bd9fc711dba206659027edba3a8", subdirectory = "lib/tasktrove-verify" }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 
 [tool.hatch.build.targets.wheel]

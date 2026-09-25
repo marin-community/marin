@@ -158,7 +158,7 @@ class SemanticVerifier(BaseVerifier):
             rendering = read_rendering(root / "rendering.json")
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_answer(specification, rendering, response)
+            result = grade_answer(specification, rendering, response, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
