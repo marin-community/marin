@@ -117,6 +117,26 @@ el('source-filter').onchange=renderSources;el('budget').oninput=renderAllocation
 el('classification-references').innerHTML=D.classification_references.map(r=>`<p><a href="${esc(r.url)}">${esc(r.name)}</a> — ${esc(r.use)}</p>`).join('');el('classification-review').innerHTML=D.classification_review.remaining_boundaries.map(t=>`<p>${esc(t)}</p>`).join('');
 el("budget").value=roots.length;
 __BENCHMARK_PAGES__
+function routePage() {
+  let parts;
+  try { parts = location.hash.slice(1).split('/').map(decodeURIComponent); }
+  catch { showPageError('The page link contains an invalid identifier.'); return; }
+  const [kind, benchmarkId, questionId] = parts;
+  if (['statistics', 'benchmarks', 'benchmark', 'question'].includes(kind)) {
+    renderBenchmarkRoute(parts);
+    return;
+  }
+  document.body.classList.remove('focus-view');
+  const section = !kind ? 'coverage' : kind;
+  if (!['coverage', 'plan', 'examples', 'sources', 'assets', 'method'].includes(section)) { showPageError('This page is not available.'); return; }
+  if (section === 'examples') renderExamples();
+  tab(section);
+  document.title = 'Biology tasks · Competency explorer';
+}
+
+window.addEventListener('hashchange', routePage);
+renderBenchmarkIndex();
+routePage();
 renderAreas();renderTree();renderExamples();renderSources();renderAssets();renderAllocation();
 </script>
 </body>

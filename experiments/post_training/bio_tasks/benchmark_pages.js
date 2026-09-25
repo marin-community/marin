@@ -53,7 +53,7 @@ function renderBenchmarkDirectory() {
   const benchmarks = D.benchmarks.filter(benchmark => benchmark.distribution === 'ID');
   const reviewed = benchmarks.filter(benchmark => benchmark.review);
   const included = reviewed.flatMap(includedQuestions);
-  el('benchmark-page').innerHTML = `<div class="breadcrumbs"><a href="${routeHref('coverage')}">Task explorer</a> / Benchmarks</div>
+  el('benchmark-page').innerHTML = `<div class="breadcrumbs"><a href="${routeHref('statistics')}">Categories</a> / Benchmarks</div>
     <h2 tabindex="-1">Benchmark questions</h2><p><a href="${routeHref('statistics')}">Global category rankings and benchmark contributions →</a></p>
     <p>${reviewed.length} inventoried ID releases · ${included.length.toLocaleString()} proposed verifiable framings. Skill labels are a provisional review aid, not validation credit. Source releases and shared protocols overlap.</p>
     <details><summary>How to use the categories</summary><p>A skill names an analysis operation; an application names its biological setting. Plan connected workflows from missing operations and decisions with executable outputs. Frequency is a signal, not a generation quota.</p>
@@ -170,46 +170,41 @@ function renderQuestion(benchmark, question) {
       `<p class="notice">${a?.disposition === 'unavailable' ? 'Source access gap' : 'Set aside'} · No skill labels assigned.</p><p>${esc(a?.reason || benchmark.inspection)}</p>`}
     <details class="set-aside"><summary>Source and inventory details</summary><p><a href="${esc(a?.source_url || question.source_url)}">Original source</a>
       ${benchmark.review_file ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.review_file, 'Editable annotations') : ''}</p>
-      <p>Workflow: ${esc(a?.workflow || question.family)}. Existing inventory mapping: ${esc(question.status)}.</p>
-      <p>Related authored recipes: ${esc(question.recipes.join(', ') || 'None mapped')}. ${a?.source_group ? 'Source group: ' + esc(a.source_group) + '.' : ''}</p>
+      <p>Workflow: ${esc(a?.workflow || question.family)}.</p>
+      ${a?.source_group ? '<p>Source group: ' + esc(a.source_group) + '.</p>' : ''}
       ${a?.source_question_sha256 ? `<p>Instruction SHA-256: <code class="hash-value">${esc(a.source_question_sha256)}</code></p>` : ''}</details>
     <div class="question-pagination">${previous ? `<a href="${questionHref(benchmark.id, previous.id)}">← Previous</a>` : '<span></span>'}
       <a href="${benchmarkHref(benchmark.id)}">All questions</a>${next ? `<a href="${questionHref(benchmark.id, next.id)}">Next →</a>` : '<span></span>'}</div>`;
 }
 
-function routePage() {
-  let parts;
-  try { parts = location.hash.slice(1).split('/').map(decodeURIComponent); }
-  catch { showPageError('The page link contains an invalid identifier.'); return; }
+function renderBenchmarkRoute(parts) {
   const [kind, benchmarkId, questionId] = parts;
-  if (kind === 'statistics' || kind === 'benchmarks' || kind === 'benchmark' || kind === 'question') {
-    if (kind === 'statistics') {
-      renderGlobalStatistics(benchmarkId || 'skills', questionId || ''); tab('benchmark-page'); document.title = 'Global categories · Biology tasks';
-    } else
-    if (kind === 'benchmarks') {
-      renderBenchmarkDirectory(); tab('benchmark-page'); document.title = 'Benchmark questions · Biology tasks';
+  if (kind === 'statistics') {
+    renderGlobalStatistics(benchmarkId || 'skills', questionId || '');
+    tab('benchmark-page');
+    document.title = 'Global categories · Biology benchmarks';
+  } else if (kind === 'benchmarks') {
+    renderBenchmarkDirectory();
+    tab('benchmark-page');
+    document.title = 'Benchmark questions · Biology benchmarks';
+  } else {
+    const benchmark = benchmarkById.get(benchmarkId);
+    if (!benchmark) { showPageError('This benchmark is not in the current inventory.'); return; }
+    if (kind === 'benchmark') {
+      renderBenchmark(benchmark);
+      tab('benchmark-page');
+      document.title = benchmark.name + ' · Biology benchmarks';
     } else {
-      const benchmark = benchmarkById.get(benchmarkId);
-      if (!benchmark) { showPageError('This benchmark is not in the current inventory.'); return; }
-      if (kind === 'benchmark') {
-        renderBenchmark(benchmark); tab('benchmark-page'); document.title = benchmark.name + ' · Biology skills';
-      } else {
-        const question = benchmark.questions.find(item => item.id === questionId);
-        if (!question) { showPageError('This question is not in the eligible inventory.'); return; }
-        renderQuestion(benchmark, question); tab('question-page'); document.title = question.id + ' · ' + benchmark.name;
-      }
+      const question = benchmark.questions.find(item => item.id === questionId);
+      if (!question) { showPageError('This question is not in the eligible inventory.'); return; }
+      renderQuestion(benchmark, question);
+      tab('question-page');
+      document.title = question.id + ' · ' + benchmark.name;
     }
-    document.body.classList.add('focus-view');
-    document.querySelector('.tab:not(.hidden) h2').focus({preventScroll: true});
-    window.scrollTo(0, 0);
-    return;
   }
-  document.body.classList.remove('focus-view');
-  const section = !kind ? 'coverage' : kind;
-  if (!['coverage', 'plan', 'examples', 'sources', 'assets', 'method'].includes(section)) { showPageError('This page is not available.'); return; }
-  if (section === 'examples') renderExamples();
-  tab(section);
-  document.title = 'Biology tasks · Competency explorer';
+  document.body.classList.add('focus-view');
+  document.querySelector('.tab:not(.hidden) h2').focus({preventScroll: true});
+  window.scrollTo(0, 0);
 }
 
 function showPageError(message) {
@@ -217,7 +212,3 @@ function showPageError(message) {
   tab('benchmark-page');
   document.body.classList.add('focus-view');
 }
-
-window.addEventListener('hashchange', routePage);
-renderBenchmarkIndex();
-routePage();

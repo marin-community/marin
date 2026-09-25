@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biology benchmarks and categories</title>
+<style>
+:root{--ink:#182c35;--muted:#586972;--line:#d9e2df;--paper:#fff;--teal:#006b60}*{box-sizing:border-box}body{margin:0;background:#fafbf8;color:var(--ink);font:15px/1.6 system-ui,sans-serif}main,.site-links{max-width:1100px;margin:auto;padding:20px 28px}.site-links{display:flex;gap:24px;border-bottom:1px solid var(--line);font-size:14px}.site-links a[aria-current=page]{font-weight:650;text-decoration-thickness:2px}a{color:var(--teal)}h2{font-size:22px;line-height:1.3;margin:0 0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}h2:focus{outline:none}h3{font-size:18px;margin-top:24px}h4{font-size:15px}p{max-width:90ch}.hidden{display:none}.breadcrumbs,.page-meta,.reference-note,.count-muted{font-size:13px;color:var(--muted)}.breadcrumbs{margin-bottom:12px}.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:18px 0}button,input,select{font:inherit;color:inherit}input,select,button{border:1px solid var(--line);border-radius:4px;background:var(--paper);padding:7px 10px}input[type=search]{flex:1;min-width:180px}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:2px solid var(--teal);outline-offset:2px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;vertical-align:top;padding:10px 8px;border-bottom:1px solid var(--line)}th{font-size:13px;color:var(--muted)}td{overflow-wrap:anywhere}.count-bar{display:flex;align-items:center;gap:12px;min-width:140px}.count-bar .bar-track{flex:1}.count-bar b{min-width:48px;text-align:right}.bar-track{display:block;background:#e7eeeb;height:10px;border-radius:2px}.bar-track>span{display:block;background:var(--teal);height:100%;border-radius:2px}.competency-bars{padding:6px;border:1px solid var(--line);border-radius:5px;background:var(--paper)}.competency-bar{display:grid;grid-template-columns:minmax(230px,2fr) minmax(80px,3fr) 38px;align-items:center;gap:12px;width:100%;border:0;text-align:left;font-size:14px;padding:7px 9px}.competency-bar:hover,.competency-bar[aria-pressed=true]{background:#edf2eb}.source-question{border:1px solid var(--line);background:var(--paper);border-radius:5px;padding:18px 20px;margin:18px 0 26px}.source-question p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;margin:10px 0 0;max-width:none}.eyebrow{text-transform:uppercase;font:600 11px/1.5 ui-monospace,monospace;letter-spacing:1px;color:var(--muted)}.competency-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.competency-card{border:1px solid var(--line);border-radius:5px;background:var(--paper);padding:12px}.competency-card h4{margin:0}.competency-card p{margin:6px 0 0;font-size:13px}.set-aside{margin-top:26px;padding-top:12px;border-top:1px solid var(--line)}details{margin:14px 0}summary{cursor:pointer}li{margin:5px 0}.notice{border-left:3px solid #a36620;padding:8px 14px}.hash-value{overflow-wrap:anywhere}.question-pagination{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:25px 0}.scope-note{border-left:2px solid var(--line);padding-left:16px}@media(max-width:700px){main,.site-links{padding:16px}.site-links{gap:20px}.competency-bar{grid-template-columns:minmax(150px,2fr) minmax(40px,1fr) 30px;gap:8px}.competency-cards{grid-template-columns:1fr}table{min-width:600px}}
+</style>
+</head>
+<body>
+<nav class="site-links" aria-label="Benchmark site">
+<a data-route="statistics">Categories</a><a data-route="benchmarks">Benchmarks</a><a data-route="sources">Sources</a>
+</nav>
+<main>
+<noscript>This site needs JavaScript to display its embedded benchmark inventories.</noscript>
+<section id="benchmark-page" class="tab"></section>
+<section id="question-page" class="tab hidden"></section>
+</main>
+<script>
+const D = __BIO_DATA__;
+const el = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const link = (path, label) => `<a href="${esc(D.github + path)}">${esc(label)}</a>`;
+function tab(id) { document.querySelectorAll('.tab').forEach(section => section.classList.toggle('hidden', section.id !== id)); }
+__BENCHMARK_PAGES__
+function renderSourceRegister() {
+  el('benchmark-page').innerHTML = `<h2 tabindex="-1">Benchmark sources</h2><p>ID sources inform the category review. OOD sources retain their exclusions; their question content is not imported.</p>
+    <div class="toolbar"><label for="source-filter">Distribution</label><select id="source-filter"><option value="all">All sources</option><option value="ID">Provisional ID</option><option value="OOD">OOD · excluded</option></select></div>
+    <div id="source-table" class="table-scroll"></div>`;
+  const render = () => {
+    const filter = el('source-filter').value;
+    const sources = D.benchmarks.filter(source => filter === 'all' || source.distribution === filter);
+    el('source-table').innerHTML = `<table><thead><tr><th>Benchmark release</th><th>Distribution</th><th>Source access</th></tr></thead><tbody>${sources.map(source => `<tr><td><a href="${benchmarkHref(source.id)}">${esc(source.name)}</a><br><a href="${esc(source.source_url)}">Original source</a></td><td>${esc(source.distribution)}</td><td>${esc(source.inspection)}</td></tr>`).join('')}</tbody></table>`;
+  };
+  el('source-filter').onchange = render;
+  render();
+  tab('benchmark-page');
+  document.title = 'Sources · Biology benchmarks';
+}
+function routePage() {
+  let parts;
+  try { parts = location.hash.slice(1).split('/').map(decodeURIComponent); }
+  catch { showPageError('The page link contains an invalid identifier.'); return; }
+  if (!parts[0]) parts[0] = 'statistics';
+  const kind = parts[0];
+  if (kind === 'sources') renderSourceRegister();
+  else if (['statistics', 'benchmarks', 'benchmark', 'question'].includes(kind)) renderBenchmarkRoute(parts);
+  else { showPageError('This page is not available.'); return; }
+  const selected = ['benchmark', 'question'].includes(kind) ? 'benchmarks' : kind;
+  document.querySelectorAll('.site-links a').forEach(anchor => {
+    if (anchor.dataset.route === selected) anchor.setAttribute('aria-current', 'page');
+    else anchor.removeAttribute('aria-current');
+  });
+  document.querySelector('.tab:not(.hidden) h2').focus({preventScroll: true});
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('.site-links a').forEach(anchor => { anchor.href = routeHref(anchor.dataset.route); });
+window.addEventListener('hashchange', routePage);
+routePage();
+</script>
+</body>
+</html>

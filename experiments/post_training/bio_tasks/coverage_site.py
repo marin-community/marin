@@ -17,6 +17,7 @@ from experiments.post_training.task_curriculum.models import Curriculum
 SOURCE = Path(__file__).parent
 REPO = SOURCE.parents[2]
 SITE = REPO / "docs/experiments/bio-task-coverage.html"
+BENCHMARK_SITE = REPO / "docs/experiments/bio-benchmarks.html"
 BENCHMARK_REVIEW = REPO / "docs/experiments/bixbench-verified-competencies.md"
 CATEGORY_REVIEW = REPO / "docs/experiments/bio-benchmark-categories.md"
 GITHUB = "https://github.com/marin-community/marin/blob/codex/bio-task-generators/"
@@ -412,6 +413,7 @@ def site_data() -> dict:
         "vendor/d3-hierarchy-3.1.2.min.js",
         "vendor/d3-hierarchy-LICENSE",
         "benchmark_pages.js",
+        "benchmark_site.html",
         "benchmark_competencies/taxonomy.json",
         *benchmark_inputs,
     ]
@@ -449,9 +451,19 @@ def main() -> None:
         .replace("__D3_LICENSE__", (SOURCE / "vendor/d3-hierarchy-LICENSE").read_text())
         .replace("__BENCHMARK_PAGES__", (SOURCE / "benchmark_pages.js").read_text())
     )
+    benchmark_data = {key: data[key] for key in ("github", "benchmarks", "review_taxonomy", "category_statistics")}
+    benchmark_payload = json.dumps(benchmark_data, separators=(",", ":"), ensure_ascii=True).replace("<", "\\u003c")
+    benchmark_rendered = (
+        (SOURCE / "benchmark_site.html")
+        .read_text()
+        .replace("__BIO_DATA__", benchmark_payload)
+        .replace("__BENCHMARK_PAGES__", (SOURCE / "benchmark_pages.js").read_text())
+    )
     markdown = benchmark_markdown(load_benchmark_review("benchmark_competencies/bixbench-verified-50.json"))
     categories = category_markdown(data["category_statistics"])
     if args.check:
+        if BENCHMARK_SITE.read_text() != benchmark_rendered:
+            raise ValueError("Benchmark site is stale; rerun this module without --check")
         if CATEGORY_REVIEW.read_text() != categories:
             raise ValueError("Global category Markdown is stale; rerun this module without --check")
         if SITE.read_text() != rendered:
@@ -460,9 +472,11 @@ def main() -> None:
             raise ValueError("Benchmark review Markdown is stale; rerun this module without --check")
     else:
         SITE.write_text(rendered)
+        BENCHMARK_SITE.write_text(benchmark_rendered)
         BENCHMARK_REVIEW.write_text(markdown)
         CATEGORY_REVIEW.write_text(categories)
-    print(f"{'Checked' if args.check else 'Wrote'} {SITE.relative_to(REPO)} ({len(rendered):,} bytes)")
+    for path, content in ((SITE, rendered), (BENCHMARK_SITE, benchmark_rendered)):
+        print(f"{'Checked' if args.check else 'Wrote'} {path.relative_to(REPO)} ({len(content):,} bytes)")
 
 
 if __name__ == "__main__":
