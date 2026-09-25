@@ -6,7 +6,7 @@ An independently controlled harness validates each candidate. An authoring or ch
 
 ## Required evidence
 
-1. **Scientific contract and data eligibility.** Check the question, experimental units, estimable comparisons, provenance and complete outputs. Confirm [publication eligibility](storage.md#release-eligibility) before release.
+1. **Scientific contract and data eligibility.** Check the question, experimental units, estimable comparisons, provenance and complete outputs. Verify the recipe's predeclared data-adequacy criteria on the delivered inputs and record the results, including any subset adaptations. Confirm [publication eligibility](storage.md#release-eligibility) before release, following the earlier pre-build screening.
 2. **Fresh sandbox execution.** Build the pinned environment and run the native reference from task inputs under the declared [resources](requirements.md#daytona-sandbox-resources). Validate workflow execution, not just package loading.
 3. **Reference and grader repeatability.** Check native-reference reproducibility separately from repeated grading of identical artifacts. Require the same reward for identical submissions.
 4. **Independent checks.** Use independent calculations, parsers or invariants where feasible. Record any assumptions or code shared with the reference, so shared-bug risk is visible.

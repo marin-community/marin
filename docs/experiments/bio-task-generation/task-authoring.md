@@ -55,6 +55,7 @@ For each selected boundary, stage compatible upstream artifacts, expose meaningf
 | --- | --- |
 | Question and boundary | Scientific result sought and the supplied starting stage |
 | Input data | Observed/adapted/simulated provenance; accessions or simulator/version; units, dimensions, transformations and redistribution terms |
+| Data adequacy | Recipe-specific design, coverage and quality checks, with rejection criteria defined before selecting a subset or computing expected outputs |
 | Required work | Target capabilities, scientific decisions and operations the solver performs |
 | Outputs | Complete artifacts, identities, units and necessary intermediate evidence |
 | Reference | An input-reading script running the actual packages |
@@ -79,6 +80,8 @@ Every instance needs validation. Preserve biological replication and estimable c
 
 Subsetting is a standard authoring technique for fitting realistic workflows into the sandbox. Consider reads, samples, features or reference regions according to the task's objective. Preserve paired reads and required design structure; declare the subset and any narrowed scientific scope. Pin the selection procedure, seed where used, source asset and resulting hashes, then recompute expected results on the subset. Measure both resource use and scientific adequacy. Several subsets of one study retain shared lineage, and changing subset seeds alone does not establish recipe breadth.
 
+Define adequacy criteria for the recipe before selecting a subset. Depending on the question, these might check usable counts, retained feature coverage, biological replication or design estimability. Record their results on the delivered inputs and reject or revise inadequate candidates. Criteria need not require significant effects or universal numerical thresholds; do not select subsets merely because they produce a desired conclusion.
+
 ## Recipe variation and instance relationships
 
 For each recipe, specify the target capabilities, eligible inputs and prerequisites, permitted variation axes, scientific validity constraints, and how the reference and verifier are constructed for every instance. State which decisions remain constant and which change across instances.
@@ -92,9 +95,10 @@ This metadata lets downstream users group instances by shared studies, inputs or
 ## Build and orchestration
 
 1. Consume an inspected source record and structured proposal. Deduplicate by workflow, study and scientific question.
-2. Give one candidate to an authoring worker in an isolated workspace. It produces instructions, input manifest, pinned environment, executable reference and grader.
-3. Submit the candidate to the independently controlled [validation process](validation.md). The author cannot accept its own task by editing a validation record.
-4. Record failures and repair or reject the candidate. Release accepted artifacts through the [publication process](storage.md).
+2. Screen source-record license and access information for obvious publication blockers before building. Reject incompatible inputs or hold candidates whose eligibility needs clarification. This lightweight check does not replace final release-eligibility validation.
+3. Give one candidate to an authoring worker in an isolated workspace. It produces instructions, input manifest, pinned environment, executable reference and grader.
+4. Submit the candidate to the independently controlled [validation process](validation.md). The author cannot accept its own task by editing a validation record.
+5. Record failures and repair or reject the candidate. Release accepted artifacts through the [publication process](storage.md).
 
 Use bounded parallel workers and resumable candidate states when implementation starts. Cache source inputs and environments, avoid duplicate downloads, and record authoring cost, validation time and rejection causes. Model, concurrency, budget and repair limits remain to be decided. This design does not launch workers.
 
