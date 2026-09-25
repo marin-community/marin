@@ -67,12 +67,10 @@ def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[BaseModel], BaseM
 
 
 def validate_verifier(verifier: VerifierSpec) -> None:
-    """Check a private verifier before export or launch, independent of submission convention."""
     _resolved(verifier)
 
 
 def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResult:
-    """Dispatch an attempt by its private verifier kind."""
     handler, payload = _resolved(specification.verifier)
     return handler.grade(payload, attempt)
 
@@ -80,7 +78,6 @@ def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResu
 def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, response: str | None, environment: object
 ) -> GradeResult:
-    """Extract and score a response through the verifier registry."""
     return grade_attempt(specification, GradingAttempt(convention, response, environment))
 
 
