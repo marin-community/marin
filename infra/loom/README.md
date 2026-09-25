@@ -132,7 +132,7 @@ reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
 The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
 `agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
-with a small concurrency cap and turn budget, so description rewrites never
+with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
 consume the shared automation pool. The remaining GitHub agent workflows have
 individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
@@ -151,6 +151,9 @@ runtime, and the effective text remains inspectable in Settings. The production
 ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
+
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only
