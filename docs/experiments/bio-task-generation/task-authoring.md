@@ -4,6 +4,14 @@
 
 Turn inspected scientific use cases into Harbor tasks. Optimize for using established tools: analysis scripts, metadata handling, method configuration and connected scientific decisions. Release-note bug fixes and new algorithm implementation are not the initial target.
 
+## Tool use and tool creation
+
+The initial goal is an agent that uses bioinformatics tools to answer scientific questions. For every candidate unit, record its source location and provisional boundary, such as a function, cell group or workflow rule, then classify whether it uses existing tools, implements a tool, or combines both. Detailed extraction rules remain a separate work item. Separately state what the proposed task requires the solver to do. A tool implementation can supply an API to use without becoming an implementation assignment.
+
+Tool use includes selecting and configuring methods, calling packages, connecting stages and writing analysis or data-handling code. Writing a function to run an existing differential-expression package can be tool use; implementing the package's statistical method is tool creation. The scientific objective and required work determine this distinction, not whether the answer contains code or a function definition.
+
+Inspect units within repositories. One repository can contain library internals, analysis functions, tutorials and complete workflows. Notebooks and workflow rules are promising places to find tool use, but inspect their contents: they can also define new methods. For functions and classes, inspect their bodies, call sites and examples to distinguish analysis code from tool implementation. Prioritize units that support using existing tools; defer tasks whose main objective is building or modifying the tools themselves. For mixed units, identify a tool-use task boundary and supply the tool implementation as a solver-accessible package or source file where feasible. Record what is supplied and what the solver must write, configure or execute.
+
 ## Task units
 
 Use two independent categorization axes: **scientific context** (for example, transcriptomics) and **operation** (for example, statistical inference). Single-cell can be an additional tag. Assign operations only when a task requires and verifies that work; receiving precomputed clusters does not establish clustering coverage.
@@ -53,7 +61,7 @@ For each selected boundary, stage compatible upstream artifacts, expose meaningf
 
 Define how to identify candidate recipes from functions, methods, entire classes, individual cells or chunks, connected groups of cells, and complete notebooks or analysis documents. Cover multiple languages and formats, including Python and R, Jupyter notebooks, R Markdown and Quarto. The extraction rules and recipe boundaries for these artifacts remain to be designed.
 
-Compare tasks that ask the solver to use existing code, compose operations or implement specified functionality against the project's scientific-analysis goal. Determine when an artifact supports a useful focused task, when several artifacts should form an integrated task, and when code only supplies setup or implementation details. Include dependencies and hidden state, meaningful instance variation, and deterministic verification in that design.
+Apply the [tool-use priority](#tool-use-and-tool-creation) when designing these extraction rules. Determine when an artifact supports a useful focused task, when several artifacts should form an integrated task, and when code only supplies setup or implementation details. Include dependencies and hidden state, meaningful instance variation, and deterministic verification in that design.
 
 Use the [pipeline development testbed](index.md#pipeline-development-testbed) to develop and review these rules. Revisit the [Scanpy example](examples/transcriptomics.md#scanpy-focused-and-integrated-recipes) and select additional examples that expose different languages, document formats or code organization. Record source-specific examples as the rules are developed; this work item does not establish recipes or validated tasks.
 
@@ -64,7 +72,7 @@ Use the [pipeline development testbed](index.md#pipeline-development-testbed) to
 | Question and boundary | Scientific result sought and the supplied starting stage |
 | Input data | Observed/adapted/simulated provenance; accessions or simulator/version; units, dimensions, transformations and redistribution terms |
 | Data adequacy | Recipe-specific design, coverage and quality checks, with rejection criteria defined before selecting a subset or computing expected outputs |
-| Required work | Target capabilities, scientific decisions and operations the solver performs |
+| Required work | Target capabilities, scientific decisions and operations the solver performs; source-unit role (tool use, tool creation or mixed), whether the solver uses or creates tools, and which code is supplied versus left for the solver |
 | Outputs | Complete artifacts, identities, units and necessary intermediate evidence |
 | Reference | An input-reading script running the actual packages |
 | Verification | Acceptance criteria, tolerances, valid alternatives and incorrect-output controls |
