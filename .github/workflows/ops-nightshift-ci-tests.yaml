@@ -32,9 +32,13 @@ jobs:
           idempotency-key: nightshift-ci-tests:${{ github.run_id }}:${{ github.run_attempt }}
           title: "Nightshift CI audit ${{ github.run_id }}"
           goal: >-
-            Audit recent CI tests in ${{ github.repository }}. Use the selection
-            policy in infra/cron/nightshift_ci_tests.py and current GitHub runs
-            to identify a concrete flaky or broken test. Make a bounded fix and
-            follow the commit and PR workflow if the evidence supports one.
-            Do not invoke the legacy Claude runner. Publish a typed result.
+            Audit the last five completed main-branch runs of Marin - Unit and
+            Marin - Integration in ${{ github.repository }}. Use test logs to
+            find tests failing in at least two runs or taking at least 60
+            seconds in at least two runs. Treat instability as a hypothesis;
+            verify the test's purpose and failure cause before changing it.
+            Choose one high-value test or a coherent pair. Preserve useful
+            coverage and assertions. Follow AGENTS.md, TESTING.md, and the
+            commit skill; open a PR with agent-generated and nightshift labels
+            only for a supported fix. Publish a typed result either way.
           base: ${{ github.sha }}

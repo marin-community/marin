@@ -32,9 +32,13 @@ jobs:
           idempotency-key: nightshift-cleanup:${{ github.run_id }}:${{ github.run_attempt }}
           title: "Nightshift cleanup ${{ github.run_id }}"
           goal: >-
-            Run the nightshift cleanup for ${{ github.repository }}. Inspect the
-            policy and candidate-selection logic in infra/cron/nightshift_cleanup.py,
-            select a bounded useful cleanup, and carry it through the commit and
-            PR workflow. Do not invoke the legacy Claude runner. Publish a typed
-            result with the PR URL or the reason no change was warranted.
+            Run a bounded cleanup in ${{ github.repository }}. Inspect
+            lib/marin/src/marin, lib/iris/src/iris, lib/zephyr/src/zephyr, and
+            lib/levanter/src/levanter for a concrete bug, unused code,
+            duplicated nontrivial policy, or unnecessary runtime work. Choose
+            one coherent improvement whose value is clear from the diff. Avoid
+            style-only refactors and trivial helper extraction. Follow AGENTS.md
+            and the commit skill; open a PR with agent-generated and nightshift
+            labels only if the change is justified. Publish a typed result with
+            the PR URL or what was checked when no change was warranted.
           base: ${{ github.sha }}

@@ -32,9 +32,12 @@ jobs:
           idempotency-key: nightshift-doc-drift:${{ github.run_id }}:${{ github.run_attempt }}
           title: "Nightshift docs audit ${{ github.run_id }}"
           goal: >-
-            Audit documentation drift in ${{ github.repository }} using the
-            scope and candidate policy in infra/cron/nightshift_doc_drift.py.
-            Verify discrepancies against current code, then follow the commit
-            and PR workflow for supported corrections. Do not invoke the legacy
-            Claude runner. Publish a typed result.
+            Audit one subfolder of docs/ in ${{ github.repository }}. If it has
+            fewer than three Markdown files, include its parent folder. Check
+            code references, examples, internal links, and configuration
+            options against current code. Fix meaningful drift under AGENTS.md
+            and the update-docs and commit skills. Open a PR with agent-generated
+            and nightshift labels for a supported correction; file an issue
+            for larger documented gaps. Publish a typed result, including what
+            was checked if no change was warranted.
           base: ${{ github.sha }}
