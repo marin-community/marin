@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-SCHEMA_VERSION = "0.5"
+SCHEMA_VERSION = "0.3"
 
 
 class AnswerType(StrEnum):

@@ -263,8 +263,7 @@ def test_registered_grader_receives_verifier_environment(specification, monkeypa
     assert result == GradeResult(Outcome.GRADED, 1.0)
 
 
-@pytest.mark.parametrize("schema_version", ["0.1", "0.2", "0.3", "0.4"])
-def test_old_task_spec_schema_is_rejected_on_read(tmp_path, specification, schema_version):
+def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
     task = lower_to_harbor(
         specification,
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
@@ -273,10 +272,11 @@ def test_old_task_spec_schema_is_rejected_on_read(tmp_path, specification, schem
     )
     path = task / "specification.json"
     payload = json.loads(path.read_text())
-    payload["schema_version"] = schema_version
+    payload["schema_version"] = "0.1"
+    payload["verifier"] = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValueError, match=rf"Unsupported TaskSpec schema: {schema_version}"):
+    with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
         read_specification(path)
 
 
