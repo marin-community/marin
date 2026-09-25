@@ -1,7 +1,7 @@
 ---
 name: lint-review
 description: Run the read-only infra/lint PR reporter only when invoked by CI or explicitly requested; do not select it for the commit workflow's fix-and-respond review.
-allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*)
 ---
 
 # Skill: Lint-catalog review on a PR
@@ -73,9 +73,9 @@ unforgivable error; so is fabricating one.
    here regardless.)
 
 5. **Post inline comments.** With `--comment` and findings present, for **each**
-   finding post one inline comment with
-   `mcp__github_inline_comment__create_inline_comment`, the
-   finding's `path` and `line`, and a body of exactly this shape:
+   finding post one inline review comment on the head commit, using the GitHub
+   tools available in your session, at the finding's `path` and `line`, with a
+   body of exactly this shape:
 
    ```
    🤖 `ml-<code>` · confidence <confidence>
@@ -88,8 +88,8 @@ unforgivable error; so is fabricating one.
    The `<message>` is copied verbatim from the finding. Post one comment per
    finding; never post two comments for the same finding.
 
-6. **Handle un-anchorable findings.** The inline-comment tool rejects a line that
-   is not part of the PR diff (it raises a validation error). A finding can land
+6. **Handle un-anchorable findings.** GitHub rejects an inline comment on a line
+   that is not part of the PR diff. A finding can land
    on such a line — e.g. the holistic `meta` lane anchors on context outside the
    added hunks. When a post fails for that reason, **do not abort**: record that
    finding and keep going through the rest.
