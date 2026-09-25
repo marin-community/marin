@@ -576,15 +576,13 @@ def _store(clock: str) -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture
-def store() -> duckdb.DuckDBPyConnection:
-    """A synchronised run: worker spans measure execution and ship as ``*_wall``."""
-    return _store("wall")
+def store(request) -> duckdb.DuckDBPyConnection:
+    """A synchronised run, whose worker spans ship as ``*_wall``. A test parametrized with "launch"
+    gets an unsynchronised run, whose worker spans ship as ``*_launch``."""
+    return _store(getattr(request, "param", "wall"))
 
 
-@pytest.fixture
-def launch_store() -> duckdb.DuckDBPyConnection:
-    """An unsynchronised run: the same spans measure launch and ship as ``*_launch``."""
-    return _store("launch")
+BOTH_CLOCKS = pytest.mark.parametrize("store", ["wall", "launch"], indirect=True)
 
 
 # The shared RL panels live in dashboards/panels/rl_*.json and are mounted by panelRef, so
@@ -812,6 +810,7 @@ def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> Non
     assert {round(share, 4) for share in shares.values()} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
 
 
+@BOTH_CLOCKS
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
     # A NULL policy_ppo_train on the fast rank. Finelog sorts NULLs first under DESC, so without
     # NULLS LAST this row would make rank 0 the slowest.
@@ -848,6 +847,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "the fixture no longer separates r* from a per-phase maximum"
 
 
+@BOTH_CLOCKS
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
     rows = _panel_rows(store, "policy_ppo_train spread across ranks")
 
@@ -862,6 +862,7 @@ def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store
     assert rows == expected
 
 
+@BOTH_CLOCKS
 def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
     micro = _panel_rows(store, "policy_train ÷ micro-step count")
     assert micro == [(t, pytest.approx(DRIVER_PHASES["policy_train"] / 64.0), pytest.approx(64.0)) for t in BUCKET_TIMES]
@@ -908,32 +909,6 @@ def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(
 
     assert waiting, "the panel still reports a bucket per step; only the share is unknown"
     assert {value for _, value in waiting} == {None}, f"a missing barrier span read as a share: {waiting}"
-
-
-def test_the_worker_panels_read_whichever_clock_the_sink_stamped(launch_store) -> None:
-    """A run made without ``policy_train_spans_synchronize`` ships ``*_launch`` and nothing else.
-
-    Naming ``exclusive_wall`` alone renders all four worker panels empty on every such run, which
-    is indistinguishable from a producer that stopped publishing — and every arm of this campaign
-    ran unsynchronised.
-    """
-    bands = {
-        series: seconds for _, series, seconds in _panel_rows(launch_store, "policy_ppo_train spans on the slowest rank")
-    }
-    assert bands["policy_backward"] == pytest.approx(WORKER_SPANS[CRITICAL_RANK]["policy_backward"])
-    assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
-
-    skew = _panel_rows(launch_store, "policy_ppo_train spread across ranks")
-    assert [(t, slowest) for t, slowest, _, _, _ in skew] == [
-        (t, pytest.approx(seconds[-1])) for t, seconds in BUCKET_PPO_TRAIN.items()
-    ]
-
-    ratio = _panel_rows(launch_store, "policy_backward ÷ policy_forward on the slowest rank")
-    expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
-    assert {round(value, 6) for _, value in ratio} == {round(expected, 6)}
-
-    waiting = _panel_rows(launch_store, "Barrier and all-reduce share on the slowest rank")
-    assert {value for _, value in waiting} != {None}
 
 
 def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store) -> None:
@@ -1073,36 +1048,16 @@ def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
 
 
 def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(store) -> None:
-    """Three things decide whether anything below can be read, and all three are invisible in a
-    duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
-    step ended in a failure -- a failed step renders exactly like a fast one."""
-    rows = _panel_rows(store, "Span coverage: clock domain, ranks, failed steps")
-
-    by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
-    assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
-    # Absent, not zero: the driver sink has no concept of a rank, and "0" reads as "the workers
-    # are silent". The same distinction is why failed_steps is null until a row carries an outcome.
-    assert by_sink[("trainer", "inclusive_wall")][0] is None, "driver rows carry no rank"
-    # The retried attempt's repeat of a step is a step of its own.
-    assert by_sink[("trainer", "critical_path")] == (None, BUCKETS + 1, 1)
-    # Only the critical-path sink stamps an outcome, so every other sink reports failed steps as
-    # unknown rather than as none -- a zero there would claim no step failed.
-    assert {failed for (_, clock), (_, _, failed) in by_sink.items() if clock != "critical_path"} == {None}
-
-
-def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows(store) -> None:
-    """No run publishes both today, because the synchronise flag is fixed for its lifetime. If one
-    ever does, the panels below would average execution time against launch time into one series,
-    and this table is where that becomes visible rather than a number that quietly moved."""
-    store.execute(
-        """UPDATE "telemetry_v1.marinskyrl"
-           SET attributes_json = replace(attributes_json, 'exclusive_wall', 'exclusive_launch')
-           WHERE seq >= 3 AND json_extract_string(attributes_json, '$.role') = 'worker'"""
-    )
-    rows = _panel_rows(store, "Span coverage: clock domain, ranks, failed steps")
-
-    worker_clocks = {clock for role, clock, *_ in rows if role == "worker"}
-    assert worker_clocks == {"exclusive_wall", "exclusive_launch", "inclusive_wall"}
+    """Which clock each sink stamped, whether any worker reported, and whether a step failed are all
+    invisible in a duration. Each clock domain is its own row, so a run that mixed two shows both."""
+    steps = BUCKETS + 1  # the retried attempt's repeat of a step is a step of its own
+    assert _panel_rows(store, "Span coverage: clock domain, ranks, failed steps") == [
+        ("trainer", "critical_path", None, steps, 1),
+        ("trainer", "exclusive_wall", None, steps, None),
+        ("trainer", "inclusive_wall", None, steps, None),
+        ("worker", "exclusive_wall", len(WORKER_SPANS), steps, None),
+        ("worker", "inclusive_wall", len(WORKER_SPANS), steps, None),
+    ]
 
 
 def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
