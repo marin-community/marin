@@ -217,11 +217,11 @@ def solve_text_shard(
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/text_chars", chars)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/clusters", clusters)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicates", duplicates)
-    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/solve_seconds_milli", int((time.monotonic() - started) * 1000))
+    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/solve_milliseconds", int((time.monotonic() - started) * 1000))
 
 
 def _write_markers(file_idx: int, records: Iterator[dict[str, Any]], output_path: str) -> dict[str, Any]:
-    """Write one shard's markers into the co-partitioned attribute tree."""
+    """Write one marker shard and return its file index, row count, and write result."""
     shards: dict[int, ClusterTextShard] = zephyr_worker_ctx().get_shared(_SHARED_SHARDS_KEY)
     shard = shards[file_idx]
     path = prefix_join(_attr_dir(output_path, shard.source_tag), shard.basename)
@@ -252,33 +252,20 @@ def verify_cluster_text(
     """Solve a materialized cluster-text dataset and write duplicate markers.
 
     Args:
-        cluster_text: Root of the grouped text: ``text/*.parquet`` beside the
-            ``manifest.json`` that names every normalized shard.
-        output_path: Root of the attribute tree to write.
-        params: The duplicate rule, recorded on the result.
-        limits: Text limits and batch boundaries, recorded on the result.
-        max_workers: Worker limit. Defaults to one worker per map task.
-        worker_resources: Shape of one worker.
-        map_task_resources: Shape of one solving task.
-        reduce_task_resources: Shape of one marker-writing task.
-        files_per_task: Grouped text files solved by one map task. Every reducer
-            reads every map task's chunk, so the shuffle costs the product of the
-            two counts: one file per task made 65,536 mappers against 8,192
-            reducers, and each reducer opened all 65,536 chunks to find its
-            120 MB slice. Grouping the map side divides that product without
-            changing the result.
-        reduce_shards: Reduce tasks. Markers are ~380 bytes and total about a
-            terabyte, so a reducer holds a few hundred megabytes whatever this
-            is; it exists to bound the fan-in, not to fit memory.
-        max_shard_failures: Attempts one shard gets before the pipeline aborts.
-            Zephyr defaults to 3, which is too few here: one reduce attempt
-            opens every mapper's chunk, so the wave issues millions of requests
-            and a brief object-store outage lands on several shards at once. The
-            first production run died that way with seven shards out of 2,048
-            exhausted, having already written most of its markers.
+        cluster_text: Root of a completed cluster-text artifact.
+        output_path: Root of the co-partitioned marker output.
+        params: Duplicate rule that the result records.
+        limits: Document and cluster text limits that the result records.
+        max_workers: Worker limit. The default is the number of input task groups.
+        worker_resources: Resources for each worker.
+        map_task_resources: Resources for each solve task.
+        reduce_task_resources: Resources for each marker-write task.
+        files_per_task: Number of grouped text files in each map task.
+        reduce_shards: Maximum number of output reduce shards.
+        max_shard_failures: Failure limit for each pipeline shard.
 
     Returns:
-        The marker attribute tree, one directory per source key.
+        Metadata for the co-partitioned marker artifact.
     """
     success_path = prefix_join(cluster_text, CLUSTER_TEXT_SUCCESS_FILENAME)
     if not StoragePath(success_path).exists():
