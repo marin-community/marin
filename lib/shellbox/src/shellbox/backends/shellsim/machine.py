@@ -56,13 +56,13 @@ class ShellSimShellSession:
     async def read(
         self, *, wait: float = 0, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
-        raise UnsupportedMachineSpec("ShellSim completes each Bash action; BashRead is unavailable")
+        raise UnsupportedMachineSpec("ShellSim completes each Bash action; no command remains to read")
 
     async def write(self, data: bytes) -> None:
-        raise UnsupportedMachineSpec("ShellSim has no interactive stdin; BashInput is unavailable")
+        raise UnsupportedMachineSpec("ShellSim has no interactive stdin")
 
     async def interrupt(self) -> None:
-        raise UnsupportedMachineSpec("ShellSim has no live foreground action; BashInterrupt is unavailable")
+        raise UnsupportedMachineSpec("ShellSim has no live foreground action to interrupt")
 
     async def close(self) -> None:
         return

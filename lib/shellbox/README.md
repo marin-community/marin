@@ -86,7 +86,7 @@ With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable 
 
 ## ShellSim backend
 
-ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The `shellsim` extra pins the tested ShellSim 0.1.10 release. Select it in a Harbor job:
+ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The `shellsim` extra accepts ShellSim releases from 0.1.17 to before 0.2. Select it in a Harbor job:
 
 ```yaml
 environment:
