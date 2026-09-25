@@ -211,7 +211,10 @@ def test_june_hf_mapping_roundtrip_preserves_weights_and_forward():
         loaded = config.build(model.Vocab, key=jax.random.PRNGKey(9)).from_state_dict(tensors)
         for source, restored in zip(_arrays(model), _arrays(loaded), strict=True):
             np.testing.assert_array_equal(source, restored)
-        serving_config = SnowballConfig.from_hf_config(config.to_hf_config(config.vocab_size))
+        serving_config = dataclasses.replace(
+            SnowballConfig.from_hf_config(config.to_hf_config(config.vocab_size)),
+            attention_implementation="reference",
+        )
         serving = serving_config.build(model.Vocab, key=jax.random.PRNGKey(3)).from_state_dict(tensors)
         tokens, _, _ = _inputs()
         # Unpadded inputs exercise shared HF semantics without the serving snapshot's mask limitation.

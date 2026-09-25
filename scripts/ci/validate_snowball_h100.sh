@@ -6,6 +6,7 @@ job_name="${1:?usage: validate_snowball_h100.sh JOB_NAME}"
 # Sync both GPU extras once. marin-core selects the cu128 Torch wheel and Iris
 # restores JAX's CUDA 13 libraries after sync. A later uv sync undoes that order.
 # Limit pytest's automatic worker count to the one assigned GPU.
+# Exact scoring/AD comparisons require deterministic GPU reductions.
 uv run iris --cluster=marin job run \
   --no-wait \
   --enable-extra-resources \
@@ -21,6 +22,7 @@ uv run iris --cluster=marin job run \
   --extra gpu \
   --job-name "$job_name" \
   -e JAX_PLATFORMS cuda,cpu \
+  -e XLA_FLAGS --xla_gpu_deterministic_ops=true \
   -e PYTEST_XDIST_AUTO_NUM_WORKERS 1 \
   -- bash -lc '
     set -e
