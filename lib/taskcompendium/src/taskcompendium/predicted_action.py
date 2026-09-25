@@ -9,6 +9,7 @@ from math import isfinite
 from typing import Any
 
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig
+from taskcompendium.submission import _object_with_unique_fields
 
 
 @dataclass(frozen=True)
@@ -65,15 +66,6 @@ def _arguments_match(expected: Any, actual: Any, config: ToolCallComparatorConfi
     return expected == actual
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("Duplicate argument key")
-        value[key] = item
-    return value
-
-
 def parse_arguments(arguments: str) -> dict[str, Any]:
     """Decode a native function's JSON object without accepting duplicate keys."""
 
@@ -87,7 +79,7 @@ def parse_arguments(arguments: str) -> dict[str, Any]:
         return number
 
     value = json.loads(
-        arguments, object_pairs_hook=_unique_object, parse_constant=reject_constant, parse_float=parse_float
+        arguments, object_pairs_hook=_object_with_unique_fields, parse_constant=reject_constant, parse_float=parse_float
     )
     if not isinstance(value, dict):
         raise ValueError("Function-call arguments must be a JSON object")

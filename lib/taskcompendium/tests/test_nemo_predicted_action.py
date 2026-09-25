@@ -94,7 +94,7 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["expected_action"]["arguments"] = arguments
 
-    with pytest.raises(ValueError, match=r"JSON object|Duplicate argument key|Non-finite JSON argument"):
+    with pytest.raises(ValueError, match=r"JSON object|Duplicate JSON field|Non-finite JSON argument"):
         import_row(row, canonical_sha256(row))
 
 
