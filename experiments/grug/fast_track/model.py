@@ -297,6 +297,12 @@ class GrugModelConfig:
     ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
     qb_freeze_step: int | None = None
     """Stop updating the QB router biases from this step on (they keep their last value)."""
+    loop_passes: int = 1
+    """Apply the whole layer stack this many times per forward (tied weights). Every pass keeps
+    extending the AttnRes history and has its own gate queries; each extra pass starts its running
+    partial from ``loop_inject_scale * embedding`` (input injection)."""
+    loop_grow_step: int | None = None
+    """Run one pass before this step and ``loop_passes`` from it on (looped growth); None: always loop."""
     attn_res_logit_bias: bool = False
     """A learnable zero-init bias per (gate, source) on the AttnRes logits (Adam at the query LR)."""
     attn_res_z_loss: float = 0.0
@@ -1429,6 +1435,10 @@ class Transformer(eqx.Module):
     embed2_norm: RMSNorm | None
     attn_res_query_bias: Float[Array, "G N"] | None
     """AttnRes logit bias per (gate, source); the last column is the running partial."""
+    attn_res_query_loop: Float[Array, "P G D"] | None
+    """AttnRes pseudo-queries of the extra loop passes (``loop_passes - 1`` of them), zero-init."""
+    loop_inject_scale: Float[Array, " P"] | None
+    """Input-injection scale per extra loop pass, init 1."""
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1486,10 +1496,16 @@ class Transformer(eqx.Module):
             ),
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
             attn_res_query_bias=(
-                jnp.zeros((2 * cfg.num_layers + 1, _attn_res_num_sources(cfg)), jnp.float32)
+                jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, _attn_res_num_sources(cfg)), jnp.float32)
                 if cfg.attn_res_logit_bias
                 else None
             ),
+            attn_res_query_loop=(
+                reshard(jnp.zeros((cfg.loop_passes - 1, 2 * cfg.num_layers, cfg.hidden_dim), jnp.float32), P())
+                if cfg.loop_passes > 1
+                else None
+            ),
+            loop_inject_scale=jnp.ones((cfg.loop_passes - 1,), jnp.float32) if cfg.loop_passes > 1 else None,
             config=cfg,
         )
 
@@ -1517,7 +1533,10 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        loop_active: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        """``loop_active`` (with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
+        (True); None runs all passes."""
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -1563,6 +1582,7 @@ class Transformer(eqx.Module):
                 hidden,
                 token_ids,
                 extra_sources,
+                loop_active,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
             )
@@ -1620,6 +1640,7 @@ class Transformer(eqx.Module):
         hidden: Float[Array, "B S D"],
         token_ids: Int[Array, "B S"],
         extra_sources: tuple[jax.Array, ...],
+        loop_active: jax.Array | None,
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
@@ -1639,15 +1660,18 @@ class Transformer(eqx.Module):
         cfg = self.config
         assert self.attn_res_query_final is not None
         eps = cfg.layer_norm_eps
-        num_blocks = cfg.attn_res_num_blocks
-        seg_size = max(1, cfg.num_layers // num_blocks)
+        num_layers, passes = cfg.num_layers, cfg.loop_passes
+        seg_size = max(1, num_layers // cfg.attn_res_num_blocks)
+        block_cap = cfg.attn_res_num_blocks * passes
         layers = self.layers()
-        # Every query in gate order [attn_0, mlp_0, ..., attn_{L-1}, mlp_{L-1}, final].
+        embedding = hidden
+        # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
         gate_queries = []
         for layer in layers:
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
             gate_queries += [layer.attn_res_query_attn, layer.attn_res_query_mlp]
-        queries = jnp.stack([*gate_queries, self.attn_res_query_final])
+        loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
+        queries = jnp.concatenate([jnp.stack(gate_queries), *loop_queries, self.attn_res_query_final[None]])
         logit_bias = self.attn_res_query_bias
         if cfg.attn_res_z_loss > 0 and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_z_loss needs attn_res_layer_backward=SAVE (the remat VJP drops stat cotangents)")
@@ -1656,46 +1680,87 @@ class Transformer(eqx.Module):
             if cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
             else _attn_res_layer_passthrough
         )
-        # Extra embedding sources are blocks from the start, readable by every gate.
-        blocks: tuple[jax.Array, ...] = extra_sources
-        block_logits: tuple[jax.Array, ...] = tuple(_attn_res_source_logits(src, queries, eps) for src in extra_sources)
-        partial: jax.Array | None = hidden
-        layer_stats = []
-        z_terms = []
+
+        def run_pass(state, pass_index):
+            """One pass over the physical layers, extending the history; returns the new state, the
+            per-layer router stats and the pass's gate z terms."""
+            blocks, block_logits, partial = state
+            stats_out, z_out = [], []
+            for i, layer in enumerate(layers):
+                eff = pass_index * num_layers + i
+                if eff % seg_size == 0 and eff // seg_size < block_cap:
+                    assert partial is not None
+                    blocks = (*blocks, partial)
+                    # Score the new block only against the gates that can read it (this layer's onwards).
+                    block_logits = (*block_logits, _attn_res_source_logits(partial, queries[2 * eff :], eps))
+                    partial = None
+                if pass_index > 0 and i == 0:
+                    assert self.loop_inject_scale is not None
+                    # Input injection: the extra pass's running partial starts from the embedding.
+                    scale = self.loop_inject_scale[pass_index - 1]
+                    inject = (scale * embedding.astype(jnp.float32)).astype(embedding.dtype)
+                    partial = inject if partial is None else partial + inject
+                use_long = _is_long_layer(i, num_layers, cfg.global_every)
+                partial, blocks, block_logits, stats = layer_fn(
+                    (layer, blocks, block_logits, partial, queries, logit_bias),
+                    long_layer_mask if use_long else short_layer_mask,
+                    token_ids,
+                    use_long,
+                    eff,
+                    eps,
+                )
+                z_out.append(stats.pop(_ATTN_RES_Z))
+                stats_out.append(stats)
+            return (blocks, block_logits, partial), stats_out, z_out
+
+        def final_gate(state):
+            blocks, block_logits, partial = state
+            final_index = queries.shape[0] - 1
+            logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
+            logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
+            logits = _bias_gate_logits(logits, logit_bias, final_index, has_partial=True)
+            weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
+            entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
+            return mixed, _gate_z(logits), max_weight, entropy
+
+        def merge_passes(per_pass_stats):
+            """Per physical layer: sum integer stats (counts) and average the rest over passes."""
+            stacked = [jax.tree.map(lambda *xs: jnp.stack(xs), *layer) for layer in zip(*per_pass_stats, strict=True)]
+
+            def reduce(x):
+                return jnp.sum(x, axis=0) if jnp.issubdtype(x.dtype, jnp.integer) else jnp.mean(x, axis=0)
+
+            return [jax.tree.map(reduce, layer) for layer in stacked]
+
+        def finish(state, per_pass_stats, z_terms):
+            mixed, z_final, max_weight, entropy = final_gate(state)
+            z_total = (sum(z_terms) + z_final) / (len(z_terms) + 1)
+            return mixed, merge_passes(per_pass_stats), z_total, max_weight, entropy
+
+        state = (extra_sources, tuple(_attn_res_source_logits(src, queries, eps) for src in extra_sources), hidden)
+        state, pass0_stats, pass0_z = run_pass(state, 0)
         aux_hidden = None
-        for i, layer in enumerate(layers):
-            if i % seg_size == 0 and i // seg_size < num_blocks:
-                assert partial is not None
-                blocks = (*blocks, partial)
-                # Score the new block only against the gates that can read it (layer i's onwards).
-                block_logits = (*block_logits, _attn_res_source_logits(partial, queries[2 * i :], eps))
-                partial = None
-            use_long = _is_long_layer(i, cfg.num_layers, cfg.global_every)
-            partial, blocks, block_logits, stats = layer_fn(
-                (layer, blocks, block_logits, partial, queries, logit_bias),
-                long_layer_mask if use_long else short_layer_mask,
-                token_ids,
-                use_long,
-                i,
-                eps,
-            )
-            z_terms.append(stats.pop(_ATTN_RES_Z))
-            layer_stats.append(stats)
-            if i == cfg.aux_lm_layer:
-                aux_hidden = sum(blocks[len(extra_sources) :], partial)
-        assert partial is not None
-        final_index = 2 * cfg.num_layers
-        logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
-        logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
-        logits = _bias_gate_logits(logits, logit_bias, final_index, has_partial=True)
-        z_terms.append(_gate_z(logits))
-        weights, mixed = _softmax_mix(logits, [*blocks, partial])
-        final_stats = {
-            "attn_res_final_max_weight": jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0))),
-            "attn_res_final_entropy": jax.lax.stop_gradient(
-                jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0))
-            ),
-        }
+        if cfg.aux_lm_layer is not None:
+            raise ValueError("aux_lm_layer is not supported by this AttnRes loop")
+
+        def all_passes(state):
+            per_pass, z_terms = [pass0_stats], list(pass0_z)
+            for pass_index in range(1, passes):
+                state, stats, z = run_pass(state, pass_index)
+                per_pass.append(stats)
+                z_terms += z
+            return finish(state, per_pass, z_terms)
+
+        def one_pass(state):
+            # Same structure as all_passes: the pass-0 stats stand in for every pass.
+            return finish(state, [pass0_stats] * passes, list(pass0_z))
+
+        if passes == 1 or cfg.loop_grow_step is None or loop_active is None:
+            mixed, layer_stats, z_total, max_weight, entropy = all_passes(state)
+        else:
+            mixed, layer_stats, z_total, max_weight, entropy = jax.lax.cond(loop_active, all_passes, one_pass, state)
+        final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         for i, layer in enumerate(layers):
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
                 final_stats[f"attn_res_qk_mult_L{i}"] = jax.lax.stop_gradient(layer.attn.qk_mult)
@@ -1705,7 +1770,6 @@ class Transformer(eqx.Module):
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
         if aux_hidden is not None:
             final_stats[_AUX_HIDDEN] = aux_hidden
-        z_total = sum(z_terms) / len(z_terms)
         final_stats["attn_res_z"] = jax.lax.stop_gradient(z_total)
         if cfg.attn_res_z_loss > 0:
             final_stats[_ATTN_RES_Z] = z_total
@@ -1714,6 +1778,11 @@ class Transformer(eqx.Module):
         final_stats["attn_res_query_norm_max"] = jnp.max(query_norms)
         for g in range(queries.shape[0]):
             final_stats[f"attn_res_query_norm_g{g:02d}"] = query_norms[g]
+        final_stats.update(
+            {f"attn_res_loop_inject_p{p + 1}": jax.lax.stop_gradient(v) for p, v in enumerate(self.loop_inject_scale)}
+            if self.loop_inject_scale is not None
+            else {}
+        )
         return hidden, jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats), final_stats
 
     @named_call
@@ -1737,9 +1806,10 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
         aux_loss_weight: jax.Array | None = None,
+        loop_active: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0."""
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active)
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
@@ -1810,7 +1880,8 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
 def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
     """Most sources any AttnRes gate reads: every completed block (extra embeddings included) + the partial."""
     seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
-    rolled = sum(1 for i in range(cfg.num_layers) if i % seg_size == 0 and i // seg_size < cfg.attn_res_num_blocks)
+    cap = cfg.attn_res_num_blocks * cfg.loop_passes
+    rolled = sum(1 for i in range(cfg.num_layers * cfg.loop_passes) if i % seg_size == 0 and i // seg_size < cap)
     return rolled + int(cfg.second_embed) + 1
 
 

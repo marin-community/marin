@@ -576,6 +576,8 @@ def _aux_loss_weight(model_config, step: jax.Array) -> jax.Array | None:
 
 def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, step: jax.Array | None = None):
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
+    grow_step = params.config.loop_grow_step
+    loop_active = None if step is None or grow_step is None else step >= grow_step
 
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
@@ -587,6 +589,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, step: j
             logsumexp_weight=z_loss,
             return_router_metrics=True,
             aux_loss_weight=aux_weight,
+            loop_active=loop_active,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
