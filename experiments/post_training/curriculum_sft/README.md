@@ -42,14 +42,16 @@ pinned September 20 HF model, three algebra capabilities, four Grug updates, an 
 the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
 equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
 OlympiadBench runs. The HF importer materializes native weights on RNO2A, so the trial does not
-transfer the large `us-central2` checkpoint across regions. Run `--stage generate` on
+transfer the large `us-central2` checkpoint across regions. The trial prefix is resolved through
+`marin_temp_bucket(ttl_days=30)` to the east-region lifecycle-managed bucket. Run `--stage generate` on
 `cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
 `S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train`, `export`, and `after` on RNO2A with the
 same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
 Generation and the imported base checkpoint use `SOURCE_VERSION`; the SFT and its re-evaluation
 use the CLI `--version`, so a failed SFT can be retried under a new version without regenerating
-data or importing weights. `--stage full` binds both evaluations and training in one graph after
-generation has completed.
+data or importing weights. The math SFT enables finite-state diagnostics; a non-finite update fails
+before checkpointing, and export must use the final configured training step. `--stage full` binds
+both evaluations and training in one graph after generation has completed.
 
 This trial has not established an improvement. Its GLM answers are structurally checked but not
 oracle-verified, and it has no matched task-only control. A before/after change would measure the

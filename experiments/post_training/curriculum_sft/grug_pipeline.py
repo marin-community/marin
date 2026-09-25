@@ -177,7 +177,7 @@ def curriculum_grug_sft(
             ),
             expert_parallel=expert_parallel,
             per_device_parallelism=1,
-            grug_trainer=GrugTrainerConfig(replica_axis_size=1, z_loss_weight=1e-4),
+            grug_trainer=GrugTrainerConfig(replica_axis_size=1, z_loss_weight=1e-4, diagnose_numerics=True),
         )
 
     return ArtifactStep(

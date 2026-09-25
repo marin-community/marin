@@ -15,6 +15,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
@@ -33,7 +34,12 @@ from experiments.post_training.curriculum_sft.hf_import import snowball_hf_to_gr
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
-S3_TRIAL_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
+S3_TRIAL_PREFIX = marin_temp_bucket(
+    ttl_days=30,
+    prefix="curriculum-math-20260924",
+    source_prefix="s3://marin-us-east-02a/marin",
+    use_env_override=False,
+)
 SOURCE_VERSION = "2026.09.24"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
