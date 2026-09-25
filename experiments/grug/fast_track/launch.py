@@ -700,9 +700,14 @@ def _typed_setting(config: Any, name: str, text: str) -> Any:
 def _parse_as(annotation: Any, text: str, name: str) -> Any:
     args = [a for a in typing.get_args(annotation) if a is not type(None)]
     if typing.get_origin(annotation) in (types.UnionType, typing.Union):
-        if len(args) != 1:
-            raise ValueError(f"{name}: cannot parse union type {annotation}")
-        return _parse_as(args[0], text, name)
+        # Members in declaration order; the first that parses wins.
+        errors = []
+        for member in args:
+            try:
+                return _parse_as(member, text, name)
+            except ValueError as e:
+                errors.append(str(e))
+        raise ValueError(f"{name}: {text!r} matches no member of {annotation}: {errors}")
     if typing.get_origin(annotation) is tuple:
         item = args[0] if args else float
         return tuple(_parse_as(item, part, name) for part in text.split(",") if part)
