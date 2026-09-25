@@ -286,15 +286,21 @@ LIMIT {RL_MAX_GPU_ROWS + 1}
     scope = _run_scope(clusters, run, start_ms, end_ms)
     spans_sql = f"""
 WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte(("policy_ppo_train", "policy_span_residual"))}, terminal AS (
-    SELECT json_get(attributes_json, 'role') AS role,
-           json_get(body_json, 'status') AS status,
-           json_get(body_json, 'reason') AS reason,
-           MAX(TRY_CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records,
-           MAX(TRY_CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records
-    FROM "telemetry_v1.marinskyrl"
-    WHERE {scope}
-      AND name = 'terminal'
-    GROUP BY 1, 2, 3
+    SELECT execution_uid, role, status, reason,
+           CASE WHEN COUNT(lost) = COUNT(*) THEN SUM(lost) END AS lost_records,
+           CASE WHEN COUNT(queued) = COUNT(*) THEN SUM(queued) END AS queued_records
+    FROM (
+        SELECT execution_uid,
+               json_get(attributes_json, 'role') AS role,
+               json_get(body_json, 'status') AS status,
+               json_get(body_json, 'reason') AS reason,
+               TRY_CAST(json_get(body_json, 'export_lost_records') AS BIGINT) AS lost,
+               TRY_CAST(json_get(body_json, 'export_queued_records') AS BIGINT) AS queued
+        FROM "telemetry_v1.marinskyrl"
+        WHERE {scope}
+          AND name = 'terminal'
+    )
+    GROUP BY 1, 2, 3, 4
 )
 SELECT statistic, t, phase, parent, clock_domain,
        SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
@@ -317,7 +323,7 @@ SELECT 'coverage' AS statistic, role, clock_domain,
 FROM phase_rows
 GROUP BY role, clock_domain
 UNION ALL BY NAME
-SELECT 'terminal' AS statistic, role, status, reason, lost_records, queued_records FROM terminal
+SELECT 'terminal' AS statistic, execution_uid, role, status, reason, lost_records, queued_records FROM terminal
 ORDER BY statistic, t
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
@@ -431,8 +437,8 @@ GROUP BY 1, 2 ORDER BY 1
             "FROM spans WHERE statistic = 'coverage' ORDER BY 1, 2"
         ),
         "run_outcome": (
-            "SELECT role, status, reason, lost_records, queued_records "
-            "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2"
+            "SELECT execution_uid, role, status, reason, lost_records, queued_records "
+            "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2, 3"
         ),
         # A phase's band is its wall minus its children's walls in the same bucket, so the bands
         # close on the step at any depth; the step's own band is what no phase accounts for.

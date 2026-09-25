@@ -114,6 +114,15 @@ EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
 RETRY_EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:1"
 RETRIED_STEP = 2
 RETRY_SCALE = 1.1
+# Each process publishes one terminal event: the trainer, and a worker per rank. Both attempts' workers
+# fail the same way, so a table keyed by role, status and reason would merge the two attempts.
+TERMINAL_EVENTS = (
+    (EXECUTION, "trainer", "failed", "ActorDiedError", (0,)),
+    (EXECUTION, "worker", "failed", "ActorDiedError", (12, 5)),
+    (RETRY_EXECUTION, "trainer", "completed", "normal_exit", (0,)),
+    (RETRY_EXECUTION, "worker", "failed", "ActorDiedError", (30, 0)),
+)
+QUEUED_AT_EXIT = 3
 
 # policy_training_step wraps these four, and the fixture carries both of the ways it has arrived --
 # which no single run does, so one store exercises both exclusions at once. The current spelling
@@ -527,24 +536,26 @@ def _run_rows(clock: str) -> list[tuple]:
     retry = WINDOW_START + timedelta(minutes=5 * RETRIED_STEP + 2)
     rows += _driver_rows(retry, RETRIED_STEP, RETRY_EXECUTION)
     rows += _worker_rows(retry, RETRIED_STEP, clock, RETRY_EXECUTION)
-    for role, status, lost in (("trainer", "completed", 0), ("worker", "failed", 12)):
-        rows.append(
-            _row(
-                name="terminal",
-                value=0.0,
-                moment=NOW - timedelta(seconds=1),
-                seq=BUCKETS,
-                node_name=NODES[0],
-                role=role,
-                attributes={"role": role},
-                body={
-                    "status": status,
-                    "reason": "normal_exit",
-                    "export_lost_records": lost,
-                    "export_queued_records": 3,
-                },
+    for execution_uid, role, status, reason, lost in TERMINAL_EVENTS:
+        for process, records in enumerate(lost):
+            rows.append(
+                _row(
+                    name="terminal",
+                    value=0.0,
+                    moment=NOW - timedelta(seconds=1),
+                    seq=BUCKETS,
+                    execution_uid=execution_uid,
+                    node_name=NODES[process],
+                    role=role,
+                    attributes={"role": role},
+                    body={
+                        "status": status,
+                        "reason": reason,
+                        "export_lost_records": records,
+                        "export_queued_records": QUEUED_AT_EXIT,
+                    },
+                )
             )
-        )
     return rows
 
 
@@ -1025,22 +1036,27 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(
     ]
 
 
-def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
+def test_the_outcome_table_reports_each_attempts_terminal_events_by_role(store) -> None:
     title = "Terminal event and lost records"
 
+    # One row per attempt and role, summed over the role's processes.
     assert _panel_rows(store, title) == [
-        ("trainer", "completed", "normal_exit", 0, 3),
-        ("worker", "failed", "normal_exit", 12, 3),
+        (EXECUTION, "trainer", "failed", "ActorDiedError", 0, 3),
+        (EXECUTION, "worker", "failed", "ActorDiedError", 17, 6),
+        (RETRY_EXECUTION, "trainer", "completed", "normal_exit", 0, 3),
+        (RETRY_EXECUTION, "worker", "failed", "ActorDiedError", 30, 6),
     ]
-    # A count that is not an integer is unknown. A CAST would raise and fail the overview's whole
-    # span source, taking every panel on it down with this one.
+    # A count that is not an integer is unknown, and so is a sum that includes it. A CAST would raise
+    # and fail the overview's whole span source, taking every panel on it down with this one.
     store.execute(
         """UPDATE "telemetry_v1.marinskyrl" SET body_json = replace(body_json, ': 12', ': "unknown"')
            WHERE name = 'terminal'"""
     )
     assert _panel_rows(store, title) == [
-        ("trainer", "completed", "normal_exit", 0, 3),
-        ("worker", "failed", "normal_exit", None, 3),
+        (EXECUTION, "trainer", "failed", "ActorDiedError", 0, 3),
+        (EXECUTION, "worker", "failed", "ActorDiedError", None, 6),
+        (RETRY_EXECUTION, "trainer", "completed", "normal_exit", 0, 3),
+        (RETRY_EXECUTION, "worker", "failed", "ActorDiedError", 30, 6),
     ]
     store.execute("""DELETE FROM "telemetry_v1.marinskyrl" WHERE name = 'terminal'""")
     assert _panel_rows(store, title) == []
