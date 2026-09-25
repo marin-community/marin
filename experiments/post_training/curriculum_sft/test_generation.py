@@ -8,12 +8,12 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.datakit.chat_render import render_chat_record
 from zephyr.writers import write_parquet_file
 
-from experiments.post_training.curriculum_sft.generation import GenerateCurriculumSFTConfig, parse_batch
-from experiments.post_training.curriculum_sft.grug_pipeline import (
+from experiments.post_training.curriculum_sft.chat_preparation import (
     PrepareConfig,
     prepare_chat_record,
     prepare_generated_chat,
 )
+from experiments.post_training.curriculum_sft.generation import GenerateCurriculumSFTConfig, parse_batch
 
 
 def _response(index: int, *, task: str, continuation: list[dict[str, str]]) -> dict:
