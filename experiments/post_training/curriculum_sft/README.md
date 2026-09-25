@@ -40,13 +40,11 @@ pinned September 20 HF model, three algebra capabilities, four Grug updates, an 
 the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
 equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
 OlympiadBench runs. The HF importer materializes native weights on RNO2A, so the trial does not
-transfer the large `us-central2` checkpoint across regions. Run `--stage generate` on Marin's Iris
-controller with `MARIN_PREFIX` set to the `GCS_TRIAL_PREFIX` in `math_trial.py`, where the GLM
-relay and GCS credentials are available. Copy the three small generation artifacts to the same
-relative paths under `S3_TRIAL_PREFIX`, then run `train`, `export`, and `after` on RNO2A with
-`MARIN_PREFIX=S3_TRIAL_PREFIX`. The pinned catalog is staged under `GCS_TRIAL_PREFIX/catalog`.
-`--stage full` binds both evaluations and training in one graph only when its coordinator can
-reach the relay and the training storage.
+transfer the large `us-central2` checkpoint across regions. Run `--stage generate` on
+`cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
+`S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train`, `export`, and `after` on RNO2A with the
+same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
+`--stage full` binds both evaluations and training in one graph after generation has completed.
 
 This trial has not established an improvement. Its GLM answers are structurally checked but not
 oracle-verified, and it has no matched task-only control. A before/after change would measure the

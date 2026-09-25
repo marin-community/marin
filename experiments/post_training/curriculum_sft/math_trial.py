@@ -29,12 +29,10 @@ from experiments.post_training.curriculum_sft.grug_pipeline import (
 )
 from experiments.post_training.curriculum_sft.hf_export import grug_hf_export
 from experiments.post_training.curriculum_sft.hf_import import snowball_hf_to_grug
-from experiments.post_training.task_curriculum.catalog_artifact import TaskCurriculumCatalogArtifact
 
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
-GCS_TRIAL_PREFIX = "gs://marin-us-central2/tmp/ttl=30d/curriculum-math-20260924"
 S3_TRIAL_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
@@ -62,12 +60,6 @@ GENERATION = CurriculumGenerationSpec(
     seed=SEED,
     max_completion_tokens=MAX_COMPLETION_TOKENS,
     task_specification=TASK_SPECIFICATION,
-)
-GCS_CATALOG = ArtifactStep.adopt(
-    name="post-training/task-curriculum/catalog",
-    version="2026.09.20.2",
-    source=prefix_join(GCS_TRIAL_PREFIX, "catalog"),
-    kind=TaskCurriculumCatalogArtifact,
 )
 
 
@@ -124,8 +116,8 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
 
 
 def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
-    """Generate small conversation artifacts beside the GLM relay on Marin."""
-    return curriculum_generation_steps(CURRICULUM_IDS, version=version, generation=GENERATION, catalog=GCS_CATALOG)
+    """Generate conversations on the relay's east-region Iris cluster."""
+    return curriculum_generation_steps(CURRICULUM_IDS, version=version, generation=GENERATION)
 
 
 def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
