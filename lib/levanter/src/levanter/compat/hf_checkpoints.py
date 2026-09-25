@@ -996,8 +996,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
         """Construct the Hugging Face config dictionary for the provided model."""
-        config = model.config.to_hf_config(model.Vocab.size)
-        dict_config = config.to_dict()
+        return self.hf_config_dict(model.config, model.Vocab.size)
+
+    def hf_config_dict(self, config: HFCompatConfig, vocab_size: int) -> dict:
+        """Construct saved HF metadata without materializing model weights."""
+        dict_config = config.to_hf_config(vocab_size).to_dict()
 
         try:
             base_config = self.default_hf_config
