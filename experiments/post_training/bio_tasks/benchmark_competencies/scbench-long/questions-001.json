@@ -10,17 +10,6 @@
       "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/green_2_tme_context_dependence/eval.json",
       "source_group": "",
       "workflow": "paired rna accessibility regulatory comparison",
-      "skills": [
-        "differential-expression",
-        "chromatin",
-        "motifs",
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -50,7 +39,20 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "chromatin",
+        "motifs",
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1",
@@ -62,16 +64,6 @@
       "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1/eval.json",
       "source_group": "",
       "workflow": "paired transcriptome repertoire comparison",
-      "skills": [
-        "cell-annotation",
-        "composition",
-        "repertoire",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -101,7 +93,19 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "composition",
+        "repertoire",
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gse155381_q7_xspecies_epi_communication",
@@ -113,13 +117,6 @@
       "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse155381_q7_xspecies_epi_communication/eval.json",
       "source_group": "",
       "workflow": "cross species expression supported communication",
-      "skills": [
-        "communication",
-        "orthology"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -149,7 +146,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "communication",
+        "orthology"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gse297023_q2_senescence_not_mechanism",
@@ -161,14 +167,6 @@
       "source_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse297023_q2_senescence_not_mechanism/eval.json",
       "source_group": "",
       "workflow": "cohort design and expression program audit",
-      "skills": [
-        "data-management",
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -198,7 +196,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

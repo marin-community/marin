@@ -10,12 +10,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper7",
       "workflow": "compartment conditioned cell communication",
-      "skills": [
-        "communication"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -43,7 +37,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "communication"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mcq-paper8-insight3-q2--mcq_tu",
@@ -55,13 +57,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper8",
       "workflow": "anatomical gene program trajectories",
-      "skills": [
-        "trajectory",
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -89,7 +84,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "trajectory",
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mcq-paper9-insight4-q1--mcq_tu",
@@ -101,14 +105,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper9",
       "workflow": "cell type expression to pathways",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -137,7 +133,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mcq-paper9-insight4-q2--mcq_tu",
@@ -149,14 +155,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper9",
       "workflow": "cell type expression to pathways",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -185,7 +183,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mcq-paper9-insight5-q2--mcq_tu",
@@ -197,14 +205,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper9",
       "workflow": "cell type expression to pathways",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -233,7 +233,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mcq-paper9-insight6-q1--mcq_tu",
@@ -245,13 +255,6 @@
       "source_url": "https://github.com/mlbio-epfl/HeurekaBench/blob/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench/benchmark/mcq_tu.json",
       "source_group": "paper9",
       "workflow": "compartment conditioned cell communication",
-      "skills": [
-        "communication"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -279,7 +282,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "communication"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

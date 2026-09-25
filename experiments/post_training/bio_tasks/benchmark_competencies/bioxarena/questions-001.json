@@ -10,12 +10,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/bace1-binding-affinity/grade.py",
       "source_group": "",
       "workflow": "bace1 binding affinity; predict the scored biological endpoint and validate Pearson",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -52,7 +46,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/cell-painting-perturbation",
@@ -64,13 +68,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/cell-painting-perturbation/grade.py",
       "source_group": "",
       "workflow": "cell painting perturbation; predict the scored biological endpoint and validate accuracy",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology",
-        "bioimaging"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -109,7 +106,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/cyp-inhibition-multi-label",
@@ -121,12 +129,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/cyp-inhibition-multi-label/grade.py",
       "source_group": "",
       "workflow": "cyp inhibition multi label; predict the scored biological endpoint and validate macro ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -163,7 +165,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/egfr-binding-affinity",
@@ -175,12 +187,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/egfr-binding-affinity/grade.py",
       "source_group": "",
       "workflow": "egfr binding affinity; predict the scored biological endpoint and validate Pearson",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -217,7 +223,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/gpcr-binding-multi-class",
@@ -229,12 +245,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/gpcr-binding-multi-class/grade.py",
       "source_group": "",
       "workflow": "gpcr binding multi class; predict the scored biological endpoint and validate macro F1",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -271,7 +281,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/herg-binding-affinity",
@@ -283,12 +303,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/herg-binding-affinity/grade.py",
       "source_group": "",
       "workflow": "herg binding affinity; predict the scored biological endpoint and validate Pearson",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -325,7 +339,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/kinase-selectivity-multi-label",
@@ -337,12 +361,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/kinase-selectivity-multi-label/grade.py",
       "source_group": "",
       "workflow": "kinase selectivity multi label; predict the scored biological endpoint and validate macro ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -379,7 +397,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chemical-biology/tox21-sr-are",
@@ -391,12 +419,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/chemical-biology/tox21-sr-are/grade.py",
       "source_group": "",
       "workflow": "tox21 sr are; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -433,7 +455,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "imaging/amos-organ-segmentation",
@@ -445,8 +477,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/amos-organ-segmentation/grade.py",
       "source_group": "",
       "workflow": "amos organ segmentation; predict the scored biological endpoint and validate mean organ Dice",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -457,7 +487,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/drug-moa-prediction",
@@ -469,8 +503,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/drug-moa-prediction/grade.py",
       "source_group": "",
       "workflow": "drug moa prediction; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -481,7 +513,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/labelfree-cell-counting",
@@ -493,8 +529,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/labelfree-cell-counting/grade.py",
       "source_group": "",
       "workflow": "labelfree cell counting; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -505,7 +539,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/lung-nodule-malignancy",
@@ -517,8 +555,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/lung-nodule-malignancy/grade.py",
       "source_group": "",
       "workflow": "lung nodule malignancy; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -529,7 +565,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/mitochondria-counting",
@@ -541,8 +581,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/mitochondria-counting/grade.py",
       "source_group": "",
       "workflow": "mitochondria counting; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -553,7 +591,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/nucleus-type-classification",
@@ -565,8 +607,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/nucleus-type-classification/grade.py",
       "source_group": "",
       "workflow": "nucleus type classification; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -577,7 +617,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/skin-lesion-diagnosis",
@@ -589,8 +633,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/skin-lesion-diagnosis/grade.py",
       "source_group": "",
       "workflow": "skin lesion diagnosis; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -601,7 +643,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "imaging/virtual-staining",
@@ -613,8 +659,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/imaging/virtual-staining/grade.py",
       "source_group": "",
       "workflow": "virtual staining; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -625,7 +669,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "network-biology/gene-disease-association",
@@ -637,13 +685,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/gene-disease-association/grade.py",
       "source_group": "",
       "workflow": "gene disease association; predict the scored biological endpoint and validate Pearson",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -680,7 +721,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/go-function-multi-label",
@@ -692,12 +744,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/go-function-multi-label/grade.py",
       "source_group": "",
       "workflow": "go function multi label; predict the scored biological endpoint and validate macro ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -734,7 +780,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/metabolic-network-kegg",
@@ -746,12 +802,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/metabolic-network-kegg/grade.py",
       "source_group": "",
       "workflow": "metabolic network kegg; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -788,7 +838,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/pathway-membership-reactome",
@@ -800,12 +860,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/pathway-membership-reactome/grade.py",
       "source_group": "",
       "workflow": "pathway membership reactome; predict the scored biological endpoint and validate accuracy",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -842,7 +896,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/ppi-prediction-string",
@@ -854,12 +918,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/ppi-prediction-string/grade.py",
       "source_group": "",
       "workflow": "ppi prediction string; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -896,7 +954,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/protein-complex-corum",
@@ -908,12 +976,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/protein-complex-corum/grade.py",
       "source_group": "",
       "workflow": "protein complex corum; predict the scored biological endpoint and validate accuracy",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -950,7 +1012,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/synthetic-lethality-prediction",
@@ -962,12 +1034,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/synthetic-lethality-prediction/grade.py",
       "source_group": "",
       "workflow": "synthetic lethality prediction; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1004,7 +1070,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "network-biology/tf-regulatory-prediction",
@@ -1016,12 +1092,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/network-biology/tf-regulatory-prediction/grade.py",
       "source_group": "",
       "workflow": "tf regulatory prediction; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1058,7 +1128,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Reviewed the explicit Output section. Affinity and DisGeNET scores require continuous prediction; other available tasks require class labels/probabilities. Supplied network-derived features do not require graph analysis; the grader metric does not require model evaluation."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "perturbation-dynamics/cancer-drug-sensitivity",
@@ -1070,8 +1150,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/cancer-drug-sensitivity/grade.py",
       "source_group": "",
       "workflow": "cancer drug sensitivity; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1082,7 +1160,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/crispr-perturbation-prediction",
@@ -1094,8 +1176,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/crispr-perturbation-prediction/grade.py",
       "source_group": "",
       "workflow": "crispr perturbation prediction; predict the scored biological endpoint and validate mean column-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1106,7 +1186,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/drug-transcriptional-response",
@@ -1118,8 +1202,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/drug-transcriptional-response/grade.py",
       "source_group": "",
       "workflow": "drug transcriptional response; predict the scored biological endpoint and validate mean column-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1130,7 +1212,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/eccite-multimodal-perturbation",
@@ -1142,8 +1228,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/eccite-multimodal-perturbation/grade.py",
       "source_group": "",
       "workflow": "eccite multimodal perturbation; predict the scored biological endpoint and validate mean of modality-level mean Pearson scores",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1154,7 +1238,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/gene-regulatory-network-inference",
@@ -1166,8 +1254,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/gene-regulatory-network-inference/grade.py",
       "source_group": "",
       "workflow": "gene regulatory network inference; predict the scored biological endpoint and validate average precision",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1178,7 +1264,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/multi-timepoint-perturbation",
@@ -1190,8 +1280,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/multi-timepoint-perturbation/grade.py",
       "source_group": "",
       "workflow": "multi timepoint perturbation; predict the scored biological endpoint and validate mean column-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1202,7 +1290,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/rna-velocity-cell-transition",
@@ -1214,8 +1306,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/rna-velocity-cell-transition/grade.py",
       "source_group": "",
       "workflow": "rna velocity cell transition; predict the scored biological endpoint and validate mean column-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1226,7 +1316,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "perturbation-dynamics/spear-atac-perturbation",
@@ -1238,8 +1332,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/perturbation-dynamics/spear-atac-perturbation/grade.py",
       "source_group": "",
       "workflow": "spear atac perturbation; predict the scored biological endpoint and validate mean column-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1250,7 +1342,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/alzheimers-disease-staging",
@@ -1262,8 +1358,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/alzheimers-disease-staging/grade.py",
       "source_group": "",
       "workflow": "alzheimers disease staging; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1274,7 +1368,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/autism-diagnosis",
@@ -1286,8 +1384,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/autism-diagnosis/grade.py",
       "source_group": "",
       "workflow": "autism diagnosis; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1298,7 +1394,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/breast-cancer-subtype",
@@ -1310,8 +1410,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/breast-cancer-subtype/grade.py",
       "source_group": "",
       "workflow": "breast cancer subtype; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1322,7 +1420,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/covid19-severity-classification",
@@ -1334,8 +1436,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/covid19-severity-classification/grade.py",
       "source_group": "",
       "workflow": "covid19 severity classification; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1346,7 +1446,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/diabetes-readmission",
@@ -1358,8 +1462,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/diabetes-readmission/grade.py",
       "source_group": "",
       "workflow": "diabetes readmission; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1370,7 +1472,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/genotype-to-phenotype",
@@ -1382,8 +1488,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/genotype-to-phenotype/grade.py",
       "source_group": "",
       "workflow": "genotype to phenotype; predict the scored biological endpoint and validate Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1394,7 +1498,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/pan-cancer-survival-prediction",
@@ -1406,8 +1514,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/pan-cancer-survival-prediction/grade.py",
       "source_group": "",
       "workflow": "pan cancer survival prediction; predict the scored biological endpoint and validate Harrell concordance",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1418,7 +1524,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "phenotype-disease/spatial-immune-infiltration",
@@ -1430,8 +1540,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/phenotype-disease/spatial-immune-infiltration/grade.py",
       "source_group": "",
       "workflow": "spatial immune infiltration; predict the scored biological endpoint and validate mean marker-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1442,7 +1550,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/gene-tissue-expression",
@@ -1454,8 +1566,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/gene-tissue-expression/grade.py",
       "source_group": "",
       "workflow": "gene tissue expression; predict the scored biological endpoint and validate Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1466,7 +1576,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/isoform-expression",
@@ -1478,8 +1592,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/isoform-expression/grade.py",
       "source_group": "",
       "workflow": "isoform expression; predict the scored biological endpoint and validate mean tissue-wise Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1490,7 +1602,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/multi-tf-binding",
@@ -1502,8 +1618,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/multi-tf-binding/grade.py",
       "source_group": "",
       "workflow": "multi tf binding; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1514,7 +1628,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/protein-protein-interaction",
@@ -1526,8 +1644,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/protein-protein-interaction/grade.py",
       "source_group": "",
       "workflow": "protein protein interaction; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1538,7 +1654,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/regulatory-element-detection",
@@ -1550,8 +1670,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/regulatory-element-detection/grade.py",
       "source_group": "",
       "workflow": "regulatory element detection; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1562,7 +1680,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/remote-homology-detection",
@@ -1574,8 +1696,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/remote-homology-detection/grade.py",
       "source_group": "",
       "workflow": "remote homology detection; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1586,7 +1706,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/rna-protein-binding-affinity",
@@ -1598,8 +1722,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-protein-binding-affinity/grade.py",
       "source_group": "",
       "workflow": "rna protein binding affinity; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1610,7 +1732,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/rna-protein-binding-signal",
@@ -1622,8 +1748,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-protein-binding-signal/grade.py",
       "source_group": "",
       "workflow": "rna protein binding signal; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1634,7 +1758,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/rna-reactivity-imputation",
@@ -1646,8 +1774,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/rna-reactivity-imputation/grade.py",
       "source_group": "",
       "workflow": "rna reactivity imputation; predict the scored biological endpoint and validate mean row-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1658,7 +1784,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "sequence/variant-effect-pathogenicity",
@@ -1670,8 +1800,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/sequence/variant-effect-pathogenicity/grade.py",
       "source_group": "",
       "workflow": "variant effect pathogenicity; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1682,7 +1810,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/batch-integration",
@@ -1694,8 +1826,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/batch-integration/grade.py",
       "source_group": "",
       "workflow": "batch integration; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1706,7 +1836,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/cell-type-from-expression",
@@ -1718,8 +1852,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cell-type-from-expression/grade.py",
       "source_group": "",
       "workflow": "cell type from expression; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1730,7 +1862,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/chromatin-to-expression",
@@ -1742,8 +1878,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/chromatin-to-expression/grade.py",
       "source_group": "",
       "workflow": "chromatin to expression; predict the scored biological endpoint and validate mean gene-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1754,7 +1888,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/cite-seq-protein-prediction",
@@ -1766,8 +1904,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cite-seq-protein-prediction/grade.py",
       "source_group": "",
       "workflow": "cite seq protein prediction; predict the scored biological endpoint and validate mean protein-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1778,7 +1914,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/cross-modality-cell-matching",
@@ -1790,8 +1930,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cross-modality-cell-matching/grade.py",
       "source_group": "",
       "workflow": "cross modality cell matching; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1802,7 +1940,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/cross-modality-cell-type",
@@ -1814,8 +1956,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/cross-modality-cell-type/grade.py",
       "source_group": "",
       "workflow": "cross modality cell type; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1826,7 +1966,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/developmental-stage-prediction",
@@ -1838,8 +1982,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/developmental-stage-prediction/grade.py",
       "source_group": "",
       "workflow": "developmental stage prediction; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1850,7 +1992,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/gene-expression-denoising",
@@ -1862,8 +2008,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/gene-expression-denoising/grade.py",
       "source_group": "",
       "workflow": "gene expression denoising; predict the scored biological endpoint and validate mean gene-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1874,7 +2018,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/label-projection",
@@ -1886,8 +2034,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/label-projection/grade.py",
       "source_group": "",
       "workflow": "label projection; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1898,7 +2044,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "single-cell/rna-to-protein-prediction",
@@ -1910,8 +2060,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/single-cell/rna-to-protein-prediction/grade.py",
       "source_group": "",
       "workflow": "rna to protein prediction; predict the scored biological endpoint and validate mean protein-wise Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1922,7 +2070,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/complex-structure-evaluation",
@@ -1934,8 +2086,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/complex-structure-evaluation/grade.py",
       "source_group": "",
       "workflow": "complex structure evaluation; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1946,7 +2096,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/enzyme-commission-prediction",
@@ -1958,8 +2112,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/enzyme-commission-prediction/grade.py",
       "source_group": "",
       "workflow": "enzyme commission prediction; predict the scored biological endpoint and validate macro F1",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1970,7 +2122,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-binding-site-detection",
@@ -1982,8 +2138,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-binding-site-detection/grade.py",
       "source_group": "",
       "workflow": "protein binding site detection; predict the scored biological endpoint and validate average precision",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1994,7 +2148,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-fold-classification",
@@ -2006,8 +2164,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-fold-classification/grade.py",
       "source_group": "",
       "workflow": "protein fold classification; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2018,7 +2174,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-ligand-binding-affinity",
@@ -2030,8 +2190,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-ligand-binding-affinity/grade.py",
       "source_group": "",
       "workflow": "protein ligand binding affinity; predict the scored biological endpoint and validate Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2042,7 +2200,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-protein-interface",
@@ -2054,8 +2216,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-protein-interface/grade.py",
       "source_group": "",
       "workflow": "protein protein interface; predict the scored biological endpoint and validate Pearson",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2066,7 +2226,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-stability-change",
@@ -2078,8 +2242,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-stability-change/grade.py",
       "source_group": "",
       "workflow": "protein stability change; predict the scored biological endpoint and validate Spearman",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2090,7 +2252,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "structure/protein-structure-prediction",
@@ -2102,8 +2268,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/structure/protein-structure-prediction/grade.py",
       "source_group": "",
       "workflow": "protein structure prediction; predict the scored biological endpoint and validate mean simplified TM score after Kabsch alignment",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2114,7 +2278,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/biomedical-figure-vqa",
@@ -2126,8 +2294,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/biomedical-figure-vqa/grade.py",
       "source_group": "",
       "workflow": "biomedical figure vqa; predict the scored biological endpoint and validate case-normalized multiple-choice exact match",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2138,7 +2304,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/dna-enzyme-function",
@@ -2150,8 +2320,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/dna-enzyme-function/grade.py",
       "source_group": "",
       "workflow": "dna enzyme function; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2162,7 +2330,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/ecg-signal-qa",
@@ -2174,8 +2346,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/ecg-signal-qa/grade.py",
       "source_group": "",
       "workflow": "ecg signal qa; predict the scored biological endpoint and validate normalized exact match",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2186,7 +2356,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/gene-expression-classification",
@@ -2198,8 +2372,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/gene-expression-classification/grade.py",
       "source_group": "",
       "workflow": "gene expression classification; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2210,7 +2382,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/medical-vqa",
@@ -2222,8 +2398,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/medical-vqa/grade.py",
       "source_group": "",
       "workflow": "medical vqa; predict the scored biological endpoint and validate normalized exact match",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2234,7 +2408,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/molecule-qa",
@@ -2246,8 +2424,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/molecule-qa/grade.py",
       "source_group": "",
       "workflow": "molecule qa; predict the scored biological endpoint and validate accuracy",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2258,7 +2434,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/pathology-vqa",
@@ -2270,8 +2450,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/pathology-vqa/grade.py",
       "source_group": "",
       "workflow": "pathology vqa; predict the scored biological endpoint and validate normalized exact match",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2282,7 +2460,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "text-integrated/protein-function-matching",
@@ -2294,8 +2476,6 @@
       "source_url": "https://github.com/mbzuai-ai4bio/BioXArena/blob/29f88d4d573001405abf0694aee72d91c3f47e6c/tasks/text-integrated/protein-function-matching/grade.py",
       "source_group": "",
       "workflow": "protein function matching; predict the scored biological endpoint and validate ROC AUC",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2306,7 +2486,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     }
   ]
 }

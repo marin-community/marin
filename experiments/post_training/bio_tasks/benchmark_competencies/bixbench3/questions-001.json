@@ -10,31 +10,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.17.659900_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "expression damid integration",
-      "skills": [
-        "normalization",
-        "multiple-testing",
-        "differential-expression",
-        "enrichment",
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "variant-analysis",
-        "chromatin",
-        "motifs",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -62,7 +37,38 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "chromatin",
+        "motifs",
+        "database-query",
+        "evidence-extraction",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.02.11.704850_v1",
@@ -74,28 +80,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.11.704850_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "bulk expression communication",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "differential-expression",
-        "enrichment",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "communication",
-        "database-query",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -123,7 +107,34 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "communication",
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "clustering",
+        "sequence-alignment",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.08.16.670679_v1",
@@ -135,28 +146,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.08.16.670679_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "repeated subject expression",
-      "skills": [
-        "normalization",
-        "transformation",
-        "association",
-        "multiple-testing",
-        "differential-expression",
-        "enrichment",
-        "prediction",
-        "sequence-query",
-        "read-qc",
-        "database-query",
-        "statistics",
-        "data-management",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -184,7 +173,34 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "functional-genomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "association",
+        "differential-expression",
+        "enrichment",
+        "predictive-modeling",
+        "sequence-query",
+        "read-qc",
+        "database-query",
+        "cell-qc"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "multiple-testing",
+        "prediction",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.02.03.703548_v1",
@@ -196,28 +212,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.03.703548_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "expression variant ancestry",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "clustering",
-        "prediction",
-        "model-evaluation",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "variant-analysis",
-        "population-genetics",
-        "trajectory",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -245,7 +239,37 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "variant-analysis",
+        "population-genetics",
+        "trajectory",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "clustering",
+        "prediction",
+        "model-evaluation",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.07.20.665670_v1",
@@ -257,26 +281,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.20.665670_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "small rna orthology",
-      "skills": [
-        "normalization",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "orthology",
-        "phylogeny",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "molecular-evolution",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -304,7 +308,33 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "molecular-evolution",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "orthology",
+        "phylogeny",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.07.08.663208_v1",
@@ -316,31 +346,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.08.663208_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "perturbation multiome damid",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "differential-expression",
-        "enrichment",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "population-genetics",
-        "integration",
-        "chromatin",
-        "network",
-        "protein-structure",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -368,7 +373,36 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "population-genetics",
+        "integration",
+        "chromatin",
+        "network",
+        "protein-structure",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "clustering",
+        "sequence-alignment",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.07.28.666515_v1",
@@ -380,30 +414,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.28.666515_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "cross platform methylation",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "regression",
-        "multiple-testing",
-        "clustering",
-        "classification",
-        "prediction",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "variant-analysis",
-        "integration",
-        "methylation",
-        "database-query",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -431,7 +441,38 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "variant-analysis",
+        "integration",
+        "methylation",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "model-fitting",
+        "multiple-testing",
+        "clustering",
+        "classification",
+        "prediction",
+        "sequence-alignment",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1038_s42003-022-03654-9_v1",
@@ -443,26 +484,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s42003-022-03654-9_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "xenograft and tumorsphere expression",
-      "skills": [
-        "transformation",
-        "multiple-testing",
-        "differential-expression",
-        "enrichment",
-        "sequence-alignment",
-        "read-qc",
-        "database-query",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -490,7 +511,32 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "read-qc",
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "transformation",
+        "multiple-testing",
+        "sequence-alignment",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10_1186_s12915_024_01879_0_v1",
@@ -502,26 +548,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10_1186_s12915_024_01879_0_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "tagseq clone signatures",
-      "skills": [
-        "multiple-testing",
-        "differential-expression",
-        "enrichment",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "network",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -549,7 +575,33 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "network",
+        "database-query",
+        "evidence-extraction",
+        "expression-quantification"
+      ],
+      "operations": [
+        "multiple-testing",
+        "clustering",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1038_s41467-023-44243-6_v1",
@@ -561,22 +613,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s41467-023-44243-6_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "transcript level compound controls",
-      "skills": [
-        "normalization",
-        "differential-expression",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "statistics",
-        "visualization",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -604,7 +640,27 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "sequence-alignment",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1016_j.crtox.2021.01.003_v1",
@@ -616,24 +672,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1016_j.crtox.2021.01.003_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "probe transcriptomics pathways",
-      "skills": [
-        "normalization",
-        "multiple-testing",
-        "differential-expression",
-        "enrichment",
-        "sequence-alignment",
-        "read-qc",
-        "orthology",
-        "database-query",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -661,7 +699,30 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "sequence-alignment",
+        "read-qc",
+        "orthology",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "sequence-alignment",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.06.02.657493_v1",
@@ -673,24 +734,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.02.657493_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "probiotic timecourse expression",
-      "skills": [
-        "normalization",
-        "multiple-testing",
-        "differential-expression",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "database-query",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -718,7 +761,30 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "clustering",
+        "sequence-alignment",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.03.10.709901_v1",
@@ -730,24 +796,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.03.10.709901_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "microsatellite cell lineage",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "variant-analysis",
-        "trajectory",
-        "methylation",
-        "sequence-design",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -775,7 +823,29 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "trajectory",
+        "methylation",
+        "sequence-design"
+      ],
+      "operations": [
+        "sequence-alignment",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.07.21.665972_v1",
@@ -787,24 +857,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.21.665972_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "mrna mirna tumor contrasts",
-      "skills": [
-        "normalization",
-        "multiple-testing",
-        "differential-expression",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "abundance",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -832,7 +884,31 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "abundance",
+        "database-query",
+        "evidence-extraction",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.01.09.698641_v1",
@@ -844,26 +920,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.09.698641_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "transposable elements splicing isoforms",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "multiple-testing",
-        "differential-expression",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "read-qc",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "long-read"
       ],
@@ -893,7 +949,33 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "read-qc",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "multiple-testing",
+        "clustering",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.1101_2025.07.31.667834_v1",
@@ -905,8 +987,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.31.667834_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "excluded objective",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -917,7 +997,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "restricted/excluded",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "10.1101_2025.07.18.664654_v1",
@@ -929,28 +1013,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.18.664654_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "chromatin reporter integration",
-      "skills": [
-        "normalization",
-        "enrichment",
-        "clustering",
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "variant-analysis",
-        "integration",
-        "chromatin",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "immunology",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -978,7 +1040,33 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology",
+        "systems-biology"
+      ],
+      "workflows": [
+        "enrichment",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "integration",
+        "chromatin"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "sequence-alignment",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.01.02.697332_v1",
@@ -990,29 +1078,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.02.697332_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "expression accessibility integration",
-      "skills": [
-        "normalization",
-        "multiple-testing",
-        "differential-expression",
-        "sequence-alignment",
-        "sequence-query",
-        "intervals",
-        "read-qc",
-        "variant-analysis",
-        "chromatin",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1040,7 +1105,36 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "sequence-alignment",
+        "sequence-query",
+        "intervals",
+        "read-qc",
+        "variant-analysis",
+        "chromatin",
+        "database-query",
+        "evidence-extraction",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.01.31.702960_v1",
@@ -1052,24 +1146,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.31.702960_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "paired small rna mrna regulation",
-      "skills": [
-        "normalization",
-        "association",
-        "multiple-testing",
-        "differential-expression",
-        "sequence-query",
-        "read-qc",
-        "variant-consequence",
-        "integration",
-        "database-query",
-        "statistics",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1097,7 +1173,29 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "association",
+        "differential-expression",
+        "sequence-query",
+        "read-qc",
+        "variant-consequence",
+        "integration",
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "normalization",
+        "multiple-testing",
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "10.64898_2026.02.04.703711_v1",
@@ -1109,26 +1207,6 @@
       "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.04.703711_v1/agent/task_body.json",
       "source_group": "",
       "workflow": "observed community and growth model",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query",
-        "variant-analysis",
-        "composition",
-        "trajectory",
-        "spatial",
-        "image-analysis",
-        "database-query",
-        "evidence-extraction",
-        "sequence-design",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1156,7 +1234,33 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query",
+        "variant-analysis",
+        "composition",
+        "trajectory",
+        "spatial",
+        "image-analysis",
+        "database-query",
+        "evidence-extraction",
+        "sequence-design"
+      ],
+      "operations": [
+        "sequence-alignment",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

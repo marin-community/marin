@@ -10,16 +10,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "cross model rnaseq enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -53,7 +43,19 @@
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast",
         "differential-expression-bh"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "comparative-genomics",
@@ -65,15 +67,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "orthology and phylogeny",
-      "skills": [
-        "orthology",
-        "sequence-alignment",
-        "phylogeny"
-      ],
-      "applications": [
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -110,7 +103,20 @@
         "real-genome-cds-extraction",
         "real-genome-translation",
         "real-protein-alignment"
-      ]
+      ],
+      "scientific_context": [
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "sequence-alignment",
+        "phylogeny"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cystic-fibrosis",
@@ -122,17 +128,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "inherited variant prioritization",
-      "skills": [
-        "variant-analysis",
-        "variant-consequence",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -165,7 +160,20 @@
         "vcf-genotype-masking",
         "vcf-multiallelic-splitting",
         "variant-coding-consequences"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "variant-consequence",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deseq",
@@ -177,14 +185,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "reads to differential expression",
-      "skills": [
-        "sequence-alignment",
-        "expression-quantification",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -217,7 +217,19 @@
         "fastq-quality-trimming",
         "real-rnaseq-size-factors",
         "differential-expression-bh"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "expression-quantification",
+        "differential-expression"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "evolution",
@@ -229,15 +241,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "read mapping and variant comparison",
-      "skills": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -270,7 +273,20 @@
         "dna-unique-mapping",
         "sam-allele-pileup",
         "vcf-site-filtering"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "variant-analysis",
+        "variant-consequence"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "giab",
@@ -282,14 +298,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "variant calling and truth comparison",
-      "skills": [
-        "sequence-alignment",
-        "variant-analysis",
-        "model-evaluation"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -322,7 +330,20 @@
         "dna-unique-mapping",
         "sam-allele-pileup",
         "vcf-site-filtering"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "variant-analysis",
+        "model-evaluation"
+      ],
+      "operations": [
+        "sequence-alignment",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "metagenomics",
@@ -334,14 +355,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "metagenomic taxonomic profile",
-      "skills": [
-        "taxonomic-profiling",
-        "composition"
-      ],
-      "applications": [
-        "genome-variation",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -374,7 +387,17 @@
         "taxonomic-lca",
         "taxonomy-counts",
         "bray-curtis"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "microbiology"
+      ],
+      "workflows": [
+        "taxonomic-profiling",
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "single-cell",
@@ -386,14 +409,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "single cell condition comparison",
-      "skills": [
-        "clustering",
-        "cell-annotation",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -429,7 +444,18 @@
         "matrixmarket-log-normalization",
         "donor-counts",
         "cell-fractions"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "differential-expression"
+      ],
+      "operations": [
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "transcript-quant",
@@ -441,12 +467,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "transcript abundance",
-      "skills": [
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -477,7 +497,15 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "transcript-tpm"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "expression-quantification"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "viral-metagenomics",
@@ -489,15 +517,6 @@
       "source_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
       "source_group": "",
       "workflow": "metagenomic assembly and classification",
-      "skills": [
-        "assembly",
-        "taxonomic-profiling"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -533,7 +552,18 @@
         "real-fastq-pair-filter",
         "real-fastq-cycle-quality",
         "real-fastq-quality-yield"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "assembly",
+        "taxonomic-profiling"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

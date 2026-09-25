@@ -1,7 +1,295 @@
 {
-  "schema_version": 2,
-  "purpose": "Find missing scientific capabilities and design realistic, executable Harbor workflows. Skills and biological applications are independent facets; they are not a hierarchy or a Cartesian task-generation grid.",
-  "skills": [
+  "schema_version": 3,
+  "purpose": "Plan connected Harbor workflows, decompose their required analytical operations, and vary their scientific context while retaining executable rewards.",
+  "annotation_rule_version": "2026-09-25-workflow-operation-context-3",
+  "workflows": [
+    {
+      "id": "data-preparation",
+      "name": "Data preparation",
+      "outcome": "Prepare measurements and identities for a specified downstream analysis."
+    },
+    {
+      "id": "exploratory-analysis",
+      "name": "Exploratory data analysis",
+      "outcome": "Characterize patterns, groups or representations in observations."
+    },
+    {
+      "id": "association",
+      "name": "Association analysis",
+      "outcome": "Estimate or test an association on correctly matched observations with the stated unit of replication."
+    },
+    {
+      "id": "regression",
+      "name": "Regression modeling",
+      "outcome": "Fit a specified response model and report parameters, uncertainty or fit diagnostics."
+    },
+    {
+      "id": "group-comparison",
+      "name": "Group comparison",
+      "outcome": "Estimate or test a group contrast with explicit sampling, pairing and effect direction."
+    },
+    {
+      "id": "multiple-testing",
+      "name": "Multiple-testing correction",
+      "outcome": "Correct a declared family of hypothesis tests and retain its tested population."
+    },
+    {
+      "id": "differential-expression",
+      "name": "Differential expression analysis",
+      "outcome": "Estimate expression contrasts under an explicit design, measurement model and gene-selection rule."
+    },
+    {
+      "id": "enrichment",
+      "name": "Enrichment analysis",
+      "outcome": "Quantify gene-set, pathway or feature overrepresentation relative to a declared universe."
+    },
+    {
+      "id": "sensitivity",
+      "name": "Sensitivity analysis",
+      "outcome": "Repeat an analysis under controlled changes and quantify the resulting differences."
+    },
+    {
+      "id": "predictive-modeling",
+      "name": "Predictive modeling",
+      "outcome": "Build and apply a predictor to unseen observations under the required split policy."
+    },
+    {
+      "id": "model-evaluation",
+      "name": "Model evaluation",
+      "outcome": "Evaluate complete predictions with a fixed metric and biological grouping or split policy."
+    },
+    {
+      "id": "survival",
+      "name": "Survival analysis",
+      "outcome": "Estimate time-to-event quantities using explicit censoring, risk sets and covariates."
+    },
+    {
+      "id": "causal-inference",
+      "name": "Causal inference",
+      "outcome": "Estimate a specified causal contrast under explicit identification and sensitivity assumptions."
+    },
+    {
+      "id": "sequence-alignment",
+      "name": "Sequence alignment",
+      "outcome": "Align sequences or reads and interpret correspondence, scores and coordinate conventions."
+    },
+    {
+      "id": "sequence-query",
+      "name": "Sequence and annotation analysis",
+      "outcome": "Extract or reconcile sequences with strand, coordinate, translation and annotation rules."
+    },
+    {
+      "id": "intervals",
+      "name": "Genomic interval analysis",
+      "outcome": "Compute coordinate-aware overlap, distance, coverage or interval transformations."
+    },
+    {
+      "id": "read-qc",
+      "name": "Sequencing quality and coverage analysis",
+      "outcome": "Measure read, alignment and reference coverage with explicit eligibility and denominators."
+    },
+    {
+      "id": "assembly",
+      "name": "Sequence assembly and assessment",
+      "outcome": "Assemble or assess contigs using observed read support, continuity and error evidence."
+    },
+    {
+      "id": "variant-analysis",
+      "name": "Variant analysis",
+      "outcome": "Call, normalize, filter or summarize variants with explicit allele and sample semantics."
+    },
+    {
+      "id": "variant-consequence",
+      "name": "Variant consequence annotation",
+      "outcome": "Connect alleles to transcript, protein or regulatory consequences under pinned references."
+    },
+    {
+      "id": "population-genetics",
+      "name": "Population genetic analysis",
+      "outcome": "Estimate allele-frequency, ancestry, differentiation or inheritance quantities."
+    },
+    {
+      "id": "orthology",
+      "name": "Orthology assessment",
+      "outcome": "Assess homologous gene identity, completeness and copy status across proteomes."
+    },
+    {
+      "id": "phylogeny",
+      "name": "Phylogenetic inference and tree analysis",
+      "outcome": "Infer or measure trees with explicit topology, branch-length, rooting and taxon conventions."
+    },
+    {
+      "id": "alignment-signal",
+      "name": "Alignment informativeness and composition",
+      "outcome": "Measure informative sites and sequence composition under explicit gap and residue rules."
+    },
+    {
+      "id": "cell-annotation",
+      "name": "Cell identity annotation",
+      "outcome": "Assign or compare cell identities against declared reference evidence and an abstention policy."
+    },
+    {
+      "id": "composition",
+      "name": "Population composition analysis",
+      "outcome": "Compare population counts and fractions while preserving sample-level denominators and replication."
+    },
+    {
+      "id": "integration",
+      "name": "Data integration",
+      "outcome": "Reconcile batches, studies or modalities and evaluate alignment without erasing the target variation."
+    },
+    {
+      "id": "deconvolution",
+      "name": "Mixture deconvolution",
+      "outcome": "Estimate component abundances or signals using declared references and identifiable mixtures."
+    },
+    {
+      "id": "trajectory",
+      "name": "Trajectory and dynamics analysis",
+      "outcome": "Estimate ordered states or dynamics and distinguish model-derived order from measured time."
+    },
+    {
+      "id": "communication",
+      "name": "Cell communication analysis",
+      "outcome": "Compute expression-supported ligand–receptor or sender–receiver evidence under a frozen reference."
+    },
+    {
+      "id": "spatial",
+      "name": "Spatial analysis",
+      "outcome": "Quantify spatial relationships, neighborhoods or gradients with explicit geometry and null models."
+    },
+    {
+      "id": "chromatin",
+      "name": "Chromatin accessibility and binding analysis",
+      "outcome": "Analyze accessibility or binding signals using controls, replicates and reference-aware regions."
+    },
+    {
+      "id": "motifs",
+      "name": "Motif analysis",
+      "outcome": "Find or assess sequence motifs under explicit models and background composition."
+    },
+    {
+      "id": "methylation",
+      "name": "Methylation analysis",
+      "outcome": "Quantify methylation at sites or regions with coverage, measurement-unit and reference rules."
+    },
+    {
+      "id": "network",
+      "name": "Network analysis",
+      "outcome": "Construct or evaluate typed networks, modules, paths or connectivity with traceable edges."
+    },
+    {
+      "id": "protein-structure",
+      "name": "Molecular structure analysis",
+      "outcome": "Measure structural geometry, residue/atom identity, contacts or structural agreement."
+    },
+    {
+      "id": "molecular-descriptors",
+      "name": "Molecular representation and descriptors",
+      "outcome": "Parse chemical structures and compute graph, charge, stereochemical or descriptor properties."
+    },
+    {
+      "id": "rna-structure",
+      "name": "RNA structure analysis",
+      "outcome": "Predict or compare RNA structure under declared thermodynamic or measured constraints."
+    },
+    {
+      "id": "image-analysis",
+      "name": "Image measurement and reconstruction",
+      "outcome": "Measure or reconstruct image content with explicit calibration, pixel geometry and sample identity."
+    },
+    {
+      "id": "signal-analysis",
+      "name": "Signal and time-series analysis",
+      "outcome": "Process recorded signals or time series with explicit sampling, filtering and temporal splits."
+    },
+    {
+      "id": "dose-response",
+      "name": "Dose–response and assay analysis",
+      "outcome": "Estimate assay responses and control-adjusted effects with declared plate, dose and replicate structure."
+    },
+    {
+      "id": "abundance",
+      "name": "Differential abundance analysis",
+      "outcome": "Estimate abundance contrasts under measurement, missingness and replicate conventions."
+    },
+    {
+      "id": "repertoire",
+      "name": "Immune repertoire analysis",
+      "outcome": "Reconcile receptor chains and quantify clonotypes, diversity or sharing across samples."
+    },
+    {
+      "id": "database-query",
+      "name": "Biological database querying",
+      "outcome": "Resolve identifiers and retrieve versioned records under explicit query and evidence rules."
+    },
+    {
+      "id": "evidence-extraction",
+      "name": "Structured evidence extraction",
+      "outcome": "Extract specified facts or measurements with source locations, units and a finite evidence scope."
+    },
+    {
+      "id": "evidence-ranking",
+      "name": "Evidence-based prioritization",
+      "outcome": "Rank candidates under declared evidence, eligibility and tie rules without asserting unmeasured causality."
+    },
+    {
+      "id": "mechanistic-modeling",
+      "name": "Mechanistic modeling",
+      "outcome": "Construct a mechanistic representation, optionally selecting experiments to constrain it."
+    },
+    {
+      "id": "sequence-design",
+      "name": "Sequence construct analysis and design",
+      "outcome": "Construct or audit sequence products against explicit compatibility, translation and assembly constraints."
+    },
+    {
+      "id": "descriptive-analysis",
+      "name": "Descriptive analysis",
+      "outcome": "Summarize a biological measurement or compare descriptive endpoints."
+    },
+    {
+      "id": "taxonomic-profiling",
+      "name": "Taxonomic profiling",
+      "outcome": "Assign sequence evidence to taxa and quantify their abundance under a pinned reference and ambiguity policy."
+    },
+    {
+      "id": "expression-quantification",
+      "name": "Expression quantification",
+      "outcome": "Estimate transcript or gene abundance from reads with explicit reference, multimapping and normalization rules."
+    },
+    {
+      "id": "cell-qc",
+      "name": "Cell and feature quality control",
+      "outcome": "Select cells or features using declared measurement-aware quality, contamination and doublet rules."
+    },
+    {
+      "id": "model-inspection",
+      "name": "Model inspection",
+      "outcome": "Inspect architecture, parameter identity or uncertainty from an executable model and pinned checkpoint."
+    },
+    {
+      "id": "image-segmentation",
+      "name": "Image segmentation",
+      "outcome": "Assign pixel or voxel masks to structures under a specified label and geometry convention."
+    },
+    {
+      "id": "object-detection",
+      "name": "Image object detection",
+      "outcome": "Localize and label objects using boxes, points or equivalent spatial annotations."
+    },
+    {
+      "id": "structure-prediction",
+      "name": "Molecular structure prediction",
+      "outcome": "Generate molecular conformations or binding poses with valid atom identity and geometry."
+    },
+    {
+      "id": "chemical-image-recognition",
+      "name": "Chemical structure recognition",
+      "outcome": "Convert a chemical drawing to a machine-readable molecular structure."
+    }
+  ],
+  "operations": [
     {
       "id": "normalization",
       "name": "Normalization",
@@ -29,44 +317,11 @@
       "outcome": "Select informative features under a declared criterion without leaking evaluation data."
     },
     {
-      "id": "association",
-      "name": "Association analysis",
-      "outcome": "Estimate or test an association on correctly matched observations with the stated unit of replication.",
-      "include": "Estimate dependence or test an association between matched variables.",
-      "exclude": "A benchmark grader using correlation; retrieving an association record; claiming causation."
-    },
-    {
-      "id": "regression",
-      "name": "Regression modeling",
-      "outcome": "Fit a specified response model and report parameters, uncertainty or fit diagnostics.",
-      "include": "Estimate response-model parameters, uncertainty, contrasts or fit diagnostics.",
-      "exclude": "Prediction-only submissions; regression used internally for differential expression without a separate model-analysis endpoint."
-    },
-    {
-      "id": "group-comparison",
-      "name": "Group comparison",
-      "outcome": "Estimate or test a group contrast with explicit sampling, pairing and effect direction.",
-      "include": "Compare groups with an explicit contrast, unit of replication and test or effect estimate.",
-      "exclude": "Every specialized differential expression or abundance task; a supplied group contrast."
-    },
-    {
       "id": "multiple-testing",
       "name": "Multiple-testing correction",
       "outcome": "Correct a declared family of hypothesis tests and retain its tested population.",
       "include": "Choose, apply or audit a multiple-testing procedure as an explicit analysis requirement.",
       "exclude": "Counting an already thresholded gene list; an internal default adjustment with no independent requirement."
-    },
-    {
-      "id": "differential-expression",
-      "name": "Differential expression analysis",
-      "outcome": "Estimate expression contrasts under an explicit design, measurement model and gene-selection rule.",
-      "include": "Compute or audit gene/transcript expression contrasts and their significance or effect selection.",
-      "exclude": "Predicting supplied differential-expression values in unseen perturbations; looking up a published DEG list."
-    },
-    {
-      "id": "enrichment",
-      "name": "Enrichment analysis",
-      "outcome": "Quantify gene-set, pathway or feature overrepresentation relative to a declared universe."
     },
     {
       "id": "sensitivity",
@@ -95,227 +350,9 @@
     {
       "id": "model-evaluation",
       "name": "Model evaluation",
-      "outcome": "Evaluate complete predictions with a fixed metric and biological grouping or split policy.",
-      "include": "The solver computes or compares predictive performance, calibration or generalization results.",
+      "outcome": "Compute or compare model fit, predictive performance or calibration under an explicit criterion and sampling policy.",
+      "include": "The solver reports or compares fit criteria such as AIC, predictive performance, calibration or generalization.",
       "exclude": "The benchmark grader computes a score on submitted predictions; merely supplying test predictions or out-of-fold predictions."
-    },
-    {
-      "id": "survival",
-      "name": "Survival analysis",
-      "outcome": "Estimate time-to-event quantities using explicit censoring, risk sets and covariates."
-    },
-    {
-      "id": "causal-inference",
-      "name": "Causal inference",
-      "outcome": "Estimate a specified causal contrast under explicit identification and sensitivity assumptions."
-    },
-    {
-      "id": "sequence-alignment",
-      "name": "Sequence alignment",
-      "outcome": "Align sequences or reads and interpret correspondence, scores and coordinate conventions."
-    },
-    {
-      "id": "sequence-query",
-      "name": "Sequence and annotation analysis",
-      "outcome": "Extract or reconcile sequences with strand, coordinate, translation and annotation rules.",
-      "include": "Compute sequence properties or derive sequence, translation or annotation results under explicit reference conventions.",
-      "exclude": "A sequence is merely an input to an unrelated operation; parsing a FASTA as an incidental step."
-    },
-    {
-      "id": "intervals",
-      "name": "Genomic interval analysis",
-      "outcome": "Compute coordinate-aware overlap, distance, coverage or interval transformations.",
-      "include": "Compute genomic overlaps, distances, windows or interval mappings.",
-      "exclude": "A database lookup whose query mentions a promoter; intervals already resolved in the input."
-    },
-    {
-      "id": "read-qc",
-      "name": "Sequencing quality and coverage analysis",
-      "outcome": "Measure read, alignment and reference coverage with explicit eligibility and denominators."
-    },
-    {
-      "id": "assembly",
-      "name": "Sequence assembly and assessment",
-      "outcome": "Assemble or assess contigs using observed read support, continuity and error evidence."
-    },
-    {
-      "id": "variant-analysis",
-      "name": "Variant analysis",
-      "outcome": "Call, normalize, filter or summarize variants with explicit allele and sample semantics."
-    },
-    {
-      "id": "variant-consequence",
-      "name": "Variant consequence annotation",
-      "outcome": "Connect alleles to transcript, protein or regulatory consequences under pinned references.",
-      "include": "Derive transcript, protein or regulatory consequences of alleles against reference annotations.",
-      "exclude": "Retrieving an existing ClinVar assertion; predicting protein assay fitness; generic mention of pathogenicity."
-    },
-    {
-      "id": "population-genetics",
-      "name": "Population genetic analysis",
-      "outcome": "Estimate allele-frequency, ancestry, differentiation or inheritance quantities."
-    },
-    {
-      "id": "orthology",
-      "name": "Orthology assessment",
-      "outcome": "Assess homologous gene identity, completeness and copy status across proteomes."
-    },
-    {
-      "id": "phylogeny",
-      "name": "Phylogenetic inference and tree analysis",
-      "outcome": "Infer or measure trees with explicit topology, branch-length, rooting and taxon conventions.",
-      "include": "Infer a phylogeny or calculate an explicitly requested tree property.",
-      "exclude": "Lineage mentioned as biological context; a clustering dendrogram with no evolutionary interpretation."
-    },
-    {
-      "id": "alignment-signal",
-      "name": "Alignment informativeness and composition",
-      "outcome": "Measure informative sites and sequence composition under explicit gap and residue rules."
-    },
-    {
-      "id": "cell-annotation",
-      "name": "Cell identity annotation",
-      "outcome": "Assign or compare cell identities against declared reference evidence and an abstention policy.",
-      "include": "Assign or audit cell identity from expression, markers or labeled reference cells.",
-      "exclude": "Receiving cell types as metadata; interpreting changes within already annotated cell types."
-    },
-    {
-      "id": "composition",
-      "name": "Population composition analysis",
-      "outcome": "Compare population counts and fractions while preserving sample-level denominators and replication."
-    },
-    {
-      "id": "integration",
-      "name": "Data integration",
-      "outcome": "Reconcile batches, studies or modalities and evaluate alignment without erasing the target variation.",
-      "include": "Align or reconcile batches/modalities and assess their correspondence.",
-      "exclude": "Predicting one modality from another; using pre-aligned tables or supplied integrated embeddings."
-    },
-    {
-      "id": "deconvolution",
-      "name": "Mixture deconvolution",
-      "outcome": "Estimate component abundances or signals using declared references and identifiable mixtures."
-    },
-    {
-      "id": "trajectory",
-      "name": "Trajectory and dynamics analysis",
-      "outcome": "Estimate ordered states or dynamics and distinguish model-derived order from measured time."
-    },
-    {
-      "id": "communication",
-      "name": "Cell communication analysis",
-      "outcome": "Compute expression-supported ligand–receptor or sender–receiver evidence under a frozen reference."
-    },
-    {
-      "id": "spatial",
-      "name": "Spatial analysis",
-      "outcome": "Quantify spatial relationships, neighborhoods or gradients with explicit geometry and null models."
-    },
-    {
-      "id": "chromatin",
-      "name": "Chromatin accessibility and binding analysis",
-      "outcome": "Analyze accessibility or binding signals using controls, replicates and reference-aware regions.",
-      "include": "Compute or interpret accessibility, chromatin occupancy or contact signals.",
-      "exclude": "DNA substrings spelling ATAC; general gene regulation; retrieving a stored binding-site assertion."
-    },
-    {
-      "id": "motifs",
-      "name": "Motif analysis",
-      "outcome": "Find or assess sequence motifs under explicit models and background composition."
-    },
-    {
-      "id": "methylation",
-      "name": "Methylation analysis",
-      "outcome": "Quantify methylation at sites or regions with coverage, measurement-unit and reference rules."
-    },
-    {
-      "id": "network",
-      "name": "Network analysis",
-      "outcome": "Construct or evaluate typed networks, modules, paths or connectivity with traceable edges.",
-      "include": "Infer edges or compute modules, paths, centrality or other relational structure.",
-      "exclude": "Looking up one stored edge; independent pair classification with supplied features and no graph operation."
-    },
-    {
-      "id": "protein-structure",
-      "name": "Molecular structure analysis",
-      "outcome": "Measure structural geometry, residue/atom identity, contacts or structural agreement.",
-      "include": "Measure or compare existing three-dimensional structures, contacts or geometry.",
-      "exclude": "A genomic binding site; sequence-only protein work; producing new poses, which is structure prediction."
-    },
-    {
-      "id": "molecular-descriptors",
-      "name": "Molecular representation and descriptors",
-      "outcome": "Parse chemical structures and compute graph, charge, stereochemical or descriptor properties."
-    },
-    {
-      "id": "rna-structure",
-      "name": "RNA structure analysis",
-      "outcome": "Predict or compare RNA structure under declared thermodynamic or measured constraints."
-    },
-    {
-      "id": "image-analysis",
-      "name": "Image measurement and reconstruction",
-      "outcome": "Measure or reconstruct image content with explicit calibration, pixel geometry and sample identity.",
-      "include": "Measure, reconstruct or process actual image pixels and geometry.",
-      "exclude": "Supplied image-derived tables; scientific plots; genomic segmentation; classification with no separate image-processing output."
-    },
-    {
-      "id": "signal-analysis",
-      "name": "Signal and time-series analysis",
-      "outcome": "Process recorded signals or time series with explicit sampling, filtering and temporal splits."
-    },
-    {
-      "id": "dose-response",
-      "name": "Dose–response and assay analysis",
-      "outcome": "Estimate assay responses and control-adjusted effects with declared plate, dose and replicate structure."
-    },
-    {
-      "id": "abundance",
-      "name": "Differential abundance analysis",
-      "outcome": "Estimate abundance contrasts under measurement, missingness and replicate conventions."
-    },
-    {
-      "id": "repertoire",
-      "name": "Immune repertoire analysis",
-      "outcome": "Reconcile receptor chains and quantify clonotypes, diversity or sharing across samples."
-    },
-    {
-      "id": "database-query",
-      "name": "Biological database querying",
-      "outcome": "Resolve identifiers and retrieve versioned records under explicit query and evidence rules.",
-      "include": "Resolve identities and retrieve or reconcile records from a database snapshot.",
-      "exclude": "A database is merely the origin of already supplied data; biological inference performed by a predictive model."
-    },
-    {
-      "id": "evidence-extraction",
-      "name": "Structured evidence extraction",
-      "outcome": "Extract specified facts or measurements with source locations, units and a finite evidence scope.",
-      "include": "Extract an explicit fact or measurement with a supporting source location.",
-      "exclude": "A citation in background; unconstrained literature synthesis; simple structured database retrieval already covered by database querying."
-    },
-    {
-      "id": "evidence-ranking",
-      "name": "Evidence-based prioritization",
-      "outcome": "Rank candidates under declared evidence, eligibility and tie rules without asserting unmeasured causality.",
-      "include": "Prioritize candidates by an explicit, scientifically justified evidence rule.",
-      "exclude": "The phrase most likely in an exact database query; a surrogate rule presented as proof of causality."
-    },
-    {
-      "id": "simulation",
-      "name": "Mechanistic modeling and simulation",
-      "outcome": "Construct and execute a model and evaluate predictions under specified conditions and numerical rules."
-    },
-    {
-      "id": "sequence-design",
-      "name": "Sequence construct analysis and design",
-      "outcome": "Construct or audit sequence products against explicit compatibility, translation and assembly constraints."
-    },
-    {
-      "id": "statistics",
-      "name": "Statistical estimation",
-      "outcome": "Calculate an endpoint with correct observation units, aggregation, uncertainty and denominators.",
-      "include": "Estimate a standalone descriptive quantity or its uncertainty with explicit units and denominators.",
-      "exclude": "A mean, count or ratio that is internal to a separately labeled specialized analysis."
     },
     {
       "id": "data-management",
@@ -332,24 +369,11 @@
       "exclude": "Input images; a grader inspecting a plot; optional diagnostic figures."
     },
     {
-      "id": "taxonomic-profiling",
-      "name": "Taxonomic profiling",
-      "outcome": "Assign sequence evidence to taxa and quantify their abundance under a pinned reference and ambiguity policy."
-    },
-    {
-      "id": "expression-quantification",
-      "name": "Expression quantification",
-      "outcome": "Estimate transcript or gene abundance from reads with explicit reference, multimapping and normalization rules."
-    },
-    {
-      "id": "cell-qc",
-      "name": "Cell and feature quality control",
-      "outcome": "Select cells or features using declared measurement-aware quality, contamination and doublet rules."
-    },
-    {
-      "id": "model-inspection",
-      "name": "Model inspection",
-      "outcome": "Inspect architecture, parameter identity or uncertainty from an executable model and pinned checkpoint."
+      "id": "evidence-extraction",
+      "name": "Structured evidence extraction",
+      "outcome": "Extract specified facts or measurements with source locations, units and a finite evidence scope.",
+      "include": "Extract an explicit fact or measurement with a supporting source location.",
+      "exclude": "A citation in background; unconstrained literature synthesis; simple structured database retrieval already covered by database querying."
     },
     {
       "id": "experimental-design",
@@ -359,35 +383,77 @@
       "exclude": "Wet-lab execution; an unrestricted research plan judged for novelty or quality."
     },
     {
-      "id": "image-segmentation",
-      "name": "Image segmentation",
-      "outcome": "Assign pixel or voxel masks to structures under a specified label and geometry convention.",
-      "include": "Produce or audit segmentation masks from images.",
-      "exclude": "A supplied segmentation; genomic segmentation; image-level classification."
+      "id": "hypothesis-testing",
+      "name": "Hypothesis testing",
+      "outcome": "Test an explicit null hypothesis with the correct sampling unit and report its statistic or significance."
     },
     {
-      "id": "object-detection",
-      "name": "Image object detection",
-      "outcome": "Localize and label objects using boxes, points or equivalent spatial annotations.",
-      "include": "Produce labeled object locations and confidence scores from images.",
-      "exclude": "Image-level labels only; masks belong to image segmentation."
+      "id": "effect-estimation",
+      "name": "Effect estimation",
+      "outcome": "Estimate a contrast, ratio, fold change or model effect under explicit comparison and direction conventions."
     },
     {
-      "id": "structure-prediction",
-      "name": "Molecular structure prediction",
-      "outcome": "Generate molecular conformations or binding poses with valid atom identity and geometry.",
-      "include": "Predict new three-dimensional coordinates or poses.",
-      "exclude": "Measure supplied structures; scalar affinity prediction; RNA secondary-structure inference already covered by RNA structure analysis."
+      "id": "model-fitting",
+      "name": "Statistical model fitting",
+      "outcome": "Fit a specified response model with the required design, covariates and parameter estimation."
     },
     {
-      "id": "chemical-image-recognition",
-      "name": "Chemical structure recognition",
-      "outcome": "Convert a chemical drawing to a machine-readable molecular structure.",
-      "include": "Recover molecular identity, connectivity and stereochemistry from a drawing.",
-      "exclude": "Calculate descriptors from a supplied SMILES; general image segmentation."
+      "id": "descriptive-statistics",
+      "name": "Descriptive statistics",
+      "outcome": "Calculate requested counts, proportions, distribution summaries or aggregations with explicit denominators."
+    },
+    {
+      "id": "association-estimation",
+      "name": "Association estimation",
+      "outcome": "Compute the strength and direction of dependence between matched variables; significance testing is a separate operation."
+    },
+    {
+      "id": "record-selection",
+      "name": "Record filtering and ranking",
+      "outcome": "Select or order records under scientific eligibility, threshold or ranking rules."
+    },
+    {
+      "id": "set-comparison",
+      "name": "Set comparison",
+      "outcome": "Compute intersections, differences or membership across declared sets and identifier conventions."
+    },
+    {
+      "id": "graph-measurement",
+      "name": "Graph and tree measurement",
+      "outcome": "Compute path lengths, branch summaries or other requested graph properties from supplied or reconstructed graphs."
+    },
+    {
+      "id": "sequence-characterization",
+      "name": "Sequence characterization",
+      "outcome": "Calculate sequence composition or site properties under explicit alphabet, ambiguity and alignment conventions."
+    },
+    {
+      "id": "sequence-alignment",
+      "name": "Sequence alignment",
+      "outcome": "Establish correspondence between sequences or reads and a reference under explicit alignment rules."
+    },
+    {
+      "id": "reference-assessment",
+      "name": "Reference-based assessment",
+      "outcome": "Assess identity or completeness against a specified reference profile and summarize matches."
+    },
+    {
+      "id": "record-retrieval",
+      "name": "Reference record retrieval",
+      "outcome": "Resolve identities and retrieve source-versioned records or annotations."
+    },
+    {
+      "id": "optimization",
+      "name": "Optimization",
+      "outcome": "Find an extremum of a declared objective within an explicit feasible domain."
+    },
+    {
+      "id": "uncertainty-estimation",
+      "name": "Uncertainty estimation",
+      "outcome": "Estimate sampling uncertainty, confidence intervals or related uncertainty summaries."
     }
   ],
-  "applications": [
+  "scientific_context": [
     {
       "id": "transcriptomics",
       "name": "Transcriptomics",
@@ -484,17 +550,18 @@
       "scope": "RNA sequence-dependent processing, translation, stability and biochemical reactivity."
     }
   ],
-  "annotation_rule_version": "2026-09-25-operation-boundaries-2",
+  "annotation_policy": [
+    "A workflow connects operations, scientific decisions and output artifacts to answer a question. Differential expression and enrichment are workflow types, not general analytical operations.",
+    "An operation names required work such as model fitting, effect estimation, hypothesis testing or multiple-testing correction. A workflow label does not automatically imply its full operation list.",
+    "Record the input stage: performing differential expression from counts differs from querying a supplied result table. Do not credit background, supplied results, optional methods or benchmark-grader work.",
+    "Scientific context describes the measured objects and study setting. Its current labels are overlapping descriptors, not a domain hierarchy. Assay and study-design details remain in the source question and review notes.",
+    "Split an operation when it changes task construction, a scientific decision or an executable output. Do not decompose routine file loading or incidental arithmetic.",
+    "Prioritize missing connected workflows and their input/design variants. Operation frequencies describe shared requirements; they do not substitute for workflow diversity.",
+    "Provisional migrations retain only directly supported general operation labels. Empty or partial operation lists require review and are not evidence that no operations are needed.",
+    "A faithful executable framing must retain the scientific purpose. A deterministic proxy alone does not establish causal, clinical or experimental validity."
+  ],
   "references": [
     "https://edamontologydocs.readthedocs.io/en/latest/editors_guide.html",
     "https://github.com/marin-community/marin/issues/8879"
-  ],
-  "annotation_policy": [
-    "Assign a skill only when the question or its explicit faithful adaptation requires the solver to perform that operation. Background, supplied results, available tools and grader metrics do not earn labels.",
-    "Use the most specific operation that describes the required result. Do not add generic statistics, regression, classification or data preparation for steps internal to a specialized operation unless a separate deliverable requires them.",
-    "Split skills when their inputs, scientific decisions or checkable outputs require different task designs. Algorithm names, file formats, organisms and packages remain context metadata.",
-    "Assign applications from the biological objects and endpoints actually analyzed. Clinical motivation, a cited publication, or an incidental gene name is insufficient. Leave unresolved applications empty.",
-    "A category frequency counts a requirement at most once per question record. Repeated studies and overlapping releases must be considered before using frequency to plan tasks.",
-    "Eligibility requires a faithful executable result contract. Pinning a method or reference can resolve ambiguity; a deterministic proxy alone does not validate a causal, clinical or experimental claim."
   ]
 }

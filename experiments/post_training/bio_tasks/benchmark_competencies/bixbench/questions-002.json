@@ -10,16 +10,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic tree",
-      "skills": [
-        "orthology",
-        "phylogeny",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -50,7 +40,20 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-cox1-tree-comparison"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "phylogeny"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-38-q6",
@@ -62,16 +65,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic tree",
-      "skills": [
-        "orthology",
-        "phylogeny",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -102,7 +95,20 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-cox1-tree-comparison"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "phylogeny"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-39-q2",
@@ -114,14 +120,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -149,7 +147,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q1",
@@ -161,14 +170,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -197,7 +198,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q2",
@@ -209,14 +222,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -245,7 +250,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q3",
@@ -257,15 +274,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "group-comparison",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -294,7 +302,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q4",
@@ -306,15 +326,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -343,7 +354,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q5",
@@ -355,15 +379,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -392,7 +407,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q6",
@@ -404,14 +432,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "phylogeny"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -440,7 +460,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "phylogeny"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-4-q7",
@@ -452,14 +482,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic root to tip",
-      "skills": [
-        "orthology"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -488,7 +510,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-41-q1",
@@ -500,13 +532,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony control comparisons",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -540,7 +565,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Dunnett contrasts use supplied colony measurements. Counting selected contrasts is part of group comparison; lack of significance must not be equated with demonstrated equivalence."
-      }
+      },
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-41-q3",
@@ -552,13 +586,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony control comparisons",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -591,7 +618,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Compute a difference between means from supplied colony measurements. No raw-image processing is requested."
-      }
+      },
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-41-q4",
@@ -603,13 +641,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony control comparisons",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -642,7 +673,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Dunnett contrasts use supplied area and circularity tables; counting selected contrasts does not add a separate statistical estimation skill."
-      }
+      },
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-41-q5",
@@ -654,13 +694,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony control comparisons",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -688,7 +721,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-42-q1",
@@ -700,16 +744,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "matched patient multiomics",
-      "skills": [
-        "methylation",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -737,7 +771,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "clinical"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-42-q2",
@@ -749,14 +796,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "matched patient multiomics",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -784,7 +823,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-43-q1",
@@ -796,13 +847,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "combination treatment enrichment",
-      "skills": [
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -830,7 +874,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-43-q2",
@@ -842,13 +895,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "combination treatment enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -876,7 +922,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-43-q3",
@@ -888,13 +943,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "combination treatment enrichment",
-      "skills": [
-        "differential-expression",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -922,7 +970,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-43-q4",
@@ -934,14 +992,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "combination treatment enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -969,7 +1019,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-43-q5",
@@ -981,14 +1041,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "combination treatment enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1016,7 +1068,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-45-q1",
@@ -1028,15 +1091,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic relative",
-      "skills": [
-        "alignment-signal",
-        "group-comparison"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1065,7 +1119,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "alignment-signal",
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-45-q2",
@@ -1077,16 +1142,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic relative",
-      "skills": [
-        "orthology",
-        "alignment-signal",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1115,7 +1170,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "alignment-signal"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-45-q5",
@@ -1127,16 +1195,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic relative",
-      "skills": [
-        "orthology",
-        "alignment-signal",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1165,7 +1223,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "alignment-signal"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-45-q6",
@@ -1177,15 +1248,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic relative",
-      "skills": [
-        "orthology",
-        "alignment-signal"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1214,7 +1276,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "alignment-signal"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-46-q1",
@@ -1226,13 +1299,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq target effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1260,7 +1326,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-46-q4",
@@ -1272,14 +1347,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq target effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1307,7 +1374,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-47-q2",
@@ -1319,13 +1396,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1353,7 +1423,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-47-q3",
@@ -1365,13 +1444,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1399,7 +1471,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-49-q1",
@@ -1411,15 +1492,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq shrunken effects",
-      "skills": [
-        "differential-expression",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1449,7 +1521,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-49-q2",
@@ -1461,14 +1545,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq shrunken effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1498,7 +1574,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-49-q3",
@@ -1510,14 +1596,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq shrunken effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1547,7 +1625,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-49-q4",
@@ -1559,14 +1647,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq shrunken effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1596,7 +1676,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-49-q5",
@@ -1608,14 +1698,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq shrunken effects",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1645,7 +1727,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-5-q1",
@@ -1657,14 +1749,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bulk rnaseq go enrichment",
-      "skills": [
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1694,7 +1778,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-5-q4",
@@ -1706,12 +1801,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bulk rnaseq go enrichment",
-      "skills": [
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1741,7 +1830,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q1",
@@ -1753,13 +1850,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression",
-        "classification"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1787,7 +1877,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling"
+      ],
+      "operations": [
+        "model-fitting",
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q2",
@@ -1799,12 +1901,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1834,7 +1930,17 @@
       "existing_mapping_status": "workflow-validated",
       "recipes": [
         "real-clinical-univariable-logit-audit"
-      ]
+      ],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q3",
@@ -1846,13 +1952,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression",
-        "prediction"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1880,7 +1979,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling"
+      ],
+      "operations": [
+        "model-fitting",
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q4",
@@ -1892,12 +2003,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1925,7 +2030,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q5",
@@ -1937,12 +2052,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1970,7 +2079,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q6",
@@ -1982,13 +2101,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression",
-        "prediction"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -2016,7 +2128,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling"
+      ],
+      "operations": [
+        "model-fitting",
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-51-q8",
@@ -2028,12 +2152,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical logistic regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2063,7 +2181,17 @@
       "existing_mapping_status": "workflow-validated",
       "recipes": [
         "real-clinical-univariable-logit-audit"
-      ]
+      ],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q1",
@@ -2075,16 +2203,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "methylation",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2112,7 +2230,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q2",
@@ -2124,14 +2255,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2161,7 +2284,17 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-anole-age-cpg-density"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q3",
@@ -2173,16 +2306,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "association",
-        "methylation",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2210,7 +2333,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "association",
+        "methylation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q5",
@@ -2222,15 +2358,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "methylation",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2258,7 +2385,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q6",
@@ -2270,14 +2409,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2307,7 +2438,17 @@
       "existing_mapping_status": "workflow-validated",
       "recipes": [
         "real-anole-age-cpg-density"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-52-q7",
@@ -2319,13 +2460,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "chromosomal cpg density",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2355,7 +2489,16 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-anole-age-cpg-density"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-53-q2",
@@ -2367,14 +2510,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq sensitivity and enrichment",
-      "skills": [
-        "differential-expression",
-        "sensitivity"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2402,7 +2537,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "sensitivity"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-53-q3",
@@ -2414,16 +2560,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq sensitivity and enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2451,7 +2587,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-53-q4",
@@ -2463,17 +2612,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq sensitivity and enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2501,7 +2639,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-53-q5",
@@ -2513,15 +2666,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq sensitivity and enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2549,7 +2693,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-53-q6",
@@ -2561,16 +2716,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "rnaseq sensitivity and enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2598,7 +2743,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q1",
@@ -2610,14 +2768,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression",
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2645,7 +2795,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q2",
@@ -2657,13 +2819,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2691,7 +2846,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q3",
@@ -2703,15 +2869,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression",
-        "intervals",
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2739,7 +2896,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression",
+        "intervals"
+      ],
+      "operations": [
+        "model-fitting",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q4",
@@ -2751,13 +2921,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2790,7 +2953,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "The endpoint is the overall significance of a fitted spline model using supplied colony areas. Raw-image measurement and generic statistics are not additional required operations."
-      }
+      },
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q5",
@@ -2802,14 +2976,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression",
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2837,7 +3003,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q6",
@@ -2849,13 +3027,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2883,7 +3054,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-54-q7",
@@ -2895,13 +3077,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "colony dose response modeling",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "microbiology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2929,7 +3104,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-55-q1",
@@ -2941,15 +3127,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "ortholog discovery",
-      "skills": [
-        "orthology"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "proteomics",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2977,7 +3154,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "proteomics",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-56-q1",
@@ -2989,14 +3177,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "ortholog sequence extraction",
-      "skills": [
-        "orthology"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3024,7 +3204,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-57-q1",
@@ -3036,13 +3226,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "ortholog multiple alignment",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3073,7 +3256,18 @@
       "recipes": [
         "real-protein-alignment",
         "alignment-column-filter"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-58-q1",
@@ -3085,14 +3279,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "ortholog alignment trimming",
-      "skills": [
-        "orthology",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3120,7 +3306,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q1",
@@ -3132,13 +3329,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "enrichment"
-      ],
-      "applications": [
-        "genome-variation",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3166,7 +3356,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q3",
@@ -3178,14 +3377,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "enrichment"
-      ],
-      "applications": [
-        "genome-variation",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3213,7 +3404,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q4",
@@ -3225,14 +3426,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "genome-variation",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3260,7 +3453,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q5",
@@ -3272,15 +3475,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3308,7 +3502,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q6",
@@ -3320,15 +3526,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3356,7 +3553,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-6-q7",
@@ -3368,13 +3576,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "crispr screen pathway analysis",
-      "skills": [
-        "enrichment"
-      ],
-      "applications": [
-        "genome-variation",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3402,7 +3603,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-60-q1",
@@ -3414,13 +3624,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "phylogenetic treeness",
-      "skills": [
-        "phylogeny"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3451,7 +3654,16 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-cox1-tree-comparison"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "phylogeny"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q1",
@@ -3463,14 +3675,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "read-qc"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3498,7 +3702,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "read-qc"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q2",
@@ -3510,15 +3724,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "read-qc",
-        "sequence-alignment"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3546,7 +3751,20 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "read-qc",
+        "sequence-alignment"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q3",
@@ -3558,15 +3776,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "variant-analysis",
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3594,7 +3803,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q4",
@@ -3606,14 +3826,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3641,7 +3853,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q5",
@@ -3653,14 +3875,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3688,7 +3902,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-61-q6",
@@ -3700,14 +3924,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "bacterial read to variant workflow",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3735,7 +3951,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-7-q1",
@@ -3747,13 +3973,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3781,7 +4000,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-7-q2",
@@ -3793,14 +4021,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3828,7 +4048,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-7-q3",
@@ -3840,13 +4071,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "clinical variant cohort analysis",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3874,7 +4098,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q1",
@@ -3886,15 +4119,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "differential-expression",
-        "methylation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3922,7 +4146,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q2",
@@ -3934,17 +4169,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "association",
-        "differential-expression",
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3972,7 +4196,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "association",
+        "differential-expression",
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q3",
@@ -3984,15 +4222,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4020,7 +4249,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q5",
@@ -4032,16 +4273,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "differential-expression",
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4069,7 +4300,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q6",
@@ -4081,14 +4325,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4116,7 +4352,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-8-q7",
@@ -4128,14 +4374,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "methylation expression contingency",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4163,7 +4401,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-9-q3",
@@ -4175,13 +4423,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "tissue rnaseq set comparison",
-      "skills": [
-        "differential-expression",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4209,7 +4450,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-9-q4",
@@ -4221,13 +4472,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "tissue rnaseq set comparison",
-      "skills": [
-        "differential-expression",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4255,7 +4499,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bix-9-q5",
@@ -4267,13 +4521,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
       "source_group": "",
       "workflow": "tissue rnaseq set comparison",
-      "skills": [
-        "differential-expression",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4301,7 +4548,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

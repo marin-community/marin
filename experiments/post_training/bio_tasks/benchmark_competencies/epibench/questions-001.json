@@ -10,17 +10,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/atac_1a/eval.json",
       "source_group": "",
       "workflow": "atac consensus and tss context",
-      "skills": [
-        "intervals",
-        "chromatin",
-        "database-query",
-        "evidence-ranking",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -46,7 +35,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "chromatin",
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chipseq_K2",
@@ -58,22 +62,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/chipseq_K2/eval.json",
       "source_group": "",
       "workflow": "enhancer motif program",
-      "skills": [
-        "enrichment",
-        "cell-annotation",
-        "trajectory",
-        "chromatin",
-        "motifs",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -101,7 +89,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment",
+        "cell-annotation",
+        "trajectory",
+        "chromatin",
+        "motifs"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cold_03b",
@@ -113,18 +120,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/cold_03b/eval.json",
       "source_group": "",
       "workflow": "direction aware multiomic events",
-      "skills": [
-        "differential-expression",
-        "intervals",
-        "chromatin",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -152,7 +147,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "intervals",
+        "chromatin",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gse149608_c3_enhancer_methylation",
@@ -164,21 +175,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_c3_enhancer_methylation/eval.json",
       "source_group": "",
       "workflow": "paired regulatory methylation expression",
-      "skills": [
-        "intervals",
-        "chromatin",
-        "methylation",
-        "protein-structure",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics",
-        "molecular-structure",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -204,7 +200,25 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics",
+        "molecular-structure",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "intervals",
+        "chromatin",
+        "methylation",
+        "protein-structure"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gse149608_wnt2_promoter_genome_build",
@@ -216,18 +230,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_wnt2_promoter_genome_build/eval.json",
       "source_group": "",
       "workflow": "assembly aware promoter methylation",
-      "skills": [
-        "intervals",
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -255,7 +257,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "clinical"
+      ],
+      "workflows": [
+        "intervals",
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "zebrafish_009c_cutnrun_vs_chip_h3k9me3",
@@ -267,18 +284,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_009c_cutnrun_vs_chip_h3k9me3/eval.json",
       "source_group": "",
       "workflow": "broad chromatin assay comparison",
-      "skills": [
-        "enrichment",
-        "chromatin",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -306,7 +311,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment",
+        "chromatin"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "zebrafish_014g_h2az_bivalent_promoters",
@@ -318,22 +338,6 @@
       "source_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_014g_h2az_bivalent_promoters/eval.json",
       "source_group": "",
       "workflow": "multi mark promoter context",
-      "skills": [
-        "association",
-        "enrichment",
-        "intervals",
-        "variant-analysis",
-        "chromatin",
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -361,7 +365,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "association",
+        "enrichment",
+        "intervals",
+        "variant-analysis",
+        "chromatin",
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

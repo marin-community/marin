@@ -1,12 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "benchmark": "Liu-single-cell",
   "status": "draft-for-review",
   "source_revision": "1605e6e38bd69307e2f7b68a4367de21043c89b6",
   "inventory_sha256": "d722bb44228cf72c04b1bfa6bc084f7aa2ebfb6b5218fe6614f6f19f349fbdc9",
-  "method": "Rule-assisted draft from source question text and existing endpoint reviews, with explicit question-level overrides. Skill labels are provisional; source instructions and reframing contracts are exposed for review. No source answers or fixtures are published.",
+  "method": "Workflow/context assignments retain the prior source review. Direct general-operation labels are migrated provisionally; question-level decomposition is identified separately. Source instructions, review rationale and executable-framing proposals are preserved.",
   "eligibility_policy": "Include source tasks whose scientific purpose admits a clear executable framing, even when the original scorer is an LLM. Freeze missing conventions or scope narrative interpretation to computed evidence. Exclude a replacement objective, unavailable source instruction or unbounded subjective synthesis.",
-  "counting": "Count each eligible question once per skill. Source questions, shared study/protocol groups, workflow proposals and validated authored tasks remain separate quantities. These counts do not measure model competence.",
+  "counting": "Count each eligible record once per workflow, operation or context label. Operation annotation can be incomplete. Overlapping releases and shared protocols are not deduplicated; counts are requirements, not demonstrated competence.",
   "task_files": [
     "benchmark_competencies/liu-single-cell/questions-001.json"
   ],

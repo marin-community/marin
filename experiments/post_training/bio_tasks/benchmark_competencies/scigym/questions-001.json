@@ -10,13 +10,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -42,7 +35,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000184",
@@ -54,13 +57,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -86,7 +82,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000894",
@@ -98,13 +104,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -130,7 +129,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000624",
@@ -142,13 +151,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -174,7 +176,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000319",
@@ -186,13 +198,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -218,7 +223,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001031",
@@ -230,13 +245,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -262,7 +270,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000031",
@@ -274,13 +292,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -306,7 +317,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000919",
@@ -318,13 +339,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -350,7 +364,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001022",
@@ -362,13 +386,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -394,7 +411,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000079",
@@ -406,13 +433,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -438,7 +458,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000813",
@@ -450,13 +480,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -482,7 +505,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000914",
@@ -494,13 +527,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -526,7 +552,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000772",
@@ -538,13 +574,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -570,7 +599,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000821",
@@ -582,13 +621,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -614,7 +646,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000036",
@@ -626,13 +668,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -658,7 +693,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000041",
@@ -670,13 +715,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -702,7 +740,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000363",
@@ -714,13 +762,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -746,7 +787,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001036",
@@ -758,13 +809,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -790,7 +834,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000629",
@@ -802,13 +856,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -834,7 +881,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000753",
@@ -846,13 +903,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -878,7 +928,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000893",
@@ -890,13 +950,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -922,7 +975,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000970",
@@ -934,13 +997,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -966,7 +1022,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000899",
@@ -978,13 +1044,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1010,7 +1069,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000877",
@@ -1022,13 +1091,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1054,7 +1116,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000800",
@@ -1066,13 +1138,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1098,7 +1163,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000084",
@@ -1110,13 +1185,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1142,7 +1210,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000785",
@@ -1154,13 +1232,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1186,7 +1257,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000935",
@@ -1198,13 +1279,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1230,7 +1304,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000838",
@@ -1242,13 +1326,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1274,7 +1351,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000462",
@@ -1286,13 +1373,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1318,7 +1398,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000486",
@@ -1330,13 +1420,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1362,7 +1445,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000322",
@@ -1374,13 +1467,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1406,7 +1492,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000258",
@@ -1418,13 +1514,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1450,7 +1539,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001045",
@@ -1462,13 +1561,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1494,7 +1586,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001038",
@@ -1506,13 +1608,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1538,7 +1633,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000080",
@@ -1550,13 +1655,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1582,7 +1680,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000909",
@@ -1594,13 +1702,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1626,7 +1727,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000454",
@@ -1638,13 +1749,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1670,7 +1774,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000897",
@@ -1682,13 +1796,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1714,7 +1821,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001013",
@@ -1726,13 +1843,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1758,7 +1868,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000922",
@@ -1770,13 +1890,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1802,7 +1915,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000045",
@@ -1814,13 +1937,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1846,7 +1962,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000733",
@@ -1858,13 +1984,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1890,7 +2009,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000910",
@@ -1902,13 +2031,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1934,7 +2056,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000967",
@@ -1946,13 +2078,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -1978,7 +2103,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000405",
@@ -1990,13 +2125,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2022,7 +2150,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000591",
@@ -2034,13 +2172,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2066,7 +2197,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000231",
@@ -2078,13 +2219,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2110,7 +2244,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000795",
@@ -2122,13 +2266,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2154,7 +2291,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000771",
@@ -2166,13 +2313,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2198,7 +2338,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000459",
@@ -2210,13 +2360,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2242,7 +2385,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000001035",
@@ -2254,13 +2407,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2286,7 +2432,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000360",
@@ -2298,13 +2454,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2330,7 +2479,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "BIOMD0000000283",
@@ -2342,13 +2501,6 @@
       "source_url": "https://github.com/h4duan/SciGym/blob/88a7b93609e35b6ecb4eb343d816d6ff09256c6a/scigym/prompts/template.md",
       "source_group": "shared-mechanism-recovery-protocol",
       "workflow": "iterative mechanism recovery",
-      "skills": [
-        "experimental-design",
-        "simulation"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Submit an executable SBML model and its predictions for the specified interventions. Evaluate predictive agreement under a frozen perturbation protocol; do not claim unique recovery of the true mechanism from equivalent dynamics.",
       "outputs": [
@@ -2374,7 +2526,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
-      }
+      },
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "experimental-design"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

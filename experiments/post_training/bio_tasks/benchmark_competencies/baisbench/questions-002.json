@@ -10,13 +10,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lee et al. (2020) Sci. Immunol.",
       "workflow": "transcriptome and functional assay",
-      "skills": [
-        "differential-expression",
-        "dose-response"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -44,7 +37,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "dose-response"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
@@ -56,12 +58,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Li et al. (2024) Cell Stem Cell",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -92,7 +88,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q2",
@@ -104,14 +108,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Li et al. (2024) Cell Stem Cell",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -138,7 +134,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q3",
@@ -150,13 +157,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Li et al. (2024) Cell Stem Cell",
       "workflow": "transcriptome and functional assay",
-      "skills": [
-        "differential-expression",
-        "dose-response"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -184,7 +184,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "dose-response"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q4",
@@ -196,14 +205,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Li et al. (2024) Cell Stem Cell",
       "workflow": "cross dataset cell state comparison",
-      "skills": [
-        "cell-annotation",
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -231,7 +232,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q5",
@@ -243,12 +254,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Li et al. (2024) Cell Stem Cell",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -276,7 +281,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q1",
@@ -288,12 +303,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Fasolino et al. (2022) Nat Metab",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -322,7 +331,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q2",
@@ -334,12 +351,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Fasolino et al. (2022) Nat Metab",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -368,7 +379,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
@@ -380,12 +399,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Fasolino et al. (2022) Nat Metab",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -416,7 +429,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q4",
@@ -428,12 +449,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Fasolino et al. (2022) Nat Metab",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -461,7 +476,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q5",
@@ -473,12 +498,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Fasolino et al. (2022) Nat Metab",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -507,7 +526,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q1",
@@ -519,12 +546,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Horeth et al. (2023) J Dent Res",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -553,7 +574,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q2",
@@ -565,12 +594,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Horeth et al. (2023) J Dent Res",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -601,7 +624,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q3",
@@ -613,13 +644,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Horeth et al. (2023) J Dent Res",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -648,7 +672,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q4",
@@ -660,13 +693,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Horeth et al. (2023) J Dent Res",
       "workflow": "cell communication hypotheses",
-      "skills": [
-        "communication"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -694,7 +720,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "communication"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q5",
@@ -706,12 +741,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Horeth et al. (2023) J Dent Res",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -740,7 +769,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q1",
@@ -752,12 +789,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -786,7 +817,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q2",
@@ -798,12 +837,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
       "workflow": "subtype marker evidence",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -830,7 +863,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q3",
@@ -842,13 +883,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -875,7 +909,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q4",
@@ -887,14 +931,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -921,7 +957,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q5",
@@ -933,12 +980,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Burclaff et al. (2022) Cellular and Molecular Gastroenterology and Hepatology",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -966,7 +1007,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q1",
@@ -978,12 +1029,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Jäkel et al. (2019) Nature",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1012,7 +1057,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q2",
@@ -1024,12 +1077,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Jäkel et al. (2019) Nature",
       "workflow": "subtype marker evidence",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -1056,7 +1103,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q3",
@@ -1068,12 +1123,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Jäkel et al. (2019) Nature",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1101,7 +1150,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q4",
@@ -1113,12 +1170,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Jäkel et al. (2019) Nature",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1147,7 +1198,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q5",
@@ -1159,14 +1218,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Jäkel et al. (2019) Nature",
       "workflow": "cross dataset cell state comparison",
-      "skills": [
-        "cell-annotation",
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1194,7 +1245,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q2",
@@ -1206,12 +1267,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Xiang et al. (2020) Front. Cardiovasc. Med.",
       "workflow": "single cell trajectory hypotheses",
-      "skills": [
-        "trajectory"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1241,7 +1296,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "trajectory"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q3",
@@ -1253,12 +1316,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Xiang et al. (2020) Front. Cardiovasc. Med.",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1287,7 +1344,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q4",
@@ -1299,13 +1364,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Xiang et al. (2020) Front. Cardiovasc. Med.",
       "workflow": "single cell gene module",
-      "skills": [
-        "network"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1335,7 +1393,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "network"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q5",
@@ -1347,14 +1414,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Xiang et al. (2020) Front. Cardiovasc. Med.",
       "workflow": "cross dataset cell state comparison",
-      "skills": [
-        "cell-annotation",
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1382,7 +1441,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q1",
@@ -1394,13 +1463,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Joseph et al. (2020) Prostate",
       "workflow": "transcriptome and functional assay",
-      "skills": [
-        "differential-expression",
-        "dose-response"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1428,7 +1490,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "dose-response"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q2",
@@ -1440,12 +1511,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Joseph et al. (2020) Prostate",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1474,7 +1539,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q3",
@@ -1486,12 +1559,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Joseph et al. (2020) Prostate",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1519,7 +1586,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q4",
@@ -1531,12 +1606,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Joseph et al. (2020) Prostate",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1564,7 +1633,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q5",
@@ -1576,12 +1655,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Joseph et al. (2020) Prostate",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1611,7 +1684,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q1",
@@ -1623,12 +1706,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Bhattacharya et al. (2024) Genes",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1658,7 +1735,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q2",
@@ -1670,12 +1755,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Bhattacharya et al. (2024) Genes",
       "workflow": "subtype marker evidence",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -1702,7 +1781,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q3",
@@ -1714,13 +1801,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Bhattacharya et al. (2024) Genes",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1749,7 +1829,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q5",
@@ -1761,12 +1850,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Bhattacharya et al. (2024) Genes",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1795,7 +1878,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q1",
@@ -1807,13 +1898,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Binvignat et al. (2024) JCI Insight",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1841,7 +1925,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q2",
@@ -1853,12 +1946,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Binvignat et al. (2024) JCI Insight",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1889,7 +1976,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q3",
@@ -1901,13 +1996,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Binvignat et al. (2024) JCI Insight",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1938,7 +2026,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q4",
@@ -1950,14 +2047,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Binvignat et al. (2024) JCI Insight",
       "workflow": "single cell contrast enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1988,7 +2077,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q5",
@@ -2000,12 +2099,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Binvignat et al. (2024) JCI Insight",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2033,7 +2126,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q1",
@@ -2045,13 +2146,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lengyel et al. (2022) Cell Reports",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2079,7 +2173,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q2",
@@ -2091,13 +2194,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lengyel et al. (2022) Cell Reports",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -2124,7 +2220,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q3",
@@ -2136,12 +2242,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lengyel et al. (2022) Cell Reports",
       "workflow": "cell communication hypotheses",
-      "skills": [
-        "communication"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2169,7 +2269,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "communication"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q4",
@@ -2181,12 +2289,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lengyel et al. (2022) Cell Reports",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2215,7 +2317,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
@@ -2227,12 +2337,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Lengyel et al. (2022) Cell Reports",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2263,7 +2367,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q1",
@@ -2275,13 +2387,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Cowan et al. (2020) Cell",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2310,7 +2415,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q2",
@@ -2322,14 +2436,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Cowan et al. (2020) Cell",
       "workflow": "cross dataset cell state comparison",
-      "skills": [
-        "cell-annotation",
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2357,7 +2463,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q3",
@@ -2369,13 +2485,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Cowan et al. (2020) Cell",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -2402,7 +2511,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q5",
@@ -2414,13 +2533,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Cowan et al. (2020) Cell",
       "workflow": "cell type genetic risk association",
-      "skills": [
-        "association",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2448,7 +2560,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q1",
@@ -2460,14 +2581,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "de Vrij et al. (2024) Commun Biol",
       "workflow": "cell type expression localization",
-      "skills": [
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Assign the requested cell identities or states using a frozen reference/marker hierarchy, and report per-cell labels plus the evidence supporting each population. Specify ambiguous and unassigned cases explicitly.",
       "outputs": [
@@ -2494,7 +2607,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
@@ -2506,13 +2630,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "de Vrij et al. (2024) Commun Biol",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2543,7 +2660,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q3",
@@ -2555,13 +2681,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "de Vrij et al. (2024) Commun Biol",
       "workflow": "single cell state characterization",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2590,7 +2709,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
@@ -2602,15 +2730,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "de Vrij et al. (2024) Commun Biol",
       "workflow": "single cell contrast enrichment",
-      "skills": [
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2641,7 +2760,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q5",
@@ -2653,13 +2783,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "de Vrij et al. (2024) Commun Biol",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2687,7 +2810,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
@@ -2699,12 +2833,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Elmentaite et al. (2020) Developmental Cell",
       "workflow": "replicate aware single cell contrast",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2735,7 +2863,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q2",
@@ -2747,13 +2883,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Elmentaite et al. (2020) Developmental Cell",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2781,7 +2910,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q3",
@@ -2793,12 +2933,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Elmentaite et al. (2020) Developmental Cell",
       "workflow": "donor aware cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2826,7 +2960,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q4",
@@ -2838,12 +2980,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Elmentaite et al. (2020) Developmental Cell",
       "workflow": "single cell trajectory hypotheses",
-      "skills": [
-        "trajectory"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2873,7 +3009,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "trajectory"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q5",
@@ -2885,12 +3029,6 @@
       "source_url": "https://raw.githubusercontent.com/EperLuo/BaisBench/cfab1beb09a7cba999c16f01475fdca37fee5cac/Task2_data/BAISBench_task2.xlsx",
       "source_group": "Elmentaite et al. (2020) Developmental Cell",
       "workflow": "data and literature evidence synthesis",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2918,7 +3056,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Adipose",
@@ -2930,12 +3078,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2964,7 +3106,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Blood",
@@ -2976,12 +3126,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3010,7 +3154,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Bone_marrow",
@@ -3022,12 +3174,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3056,7 +3202,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Breast",
@@ -3068,12 +3222,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3102,7 +3250,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Eye",
@@ -3114,12 +3270,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3148,7 +3298,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Heart",
@@ -3160,12 +3318,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3194,7 +3346,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Intestine",
@@ -3206,12 +3366,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3240,7 +3394,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Kidney",
@@ -3252,12 +3414,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3286,7 +3442,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Liver",
@@ -3298,12 +3462,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3332,7 +3490,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Ovary",
@@ -3344,12 +3510,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3378,7 +3538,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Pancreas",
@@ -3390,12 +3558,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3424,7 +3586,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Salivary_gland",
@@ -3436,12 +3606,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3470,7 +3634,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Skin",
@@ -3482,12 +3654,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3516,7 +3682,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Testis",
@@ -3528,12 +3702,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3562,7 +3730,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotation/Trachea",
@@ -3574,12 +3750,6 @@
       "source_url": "https://huggingface.co/datasets/EperLuo/BAISBench/tree/0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4/Task1_data",
       "source_group": "",
       "workflow": "single cell hierarchical annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3608,7 +3778,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

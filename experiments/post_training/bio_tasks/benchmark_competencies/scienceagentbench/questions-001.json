@@ -10,12 +10,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "assay activity classification",
-      "skills": [
-        "model-evaluation"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -43,7 +37,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6",
@@ -55,12 +59,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "assay distribution and similarity",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -87,7 +85,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "7",
@@ -99,12 +107,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "activity stratified functional groups",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -131,7 +133,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "8",
@@ -143,15 +155,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "nested molecular feature selection",
-      "skills": [
-        "feature-selection",
-        "regression",
-        "model-evaluation",
-        "visualization"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -179,7 +182,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "regression",
+        "model-evaluation"
+      ],
+      "operations": [
+        "feature-selection",
+        "model-fitting",
+        "model-evaluation",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "11",
@@ -191,13 +208,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "microscopy cell count prediction",
-      "skills": [
-        "model-evaluation",
-        "statistics"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -225,7 +235,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "12",
@@ -237,13 +258,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "drug target affinity transfer",
-      "skills": [
-        "prediction",
-        "model-evaluation"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -271,7 +285,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "13",
@@ -283,13 +309,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "compound antiviral activity prediction",
-      "skills": [
-        "prediction",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -317,7 +336,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "15",
@@ -329,13 +359,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "compound mutagenicity prediction",
-      "skills": [
-        "model-evaluation",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -361,7 +384,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "18",
@@ -373,15 +407,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "structure based toxicity classification",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -410,7 +435,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "19",
@@ -422,15 +461,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "structure based toxicity classification",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -459,7 +489,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "20",
@@ -471,11 +515,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "paired model metric comparison",
-      "skills": [
-        "model-evaluation",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -502,7 +541,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "27",
@@ -514,12 +562,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "split aware chemical neighborhoods",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -546,7 +588,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "40",
@@ -558,12 +610,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "descriptor based toxicity classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -592,7 +638,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "41",
@@ -604,12 +660,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "descriptor based toxicity classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -638,7 +688,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69",
@@ -650,15 +710,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "single cell qc to embedding",
-      "skills": [
-        "dimension-reduction",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -692,7 +743,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "70",
@@ -704,14 +769,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "latent single cell marker analysis",
-      "skills": [
-        "differential-expression",
-        "clustering",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -740,7 +797,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "75",
@@ -752,15 +820,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "single cell topic model",
-      "skills": [
-        "dimension-reduction",
-        "composition",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -790,7 +849,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "78",
@@ -802,16 +873,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "structure indexed mutation effects",
-      "skills": [
-        "model-evaluation",
-        "network",
-        "protein-structure"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -837,7 +898,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "network",
+        "protein-structure"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "79",
@@ -849,13 +924,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "single cell detection qc",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -889,7 +957,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "80",
@@ -901,14 +981,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "mitochondrial single cell qc",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -942,7 +1014,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "81",
@@ -954,16 +1039,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "marker and embedding join",
-      "skills": [
-        "dimension-reduction",
-        "cell-annotation",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -996,7 +1071,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "82",
@@ -1008,11 +1096,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "cell group dendrogram",
-      "skills": [
-        "clustering",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1044,7 +1127,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "85",
@@ -1056,10 +1148,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "longitudinal saliva features",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1087,7 +1175,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "96",
@@ -1099,15 +1195,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "single cell neighbor clustering",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "clustering",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1142,7 +1229,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "98",
@@ -1154,14 +1255,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "paired receptor chain qc",
-      "skills": [
-        "repertoire",
-        "visualization"
-      ],
-      "applications": [
-        "immunology",
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1196,7 +1289,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Classify receptor-chain pairing quality from single-cell receptor data and plot counts. No sequencing-read quality or input-image analysis is requested."
-      }
+      },
+      "scientific_context": [
+        "immunology",
+        "transcriptomics"
+      ],
+      "workflows": [
+        "repertoire"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "99",
@@ -1208,16 +1312,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "spatial expression embedding qc",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "spatial",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1248,7 +1342,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "100",
@@ -1260,13 +1367,6 @@
       "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
       "source_group": "",
       "workflow": "tissue coordinate qc",
-      "skills": [
-        "clustering",
-        "spatial",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [
         "spatial"
       ],
@@ -1297,7 +1397,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

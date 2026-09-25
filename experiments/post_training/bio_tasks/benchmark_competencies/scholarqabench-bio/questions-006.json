@@ -10,8 +10,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -22,7 +20,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1283",
@@ -34,8 +36,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -46,7 +46,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1284",
@@ -58,8 +62,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -70,7 +72,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1285",
@@ -82,8 +88,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -94,7 +98,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1286",
@@ -106,8 +114,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -118,7 +124,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1287",
@@ -130,8 +140,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -142,7 +150,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1288",
@@ -154,8 +166,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -166,7 +176,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1289",
@@ -178,8 +192,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -190,7 +202,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1290",
@@ -202,8 +218,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -214,7 +228,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1291",
@@ -226,8 +244,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -238,7 +254,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1292",
@@ -250,8 +270,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -262,7 +280,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1293",
@@ -274,8 +296,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -286,7 +306,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1294",
@@ -298,8 +322,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -310,7 +332,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1295",
@@ -322,8 +348,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -334,7 +358,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1296",
@@ -346,8 +374,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -358,7 +384,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1297",
@@ -370,8 +400,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -382,7 +410,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1298",
@@ -394,8 +426,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -406,7 +436,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1299",
@@ -418,8 +452,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -430,7 +462,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1300",
@@ -442,8 +478,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -454,7 +488,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1301",
@@ -466,8 +504,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -478,7 +514,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1302",
@@ -490,8 +530,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -502,7 +540,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1303",
@@ -514,8 +556,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -526,7 +566,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1304",
@@ -538,8 +582,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -550,7 +592,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1305",
@@ -562,8 +608,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -574,7 +618,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1306",
@@ -586,8 +634,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -598,7 +644,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1307",
@@ -610,8 +660,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -622,7 +670,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1308",
@@ -634,8 +686,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -646,7 +696,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1309",
@@ -658,8 +712,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -670,7 +722,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1310",
@@ -682,8 +738,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -694,7 +748,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1311",
@@ -706,8 +764,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -718,7 +774,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1312",
@@ -730,8 +790,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -742,7 +800,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1313",
@@ -754,8 +816,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -766,7 +826,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1314",
@@ -778,8 +842,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -790,7 +852,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1315",
@@ -802,8 +868,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -814,7 +878,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1316",
@@ -826,8 +894,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -838,7 +904,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1317",
@@ -850,8 +920,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -862,7 +930,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1318",
@@ -874,8 +946,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -886,7 +956,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1319",
@@ -898,8 +972,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -910,7 +982,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1320",
@@ -922,8 +998,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -934,7 +1008,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1321",
@@ -946,8 +1024,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -958,7 +1034,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1322",
@@ -970,8 +1050,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -982,7 +1060,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1323",
@@ -994,8 +1076,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1006,7 +1086,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1324",
@@ -1018,8 +1102,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1030,7 +1112,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1325",
@@ -1042,8 +1128,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1054,7 +1138,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1326",
@@ -1066,8 +1154,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1078,7 +1164,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1327",
@@ -1090,8 +1180,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1102,7 +1190,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1328",
@@ -1114,8 +1206,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1126,7 +1216,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1329",
@@ -1138,8 +1232,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1150,7 +1242,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1330",
@@ -1162,8 +1258,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1174,7 +1268,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1331",
@@ -1186,8 +1284,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1198,7 +1294,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1332",
@@ -1210,8 +1310,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1222,7 +1320,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1333",
@@ -1234,8 +1336,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1246,7 +1346,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1334",
@@ -1258,8 +1362,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1270,7 +1372,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1335",
@@ -1282,8 +1388,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1294,7 +1398,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1336",
@@ -1306,8 +1414,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1318,7 +1424,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1337",
@@ -1330,8 +1440,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1342,7 +1450,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1338",
@@ -1354,8 +1466,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1366,7 +1476,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1339",
@@ -1378,8 +1492,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1390,7 +1502,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1340",
@@ -1402,8 +1518,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1414,7 +1528,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1341",
@@ -1426,8 +1544,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1438,7 +1554,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1342",
@@ -1450,8 +1570,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1462,7 +1580,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1343",
@@ -1474,8 +1596,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1486,7 +1606,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1344",
@@ -1498,8 +1622,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1510,7 +1632,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1345",
@@ -1522,8 +1648,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1534,7 +1658,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1346",
@@ -1546,8 +1674,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1558,7 +1684,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1347",
@@ -1570,8 +1700,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1582,7 +1710,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1348",
@@ -1594,8 +1726,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1606,7 +1736,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1349",
@@ -1618,8 +1752,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1630,7 +1762,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1350",
@@ -1642,8 +1778,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1654,7 +1788,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1351",
@@ -1666,8 +1804,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1678,7 +1814,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1352",
@@ -1690,8 +1830,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1702,7 +1840,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1353",
@@ -1714,8 +1856,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1726,7 +1866,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1354",
@@ -1738,8 +1882,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1750,7 +1892,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1355",
@@ -1762,8 +1908,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1774,7 +1918,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1356",
@@ -1786,8 +1934,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1798,7 +1944,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1357",
@@ -1810,8 +1960,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1822,7 +1970,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1358",
@@ -1834,8 +1986,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1846,7 +1996,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1359",
@@ -1858,8 +2012,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1870,7 +2022,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1360",
@@ -1882,8 +2038,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1894,7 +2048,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1361",
@@ -1906,8 +2064,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1918,7 +2074,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1362",
@@ -1930,8 +2090,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1942,7 +2100,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1363",
@@ -1954,8 +2116,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1966,7 +2126,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1364",
@@ -1978,8 +2142,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1990,7 +2152,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1365",
@@ -2002,8 +2168,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2014,7 +2178,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1366",
@@ -2026,8 +2194,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2038,7 +2204,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1367",
@@ -2050,8 +2220,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2062,7 +2230,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1368",
@@ -2074,8 +2246,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2086,7 +2256,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1369",
@@ -2098,8 +2272,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2110,7 +2282,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1370",
@@ -2122,8 +2298,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2134,7 +2308,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1371",
@@ -2146,8 +2324,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2158,7 +2334,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1372",
@@ -2170,8 +2350,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2182,7 +2360,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1373",
@@ -2194,8 +2376,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2206,7 +2386,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1374",
@@ -2218,8 +2402,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2230,7 +2412,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1375",
@@ -2242,8 +2428,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2254,7 +2438,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1376",
@@ -2266,8 +2454,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2278,7 +2464,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1377",
@@ -2290,8 +2480,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2302,7 +2490,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1378",
@@ -2314,8 +2506,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2326,7 +2516,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1379",
@@ -2338,8 +2532,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2350,7 +2542,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1380",
@@ -2362,8 +2558,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2374,7 +2568,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1381",
@@ -2386,8 +2584,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2398,7 +2594,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1382",
@@ -2410,8 +2610,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2422,7 +2620,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1383",
@@ -2434,8 +2636,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2446,7 +2646,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1384",
@@ -2458,8 +2662,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2470,7 +2672,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1385",
@@ -2482,8 +2688,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2494,7 +2698,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1386",
@@ -2506,8 +2714,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2518,7 +2724,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1387",
@@ -2530,8 +2740,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2542,7 +2750,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1388",
@@ -2554,8 +2766,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2566,7 +2776,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1389",
@@ -2578,8 +2792,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2590,7 +2802,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1390",
@@ -2602,8 +2818,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2614,7 +2828,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1391",
@@ -2626,8 +2844,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2638,7 +2854,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1392",
@@ -2650,8 +2870,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2662,7 +2880,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1393",
@@ -2674,8 +2896,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2686,7 +2906,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1394",
@@ -2698,8 +2922,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2710,7 +2932,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1395",
@@ -2722,8 +2948,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2734,7 +2958,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1396",
@@ -2746,8 +2974,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2758,7 +2984,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1397",
@@ -2770,8 +3000,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2782,7 +3010,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1398",
@@ -2794,8 +3026,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2806,7 +3036,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1399",
@@ -2818,8 +3052,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2830,7 +3062,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1400",
@@ -2842,8 +3078,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2854,7 +3088,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1401",
@@ -2866,8 +3104,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2878,7 +3114,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1402",
@@ -2890,8 +3130,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2902,7 +3140,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1403",
@@ -2914,8 +3156,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2926,7 +3166,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1404",
@@ -2938,8 +3182,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2950,7 +3192,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1405",
@@ -2962,8 +3208,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2974,7 +3218,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1406",
@@ -2986,8 +3234,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -2998,7 +3244,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1407",
@@ -3010,8 +3260,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3022,7 +3270,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1408",
@@ -3034,8 +3286,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3046,7 +3296,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1409",
@@ -3058,8 +3312,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3070,7 +3322,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1410",
@@ -3082,8 +3338,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3094,7 +3348,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1411",
@@ -3106,8 +3364,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3118,7 +3374,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1412",
@@ -3130,8 +3390,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3142,7 +3400,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1413",
@@ -3154,8 +3416,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3166,7 +3426,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1414",
@@ -3178,8 +3442,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3190,7 +3452,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1415",
@@ -3202,8 +3468,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3214,7 +3478,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1416",
@@ -3226,8 +3494,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3238,7 +3504,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1417",
@@ -3250,8 +3520,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3262,7 +3530,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1418",
@@ -3274,8 +3546,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3286,7 +3556,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1419",
@@ -3298,8 +3572,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3310,7 +3582,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1420",
@@ -3322,8 +3598,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3334,7 +3608,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1421",
@@ -3346,8 +3624,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3358,7 +3634,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1422",
@@ -3370,8 +3650,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3382,7 +3660,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1423",
@@ -3394,8 +3676,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3406,7 +3686,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1424",
@@ -3418,8 +3702,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3430,7 +3712,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1425",
@@ -3442,8 +3728,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3454,7 +3738,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1426",
@@ -3466,8 +3754,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3478,7 +3764,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1427",
@@ -3490,8 +3780,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3502,7 +3790,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1428",
@@ -3514,8 +3806,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3526,7 +3816,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1429",
@@ -3538,8 +3832,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3550,7 +3842,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1430",
@@ -3562,8 +3858,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3574,7 +3868,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1431",
@@ -3586,8 +3884,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3598,7 +3894,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1432",
@@ -3610,8 +3910,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3622,7 +3920,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1433",
@@ -3634,8 +3936,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3646,7 +3946,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1434",
@@ -3658,8 +3962,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3670,7 +3972,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1435",
@@ -3682,8 +3988,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3694,7 +3998,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1436",
@@ -3706,8 +4014,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3718,7 +4024,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1437",
@@ -3730,8 +4040,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3742,7 +4050,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1438",
@@ -3754,8 +4066,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3766,7 +4076,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1439",
@@ -3778,8 +4092,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3790,7 +4102,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1440",
@@ -3802,8 +4118,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3814,7 +4128,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1441",
@@ -3826,8 +4144,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3838,7 +4154,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1442",
@@ -3850,8 +4170,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3862,7 +4180,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1443",
@@ -3874,8 +4196,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3886,7 +4206,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1444",
@@ -3898,8 +4222,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3910,7 +4232,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1445",
@@ -3922,8 +4248,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3934,7 +4258,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1446",
@@ -3946,8 +4274,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3958,7 +4284,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1447",
@@ -3970,8 +4300,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -3982,7 +4310,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1448",
@@ -3994,8 +4326,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4006,7 +4336,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1449",
@@ -4018,8 +4352,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4030,7 +4362,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "bio_1450",
@@ -4042,8 +4378,6 @@
       "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
       "source_group": "",
       "workflow": "biomedical literature synthesis",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4054,7 +4388,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     }
   ]
 }

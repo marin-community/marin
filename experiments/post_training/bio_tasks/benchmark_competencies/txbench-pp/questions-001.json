@@ -10,14 +10,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/HAI2027_MECH01_supported_mechanism_chain/eval.json",
       "source_group": "",
       "workflow": "Reconcile intervention assays into an evidence-supported mechanism ordering",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -43,7 +35,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "PRISM_S4_10_mechanism_family_mining",
@@ -55,20 +59,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_S4_10_mechanism_family_mining/eval.json",
       "source_group": "",
       "workflow": "Test a compound-response biomarker while controlling lineage and broad activity",
-      "skills": [
-        "association",
-        "model-evaluation",
-        "cell-annotation",
-        "trajectory",
-        "dose-response",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -96,7 +86,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "association",
+        "model-evaluation",
+        "cell-annotation",
+        "trajectory",
+        "dose-response",
+        "database-query"
+      ],
+      "operations": [
+        "model-evaluation",
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "PRISM_V10_C_primary_hit_triage",
@@ -108,13 +117,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_V10_C_primary_hit_triage/eval.json",
       "source_group": "",
       "workflow": "Select selective screening hits with usable coverage and limited broad toxicity",
-      "skills": [
-        "dose-response",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -142,7 +144,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "dose-response",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "de_10_cross_modality_herg_convergence",
@@ -154,18 +165,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/de_10_cross_modality_herg_convergence/eval.json",
       "source_group": "",
       "workflow": "Compare target-activity associations with chemical-substructure safety signals",
-      "skills": [
-        "enrichment",
-        "prediction",
-        "molecular-descriptors",
-        "database-query",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -193,7 +192,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "enrichment",
+        "predictive-modeling",
+        "molecular-descriptors",
+        "database-query"
+      ],
+      "operations": [
+        "prediction",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lee2024_RNA1_raw_scrna_target_specificity",
@@ -205,18 +221,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_RNA1_raw_scrna_target_specificity/eval.json",
       "source_group": "",
       "workflow": "Evaluate target expression prevalence and compartment specificity across patients",
-      "skills": [
-        "enrichment",
-        "trajectory",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "chemical-biology",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -246,7 +250,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "chemical-biology",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment",
+        "trajectory"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lee2024_SRC2_calcium_response_mode",
@@ -258,15 +277,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_SRC2_calcium_response_mode/eval.json",
       "source_group": "",
       "workflow": "Reconcile calcium-response perturbations and oscillation changes",
-      "skills": [
-        "image-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology",
-        "bioimaging",
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -294,7 +304,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "bioimaging",
+        "physiology"
+      ],
+      "workflows": [
+        "image-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DMA_02_mechanism_sign",
@@ -306,18 +328,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/DMA_02_mechanism_sign/eval.json",
       "source_group": "",
       "workflow": "Classify replicated dependency associations using effect direction and driver role",
-      "skills": [
-        "trajectory",
-        "database-query",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -345,7 +355,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "trajectory",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sp_01_plate_well_position_confounder",
@@ -357,16 +383,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/sp_01_plate_well_position_confounder/eval.json",
       "source_group": "",
       "workflow": "Estimate a plate-position effect against a matched permutation null",
-      "skills": [
-        "association",
-        "image-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -394,7 +410,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "association",
+        "image-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "CTRL01_no_cc1_gate_for_crizotinib_hits",
@@ -406,12 +435,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/CTRL01_no_cc1_gate_for_crizotinib_hits/eval.json",
       "source_group": "",
       "workflow": "Compute target engagement while distinguishing separate control purposes",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -439,7 +462,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "H2_toxfree_advance_image",
@@ -451,12 +484,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/H2_toxfree_advance_image/eval.json",
       "source_group": "",
       "workflow": "Combine tumor activity and healthy-context safety in a matched imaging assay",
-      "skills": [
-        "image-analysis"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -484,7 +511,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "image-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "txbx_org_organoid_doseresponse_resistant_fraction",
@@ -496,14 +531,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_organoid_doseresponse_resistant_fraction/eval.json",
       "source_group": "",
       "workflow": "Measure organoid response relative to vehicle and residual viable population",
-      "skills": [
-        "image-analysis",
-        "dose-response"
-      ],
-      "applications": [
-        "chemical-biology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -531,7 +558,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "image-analysis",
+        "dose-response"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "txbx_org_program_ti_exposure_gonogo",
@@ -543,15 +580,6 @@
       "source_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_program_ti_exposure_gonogo/eval.json",
       "source_group": "",
       "workflow": "Integrate efficacy, mechanism images, safety and free exposure into a program decision",
-      "skills": [
-        "image-analysis",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -579,7 +607,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "image-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

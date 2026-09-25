@@ -10,14 +10,6 @@
       "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/meta_ev0570_depletion_depth_sets_the_loss/eval.json",
       "source_group": "",
       "workflow": "Estimate transcript reduction with program-specific controls and library accounting",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -44,7 +36,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007",
@@ -56,14 +61,6 @@
       "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007/eval.json",
       "source_group": "",
       "workflow": "Audit missing chemistry values before summarizing lesion-associated measurements",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -91,7 +88,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "eval_0012_s8_hepatic_biomarker_panel",
@@ -103,16 +113,6 @@
       "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0012_s8_hepatic_biomarker_panel/eval.json",
       "source_group": "",
       "workflow": "Rank liver-safety observations within comparable study and dosing contexts",
-      "skills": [
-        "database-query",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -140,7 +140,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "eval_0056_prion_s8_pk",
@@ -152,14 +167,6 @@
       "source_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0056_prion_s8_pk/eval.json",
       "source_group": "",
       "workflow": "Estimate exposure from a concentration-time series with quantifiability limits",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -187,7 +194,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "clinical",
+        "systems-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

@@ -10,14 +10,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-001/task.json",
       "source_group": "",
       "workflow": "controlled peak calling",
-      "skills": [
-        "intervals",
-        "chromatin"
-      ],
-      "applications": [
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -49,7 +41,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "chromatin"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chipseq-002",
@@ -61,19 +63,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-002/task.json",
       "source_group": "",
       "workflow": "sequence motif enrichment",
-      "skills": [
-        "enrichment",
-        "sequence-query",
-        "chromatin",
-        "motifs",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -105,7 +94,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "enrichment",
+        "sequence-query",
+        "chromatin",
+        "motifs",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chipseq-003",
@@ -117,19 +123,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-003/task.json",
       "source_group": "",
       "workflow": "peak gene context",
-      "skills": [
-        "intervals",
-        "spatial",
-        "chromatin",
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -161,7 +154,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "spatial",
+        "chromatin",
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chipseq-004",
@@ -173,16 +183,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-004/task.json",
       "source_group": "",
       "workflow": "replicated differential binding",
-      "skills": [
-        "multiple-testing",
-        "intervals",
-        "chromatin",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -214,7 +214,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "chromatin"
+      ],
+      "operations": [
+        "multiple-testing",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chipseq-005",
@@ -226,14 +239,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-005/task.json",
       "source_group": "",
       "workflow": "confounder aware enhancer comparison",
-      "skills": [
-        "normalization",
-        "chromatin",
-        "intervals"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -270,7 +275,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "The required enhancer table and normalization table use ChIP-seq tagAlign/BED/GTF inputs. CNV segments are exclusion masks, not images; genomic TSS distance is interval analysis, not tissue spatial analysis."
-      }
+      },
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "intervals"
+      ],
+      "operations": [
+        "normalization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "crispr-001",
@@ -282,12 +298,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-001/task.json",
       "source_group": "",
       "workflow": "guide effect summary",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -317,7 +327,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "crispr-002",
@@ -329,12 +349,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-002/task.json",
       "source_group": "",
       "workflow": "essential gene ranking",
-      "skills": [
-        "evidence-ranking"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -364,7 +378,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "crispr-003",
@@ -376,14 +398,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-003/task.json",
       "source_group": "",
       "workflow": "guide to gene screen analysis",
-      "skills": [
-        "group-comparison",
-        "multiple-testing",
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -413,7 +427,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "multiple-testing",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "assembly-001",
@@ -425,13 +450,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-001/task.json",
       "source_group": "",
       "workflow": "assembly contiguity summary",
-      "skills": [
-        "assembly",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -461,7 +479,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "assembly"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "assembly-002",
@@ -473,12 +501,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-002/task.json",
       "source_group": "",
       "workflow": "assembly join ranking",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -508,7 +530,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "assembly-003",
@@ -520,12 +552,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-003/task.json",
       "source_group": "",
       "workflow": "assembly error summary",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -555,7 +581,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lrs-001",
@@ -567,12 +603,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-001/task.json",
       "source_group": "",
       "workflow": "long read length qc",
-      "skills": [
-        "read-qc",
-        "assembly",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [
         "long-read"
       ],
@@ -604,7 +634,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "read-qc",
+        "assembly"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lrs-002",
@@ -616,10 +655,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-002/task.json",
       "source_group": "",
       "workflow": "long read indel burden",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [
         "long-read"
       ],
@@ -651,7 +686,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lrs-003",
@@ -663,13 +706,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-003/task.json",
       "source_group": "",
       "workflow": "extended cigar error profile",
-      "skills": [
-        "read-qc",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [
         "long-read"
       ],
@@ -701,7 +737,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "read-qc"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "metab-001",
@@ -713,12 +759,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-001/task.json",
       "source_group": "",
       "workflow": "assay intensity summary",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -748,7 +788,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "metabolomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "metab-002",
@@ -760,12 +810,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-002/task.json",
       "source_group": "",
       "workflow": "assay effect ranking",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -795,7 +839,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "metabolomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "metab-003",
@@ -807,14 +861,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-003/task.json",
       "source_group": "",
       "workflow": "metabolomic differential abundance",
-      "skills": [
-        "transformation",
-        "multiple-testing",
-        "statistics"
-      ],
-      "applications": [
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -844,7 +890,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "metabolomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "multiple-testing",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "transformation",
+        "multiple-testing",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "meth-001",
@@ -856,13 +916,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-001/task.json",
       "source_group": "",
       "workflow": "methylation summary",
-      "skills": [
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -892,7 +945,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "meth-002",
@@ -904,12 +967,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-002/task.json",
       "source_group": "",
       "workflow": "methylation effect ranking",
-      "skills": [
-        "methylation"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -939,7 +996,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "meth-003",
@@ -951,16 +1016,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-003/task.json",
       "source_group": "",
       "workflow": "coverage aware differential methylation",
-      "skills": [
-        "group-comparison",
-        "multiple-testing",
-        "methylation",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -990,7 +1045,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "group-comparison",
+        "methylation"
+      ],
+      "operations": [
+        "multiple-testing",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "moi-001",
@@ -1002,15 +1070,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-001/task.json",
       "source_group": "",
       "workflow": "cross modal feature association",
-      "skills": [
-        "association",
-        "intervals",
-        "methylation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1040,7 +1099,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "association",
+        "intervals",
+        "methylation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "moi-002",
@@ -1052,14 +1122,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-002/task.json",
       "source_group": "",
       "workflow": "cross modal effect ranking",
-      "skills": [
-        "integration",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1089,7 +1151,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "proteomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "moi-003",
@@ -1101,12 +1174,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-003/task.json",
       "source_group": "",
       "workflow": "cross modal pathway concordance",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1136,7 +1203,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "popgen-001",
@@ -1148,14 +1225,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-001/task.json",
       "source_group": "",
       "workflow": "population differentiation",
-      "skills": [
-        "variant-analysis",
-        "population-genetics",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1186,7 +1255,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "popgen-002",
@@ -1198,12 +1278,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-002/task.json",
       "source_group": "",
       "workflow": "population frequency ranking",
-      "skills": [
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1234,7 +1308,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "population-genetics"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "popgen-003",
@@ -1246,14 +1328,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-003/task.json",
       "source_group": "",
       "workflow": "genotype equilibrium test",
-      "skills": [
-        "variant-analysis",
-        "population-genetics",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1284,7 +1358,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "popgen-004",
@@ -1296,14 +1381,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-004/task.json",
       "source_group": "",
       "workflow": "genotype pca outliers",
-      "skills": [
-        "dimension-reduction",
-        "variant-analysis",
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1334,7 +1411,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "prot-001",
@@ -1346,12 +1434,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-001/task.json",
       "source_group": "",
       "workflow": "assay intensity summary",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1381,7 +1463,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "proteomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "prot-002",
@@ -1393,12 +1485,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-002/task.json",
       "source_group": "",
       "workflow": "assay effect ranking",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1428,7 +1514,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "proteomics"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "prot-003",
@@ -1440,15 +1536,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-003/task.json",
       "source_group": "",
       "workflow": "proteomic differential abundance",
-      "skills": [
-        "normalization",
-        "transformation",
-        "multiple-testing",
-        "statistics"
-      ],
-      "applications": [
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1478,7 +1565,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "proteomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "multiple-testing",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "multiple-testing",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "stx-001",
@@ -1490,16 +1592,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-001/task.json",
       "source_group": "",
       "workflow": "spatial expression gradient",
-      "skills": [
-        "association",
-        "cell-annotation",
-        "spatial",
-        "database-query",
-        "expression-quantification"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1532,7 +1624,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "cell-annotation",
+        "spatial",
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "stx-002",
@@ -1544,13 +1650,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-002/task.json",
       "source_group": "",
       "workflow": "spatial expression localization",
-      "skills": [
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1583,7 +1682,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "stx-003",
@@ -1595,15 +1704,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-003/task.json",
       "source_group": "",
       "workflow": "spatial cluster summary",
-      "skills": [
-        "enrichment",
-        "clustering",
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1636,7 +1736,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "enrichment",
+        "cell-annotation"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "stx-004",
@@ -1648,15 +1760,6 @@
       "source_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-004/task.json",
       "source_group": "",
       "workflow": "spatial composition",
-      "skills": [
-        "enrichment",
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1689,7 +1792,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment",
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

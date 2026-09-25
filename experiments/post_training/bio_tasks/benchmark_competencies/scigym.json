@@ -1,12 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "benchmark": "SciGym",
   "status": "draft-for-review",
   "source_revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
   "inventory_sha256": "f353b16ec45af36bbdb0c4a45229dedaa462bac5d12be033e7b7324ed70e2a03",
-  "method": "Rule-assisted draft from source question text and existing endpoint reviews, with explicit question-level overrides. Skill labels are provisional; source instructions and reframing contracts are exposed for review. No source answers or fixtures are published.",
+  "method": "Workflow/context assignments retain the prior source review. Direct general-operation labels are migrated provisionally; question-level decomposition is identified separately. Source instructions, review rationale and executable-framing proposals are preserved.",
   "eligibility_policy": "Include source tasks whose scientific purpose admits a clear executable framing, even when the original scorer is an LLM. Freeze missing conventions or scope narrative interpretation to computed evidence. Exclude a replacement objective, unavailable source instruction or unbounded subjective synthesis.",
-  "counting": "Count each eligible question once per skill. Source questions, shared study/protocol groups, workflow proposals and validated authored tasks remain separate quantities. These counts do not measure model competence.",
+  "counting": "Count each eligible record once per workflow, operation or context label. Operation annotation can be incomplete. Overlapping releases and shared protocols are not deduplicated; counts are requirements, not demonstrated competence.",
   "task_files": [
     "benchmark_competencies/scigym/questions-001.json",
     "benchmark_competencies/scigym/questions-002.json",

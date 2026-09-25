@@ -10,12 +10,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -36,7 +30,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c33446f6-fbff-4186-8a51-28a17f68bd40",
@@ -48,13 +52,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -75,7 +72,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "systems-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:b1d5a5f5-6e89-4dfb-b60d-5a9824b015f3",
@@ -87,10 +95,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -111,7 +115,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:6aa10957-bdd9-4dab-a4e1-234a17cb87dd",
@@ -123,10 +135,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -147,7 +155,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:28ebecdf-949e-4d20-aca9-5989b7a9d6e9",
@@ -159,10 +175,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -183,7 +195,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:dbb51a1c-f9a2-4960-a93c-118957659790",
@@ -195,12 +215,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -221,7 +235,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:3d40f373-59d3-4666-87bd-6db64fd7b4fb",
@@ -233,12 +257,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -261,7 +279,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:85c67ef3-322c-42b4-b745-c05e07e7b8ac",
@@ -273,10 +301,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -297,7 +321,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:653635b7-3bc6-4a7b-98c7-c02038c0e928",
@@ -309,13 +341,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -336,7 +361,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:100b570f-1c4f-4214-8402-f1b15f9989b4",
@@ -348,12 +384,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -374,7 +404,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0a9d6516-95ef-4d7b-a28d-d7cde27b7b55",
@@ -386,10 +426,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -410,7 +446,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8d61a14b-60ef-43b0-8003-b60cb6657428",
@@ -422,10 +466,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -446,7 +486,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4d4cb121-9525-499a-9475-9b212465c72d",
@@ -458,10 +506,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -482,7 +526,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ca4c9d21-b842-4875-9a6a-bcb9f6c55073",
@@ -494,10 +546,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -518,7 +566,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c3816cb5-8c87-4946-b133-43f415ab6b2a",
@@ -530,10 +586,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -554,7 +606,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:59745f75-52bf-4815-905c-3dfad1ef8923",
@@ -566,12 +626,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -592,7 +646,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:26691c84-514b-4712-a43e-09705d681e45",
@@ -604,12 +668,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -630,7 +688,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0e53a08c-4252-4a84-962b-5b396f9740aa",
@@ -642,10 +710,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -666,7 +730,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8ade3e3a-4792-4965-b9d9-05e528ebbfa0",
@@ -678,10 +750,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -702,7 +770,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:f5a4b449-e647-4ae0-8419-c221792482c9",
@@ -714,10 +790,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -738,7 +810,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:5806ed2a-1005-44f1-8d70-332048fea8f4",
@@ -750,10 +830,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -774,7 +850,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:6fff0994-6d02-470a-9d61-8e35420412b6",
@@ -786,12 +870,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -812,7 +890,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8266ac61-92d6-423d-8e7a-fe47b3a7e885",
@@ -824,10 +912,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -848,7 +932,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:322454df-45a8-41b3-9b0a-4e808144023c",
@@ -860,10 +952,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -884,7 +972,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:3c9f23e2-fdd0-431b-aca7-4f9556c78f1f",
@@ -896,12 +992,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -922,7 +1012,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:983f1ef5-fc7d-4f4a-8f48-e704641eae12",
@@ -934,10 +1034,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -958,7 +1054,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:7d2c8d44-ecf3-40d2-ab69-b6195c46ffe9",
@@ -970,10 +1074,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -994,7 +1094,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:720e20c2-9ad1-4d98-9f01-8b7fb3782a46",
@@ -1006,12 +1114,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1032,7 +1134,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:dbfbae3d-62f6-4710-8d13-8ce4c8485567",
@@ -1044,10 +1156,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1068,7 +1176,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:7a42c784-7ae0-48fe-a71f-0a547b8fabb3",
@@ -1080,12 +1196,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1106,7 +1216,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0708b62f-9652-49eb-8ba6-28878afa7445",
@@ -1118,10 +1238,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1142,7 +1258,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:5b3b7d05-9e54-445c-b374-d4c6b60923b4",
@@ -1154,10 +1278,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1178,7 +1298,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:623a831f-41ee-4e0e-936a-87f93d96369e",
@@ -1190,10 +1318,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1214,7 +1338,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:99e8fa71-b59c-4aef-8cf6-40102a10622f",
@@ -1226,10 +1358,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1250,7 +1378,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0b1d5537-db47-420c-984b-9b56d38e6d98",
@@ -1262,13 +1398,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1289,7 +1418,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ade96656-7ed1-4e21-b009-b7a73e13bff5",
@@ -1301,12 +1441,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1327,7 +1461,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:78a2c1d2-f035-4c7d-a7ee-40dfd95ca88a",
@@ -1339,14 +1483,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1367,7 +1503,19 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:224efcd7-3652-47f8-84dd-15b4c6fafae2",
@@ -1379,12 +1527,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1405,7 +1547,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:55187fb4-e7ee-4027-b74f-cab50f328442",
@@ -1417,10 +1569,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1441,7 +1589,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:25a9cf59-1c28-4ddf-b797-f43efb9349e6",
@@ -1453,12 +1609,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1479,7 +1629,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:cdc80639-dc21-4337-bccc-d61d9aec6560",
@@ -1491,14 +1651,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-evolution",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1519,7 +1671,19 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-evolution",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:12a20d8d-cd49-47eb-9a19-6a38519ee3dc",
@@ -1531,13 +1695,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1558,7 +1715,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4bb69c9d-2485-42d2-b8aa-aa647b407ca4",
@@ -1570,12 +1738,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1596,7 +1758,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8c833521-56c4-458d-8c65-2bbf66190cae",
@@ -1608,12 +1780,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1634,7 +1800,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:255fd5fb-9623-4030-8bf2-253247df7c82",
@@ -1646,12 +1822,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1672,7 +1842,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:38ada695-2c79-459b-8e68-dbed734c74f9",
@@ -1684,12 +1864,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1710,7 +1884,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:925ffe20-b8a9-4ac4-943c-7a16966f4a4b",
@@ -1722,10 +1906,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1746,7 +1926,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:e763edaa-b112-460a-a564-d58a6685e639",
@@ -1758,10 +1946,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1782,7 +1966,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8af900bb-5794-40db-910e-10d5857ce5bd",
@@ -1794,10 +1986,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1818,7 +2006,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:6194ebfc-2d5c-4ccc-8883-da7c471b61e6",
@@ -1830,10 +2026,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1854,7 +2046,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:1f1b07d7-39ce-4665-9b70-4ab77e3c87aa",
@@ -1866,10 +2066,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1890,7 +2086,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:55668039-396e-488a-b2c3-bbe840550433",
@@ -1902,12 +2106,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1928,7 +2126,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4f050bf3-27cd-4a14-8422-45df5e2bb079",
@@ -1940,10 +2148,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1964,7 +2168,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:cff00d08-5655-4214-97ac-8fa9504c1165",
@@ -1976,10 +2188,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2000,7 +2208,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0eeb7ea9-fc80-4dee-9418-1c328c3ab653",
@@ -2012,10 +2228,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2036,7 +2248,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:658f7050-d137-477e-8693-26609080cecd",
@@ -2048,10 +2268,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2072,7 +2288,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8696273a-7fea-411a-b6c6-0e826e1e02b5",
@@ -2084,10 +2308,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2108,7 +2328,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:99713efa-d1b1-4fc5-a4b1-cbae2b3a5798",
@@ -2120,10 +2348,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2144,7 +2368,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ce6dd5f7-0706-41dd-a383-9b0d22ef00a1",
@@ -2156,12 +2388,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2182,7 +2408,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:400786c1-e6c6-4f46-a501-86fdd048ed88",
@@ -2194,10 +2430,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2218,7 +2450,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:e820cbcf-6df1-4c1c-b985-c02f39f52781",
@@ -2230,12 +2470,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2256,7 +2490,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:230dec20-cd02-4613-a7b1-e28058ed46fe",
@@ -2268,12 +2512,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2294,7 +2532,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:db851865-5cbf-4d55-b6db-34f22ef5e727",
@@ -2306,10 +2554,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2330,7 +2574,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:7975ddb0-a784-4f85-a297-c80e1cb5dcf2",
@@ -2342,10 +2594,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2366,7 +2614,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a1d01019-d2b1-4619-92ec-7ea38578819f",
@@ -2378,12 +2634,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2404,7 +2654,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:fe074387-3765-4020-8f5d-e395d1094121",
@@ -2416,12 +2676,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2442,7 +2696,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:f0b6cea0-e005-47bc-be0d-9a10b219cae6",
@@ -2454,10 +2718,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2478,7 +2738,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ae02d0e9-edf5-4c39-a215-3cbc8f4c565d",
@@ -2490,10 +2758,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2514,7 +2778,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:fd60a0e7-ba64-49a9-843a-6f5cb17c5fa9",
@@ -2526,10 +2798,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2550,7 +2818,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:14fd2b75-76fb-4c29-a21d-c557b2bcf2ff",
@@ -2562,13 +2838,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "molecular-structure",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2589,7 +2858,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:e9f142f0-8ef6-47cd-b846-7283a93308d4",
@@ -2601,10 +2881,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2625,7 +2901,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:398ebac1-fd2d-45b1-9415-d82db4b4d83c",
@@ -2637,13 +2921,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2664,7 +2941,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:7e7150d6-bc73-4a29-a5b3-4ef8399ed947",
@@ -2676,10 +2964,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2700,7 +2984,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:58b39fab-337b-452d-b74f-84f9a188ce88",
@@ -2712,10 +3004,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2736,7 +3024,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:80e6571e-8f5d-496a-8ba3-9c9f5b783f5d",
@@ -2748,12 +3044,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2774,7 +3064,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:154e7b14-4ed5-4cf3-9149-0c4843fc62cc",
@@ -2786,10 +3086,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2810,7 +3106,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a71ef7a2-31a2-460d-9ff4-32d7722353c3",
@@ -2822,10 +3126,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2846,7 +3146,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c624ed31-214f-4c80-9544-5514a096b1d3",
@@ -2858,10 +3166,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2882,7 +3186,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:bcd2f213-c6c6-4660-af35-a7bd1c6a1170",
@@ -2894,13 +3206,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2921,7 +3226,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:24fae97b-03f3-48b8-b623-abf07faee02e",
@@ -2933,10 +3249,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2957,7 +3269,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ce93661b-e3c4-4a7a-96b6-87492259c501",
@@ -2969,10 +3289,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2993,7 +3309,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:941c04dc-c89d-4a90-87b0-930625268a38",
@@ -3005,14 +3329,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3033,7 +3349,19 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ea4ce240-2864-4ee5-9ffc-2dbda0f8f550",
@@ -3045,13 +3373,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3072,7 +3393,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "microbiology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:cff68274-4bbe-4fa0-a181-36a9af3cc0f1",
@@ -3084,10 +3416,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3108,7 +3436,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:2c262f91-52b6-421d-8341-8748f923459e",
@@ -3120,10 +3456,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3144,7 +3476,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:6f8a51e2-f7ad-4033-b43d-370348e4809f",
@@ -3156,10 +3496,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3180,7 +3516,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:9a0b82cb-6a99-4e50-83fc-3ef2ebd277cc",
@@ -3192,12 +3536,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3218,7 +3556,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8b665114-7729-4dac-a64f-4862a5397b82",
@@ -3230,12 +3578,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3256,7 +3598,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:5c808548-92c4-4ae7-990c-e2df81e3c2ae",
@@ -3268,10 +3620,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3292,7 +3640,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:564e715f-8d30-410b-bdb5-0dc5206589a7",
@@ -3304,12 +3660,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3330,7 +3680,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:e90ea0fc-4659-4b20-acae-75dc4b97a101",
@@ -3342,10 +3702,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3366,7 +3722,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c246753c-27d2-4ae4-8630-b9b4077ba6f6",
@@ -3378,10 +3742,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3402,7 +3762,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:22306bd7-7e84-415d-aebb-11c6312eb081",
@@ -3414,13 +3782,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3441,7 +3802,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:7d71dffb-b591-4b88-b0c6-e125a1b083b4",
@@ -3453,13 +3825,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "functional-genomics",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3480,7 +3845,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "microbiology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:fca26d7c-05cf-40b0-9fd6-a63ed7950909",
@@ -3492,12 +3868,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3518,7 +3888,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "systems-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c6e11fac-8f9c-4cf1-aa6e-4d25731ba74f",
@@ -3530,12 +3910,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3556,7 +3930,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:bace5737-ba26-422a-8706-0fb1e92b689f",
@@ -3568,10 +3952,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3592,7 +3972,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ff7328e2-4954-46a2-8ea3-d40b4df0c0ea",
@@ -3604,10 +3992,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3628,7 +4012,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:76bcaeeb-93bd-4951-99b9-cf4613de1a37",
@@ -3640,10 +4032,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3664,7 +4052,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:850f86d3-0139-43df-89fd-e606c30aaa8b",
@@ -3676,12 +4072,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3702,7 +4092,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:df061613-2591-4faa-be03-791c76375cb5",
@@ -3714,13 +4114,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3741,7 +4134,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:634f6745-f3b3-4cb1-9859-96ffb954b98a",
@@ -3753,12 +4157,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3779,7 +4177,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:d1eabedb-656f-4f89-a65f-4ed89478ba9f",
@@ -3791,12 +4199,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3817,7 +4219,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:58f69c8d-cb94-4021-a84f-c549a7b976e1",
@@ -3829,10 +4241,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3853,7 +4261,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:20980744-f9ff-4e39-a08d-106eada6900c",
@@ -3865,10 +4281,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3889,7 +4301,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a6622141-68d6-418f-8e30-7a5eff3d4fa8",
@@ -3901,12 +4321,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3927,7 +4341,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:9fe3ff3b-60cf-472d-ab1a-2bda1868f1b4",
@@ -3939,12 +4363,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3965,7 +4383,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:9088251a-99fe-4b91-b6a9-375154ec4f58",
@@ -3977,10 +4405,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4001,7 +4425,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:b8ec372b-ae29-473e-96bc-86ff1ead24ea",
@@ -4013,10 +4445,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4037,7 +4465,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a45c277e-55d9-4e7f-b1de-37fc2e19daf6",
@@ -4049,12 +4485,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4075,7 +4505,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a8aa19cc-e4d1-4aa1-8c4e-2a518b4c99d6",
@@ -4087,10 +4527,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4111,7 +4547,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:2c3ba95c-47d5-4798-9911-ffdb11c940e4",
@@ -4123,12 +4567,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4149,7 +4587,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:49d2630e-9d26-4e12-89a3-3050a609abf5",
@@ -4161,12 +4609,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4187,7 +4629,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c758f685-ba4a-4bf0-bd85-567c60ff1508",
@@ -4199,13 +4651,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4226,7 +4671,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:5966d3db-5a23-4ea7-a719-2472019d94a6",
@@ -4238,10 +4694,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4262,7 +4714,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:fd54d745-447c-4fcd-80de-463fcd3de6a4",
@@ -4274,10 +4734,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4298,7 +4754,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:3f5bae15-bd5d-43e3-8e5e-944b1e533529",
@@ -4310,12 +4774,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4336,7 +4794,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4d11258d-ee8c-4bc7-91a8-613c7a41f139",
@@ -4348,13 +4816,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4375,7 +4836,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:1ff2b2e4-492e-4e35-bf33-f0fb53ab938c",
@@ -4387,13 +4859,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4414,7 +4879,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:178a5e56-340f-4ba8-a3e5-f024ca016f40",
@@ -4426,12 +4902,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4452,7 +4922,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c75879f4-9329-4594-8f6a-c4d421f2439f",
@@ -4464,12 +4944,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4490,7 +4964,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:b2a0249b-2850-4576-8b78-8408c1e47324",
@@ -4502,13 +4986,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4529,7 +5006,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "microbiology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:f7346ea0-5f1b-45e9-a1d6-493c754159c1",
@@ -4541,12 +5029,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4567,7 +5049,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:3d3fea17-c8ee-4005-94cb-d8798be696c3",
@@ -4579,12 +5071,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4605,7 +5091,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ab58e166-f0b5-49ae-ac56-c38b5d6e8aad",
@@ -4617,10 +5113,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4641,7 +5133,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:a73b2c2d-a3ac-49e6-8e2e-44b4c1e6de94",
@@ -4653,10 +5153,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4677,7 +5173,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:04dbe07d-8b2c-4daf-b5b2-ef0e93f1fd2a",
@@ -4689,10 +5193,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4713,7 +5213,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4a6705b5-85e5-44c1-8444-65be30192802",
@@ -4725,13 +5233,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4752,7 +5253,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:08397294-3d99-4790-915c-b8bcb1e9e661",
@@ -4764,12 +5276,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4790,7 +5296,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:837b2489-723a-4099-9b68-c2a9ea688f4d",
@@ -4802,10 +5318,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4826,7 +5338,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:745f5a0d-5f8f-405e-bb46-f37b3d1f0678",
@@ -4838,13 +5358,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "clinical",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4865,7 +5378,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical",
+        "bioimaging"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:bca1be77-208b-4d57-ac29-05aa6d58bdbf",
@@ -4877,12 +5401,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4903,7 +5421,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:2dc20a2f-de54-4bfe-a34f-1ba395f342cf",
@@ -4915,10 +5443,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4939,7 +5463,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:afb36e40-0836-4810-909e-eabfe17dcd8b",
@@ -4951,10 +5483,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4975,7 +5503,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c6f097c9-2216-4e98-af45-8101681b38ec",
@@ -4987,10 +5523,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5011,7 +5543,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:9f797d29-9f3a-481d-b2fe-326cbc686273",
@@ -5023,10 +5563,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5047,7 +5583,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:0d5cf8a7-a240-4a8f-be4e-c16712f90d79",
@@ -5059,12 +5603,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5085,7 +5623,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:40400348-eabb-4b25-90d1-e33589d3e5a4",
@@ -5097,13 +5645,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5124,7 +5665,18 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:4949fc05-5f78-4dd0-8d9c-3dbb6004740a",
@@ -5136,12 +5688,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5162,7 +5708,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:c7b36a1c-ea80-4ae5-b2f1-3932cb16c3cf",
@@ -5174,10 +5730,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5198,7 +5750,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ebe57888-662f-488f-ade1-c0aaffe638b1",
@@ -5210,12 +5770,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5236,7 +5790,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:ef07d562-fc18-43c9-8201-7a189d76eeb9",
@@ -5248,12 +5812,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5274,7 +5832,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:b331480e-dfc7-4e92-931a-c71f491c4795",
@@ -5286,12 +5854,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5312,7 +5874,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:58950824-2665-445d-939b-9512d5d01a2b",
@@ -5324,12 +5896,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5350,7 +5916,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "LitQA2:8d12cb90-73c6-4cc1-9f83-0fa9fd822e92",
@@ -5362,12 +5938,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "literature specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5388,7 +5958,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "SuppQA:1b0eaf02-0861-40b6-89bf-a267c9c8c206",
@@ -5400,10 +5980,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "supplement specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5424,7 +6000,15 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "SuppQA:a49b9aa0-8b29-47ba-a757-9f247b37b47a",
@@ -5436,10 +6020,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "supplement specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5465,7 +6045,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "SuppQA:b6b4077d-a0db-4d26-9b3c-57fc469ad431",
@@ -5477,12 +6065,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "supplement specific evidence",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5503,7 +6085,17 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

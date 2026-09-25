@@ -73,7 +73,7 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
             inputs.append(review_file)
             review = load_benchmark_review(review_file)
             inputs.extend(review["task_files"])
-            if review["schema_version"] != 2 or review["benchmark"] != name:
+            if review["schema_version"] != 3 or review["benchmark"] != name:
                 raise ValueError(f"Competency review schema/source mismatch: {name}")
             if review["inventory_sha256"] != hashlib.sha256((SOURCE / release["tasks_file"]).read_bytes()).hexdigest():
                 raise ValueError(f"Inventory changed since review: {name}")
@@ -88,14 +88,26 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
                 eligible = annotation["disposition"] == "reframe"
                 if annotation["disposition"] not in {"reframe", "excluded", "unavailable"}:
                     raise ValueError(f"Unknown question disposition: {identity}")
-                for facet in ("skills", "applications"):
+                status = annotation["decomposition_status"]
+                allowed_statuses = {"question-reviewed", "input-stage-unresolved", "provisional"}
+                if status not in (allowed_statuses if eligible else {"not-applicable"}):
+                    raise ValueError(f"Invalid decomposition status: {identity}")
+                if status == "question-reviewed" and not (
+                    annotation["operations"] and annotation.get("decomposition_note")
+                ):
+                    raise ValueError(f"Missing reviewed decomposition: {identity}")
+                if status == "input-stage-unresolved" and (
+                    annotation["operations"] or not annotation.get("decomposition_note")
+                ):
+                    raise ValueError(f"Invalid unresolved input stage: {identity}")
+                for facet in ("workflows", "operations", "scientific_context"):
                     labels = annotation[facet]
                     allowed = {row["id"] for row in definitions[facet]}
                     if (
                         len(labels) != len(set(labels))
                         or not set(labels) <= allowed
                         or (labels and not eligible)
-                        or (eligible and facet == "skills" and not labels)
+                        or (eligible and facet == "workflows" and not labels)
                     ):
                         raise ValueError(f"Invalid {facet} assignment: {identity}")
                 if eligible and not all(
@@ -151,68 +163,42 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
 
 
 def benchmark_markdown(review: dict) -> str:
-    """Render an editable view of the BixBench review and its independent facets."""
-    github = GITHUB.replace("blob/codex/", "blob/codex%2F")
+    """Render question-level workflow, operation and context assignments."""
     taxonomy = load("benchmark_competencies/taxonomy.json")
-    names = {row["id"]: row["name"] for row in taxonomy["skills"] + taxonomy["applications"]}
+    facets = ("workflows", "operations", "scientific_context")
+    names = {facet: {row["id"]: row["name"] for row in taxonomy[facet]} for facet in facets}
     included = [row for row in review["tasks"] if row["disposition"] == "reframe"]
-    counts = sorted(
-        ((skill, sum(skill["id"] in row["skills"] for row in included)) for skill in taxonomy["skills"]),
-        key=lambda row: (-row[1], row[0]["name"]),
-    )
     lines = [
-        "# BixBench-Verified: skills and applications",
+        "# BixBench-Verified: workflows, operations and scientific context",
         "",
-        f"Draft: {len(included)} of {len(review['tasks'])} questions have a proposed executable framing. "
-        "This includes explicit adaptations of underspecified or interpretive source questions. "
-        "These are authoring proposals, not newly validated Harbor tasks. No LLM judge is in scope.",
+        "A workflow connects operations to a scientific question. Differential expression and enrichment "
+        "are workflow types. Operations such as effect estimation, hypothesis testing and multiple-testing "
+        "correction describe required work; scientific context describes the measurements and study setting.",
         "",
-        "A **skill** is a reusable analysis operation with a checkable result. An **application** "
-        "describes its biological setting. A **workflow** connects operations, scientific decisions "
-        "and artifacts to answer a question. Keep these as independent fields: application is not "
-        "a second level below skill, and not every possible skill/application pair is meaningful.",
+        "Plan new connected workflows and vary their input stage, design and biological context. Do not "
+        "infer every operation from a workflow name: calculating a contrast from counts differs from "
+        "looking up a supplied result. A recorded decomposition is a planning annotation, not verifier validation.",
         "",
-        "Use workflow proposals to select the next tasks. Prefer missing combinations of required "
-        "operations and decisions on observed data, with a credible executable check. Vary studies, "
-        "contrasts, input stages and methods while retaining a scientific purpose. Do not allocate "
-        "tasks merely in proportion to label counts or count incidental input terminology as work.",
+        f"All {len(review['tasks'])} source questions were reviewed for this draft decomposition. "
+        f"{sum(not row['operations'] for row in included)} still have no assigned operations because the input "
+        "stage is unresolved; other input-stage assumptions are recorded per question. "
+        "Proposed checks remain authoring requirements. No LLM judge is in scope.",
         "",
-        "Labels describe requirements, not demonstrated competence. An endpoint-only reward does "
-        "not prove that each intermediate skill was exercised. Group related questions and overlapping "
-        "benchmark releases before using frequencies as planning weights.",
+        "## Question assignments",
         "",
-        "[Annotations and exact original questions]"
-        f"({github}experiments/post_training/bio_tasks/benchmark_competencies/bixbench-verified-50.json) · "
-        "[Shared flat vocabulary]"
-        f"({github}experiments/post_training/bio_tasks/benchmark_competencies/taxonomy.json)",
-        "",
-        "The facets borrow [EDAM's distinction between operations and topics]"
-        "(https://edamontologydocs.readthedocs.io/en/latest/editors_guide.html). These draft labels "
-        "are not official EDAM terms. Differential expression remains a recognizable specialized "
-        "skill; normalization, transformation and dimensionality reduction can be separate skills "
-        "when the solver actually performs them.",
-        "",
-        "## Skills ranked by eligible questions",
-        "",
-        "Counts overlap. Each source question counts at most once per skill.",
-        "",
-        "| Skill | Questions | Checkable outcome |",
-        "| --- | ---: | --- |",
+        "| Question | Workflows | Analytical operations | Scientific context |",
+        "| --- | --- | --- | --- |",
     ]
-    for skill, count in counts:
-        if count:
-            lines.append(f"| {skill['name']} | {count} | {skill['outcome']} |")
-    lines += ["", "## Question assignments", "", "| Question | Skills | Applications |", "| --- | --- | --- |"]
     for row in included:
-        skills = "; ".join(names[key] for key in row["skills"])
-        applications = "; ".join(names[key] for key in row["applications"])
-        lines.append(f"| {row['task_id']} | {skills} | {applications} |")
-    lines += ["", "## Original questions and proposed checks", ""]
+        cells = ["; ".join(names[facet][key] for key in row[facet]) or "Unresolved" for facet in facets]
+        lines.append("| " + " | ".join([row["task_id"], *cells]) + " |")
+    lines += ["", "## Original questions and decomposition", ""]
     for row in review["tasks"]:
         lines += [f"### {row['task_id']}", "", row["source_question"], ""]
         if row["disposition"] != "reframe":
             lines += [row["reason"], ""]
             continue
+        lines += ["**Decomposition:** " + row["decomposition_note"], ""]
         lines += ["**Proposed framing:** " + row["reframed_question"], "", "**Check:** " + row["verification"], ""]
         lines += ["- " + item for item in row["decisions"] + row["scope_changes"]]
         lines.append("")
@@ -229,7 +215,7 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
     }
     taxonomy = load("benchmark_competencies/taxonomy.json")
     facets = {}
-    for facet in ("skills", "applications"):
+    for facet in ("workflows", "operations", "scientific_context"):
         counts = []
         for category in taxonomy[facet]:
             sources = []
@@ -251,8 +237,11 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
         "inventoried_releases": len(reviewed),
         "source_records": sum(len(benchmark["questions"]) for benchmark in reviewed),
         "eligible_records": sum(len(questions) for questions in eligible.values()),
-        "unresolved_applications": sum(not q["applications"] for rows in eligible.values() for q in rows),
-        "operation_reviewed_records": sum(bool(q.get("category_review")) for rows in eligible.values() for q in rows),
+        "unresolved_context": sum(not q["scientific_context"] for rows in eligible.values() for q in rows),
+        "decomposed_records": sum(
+            q["decomposition_status"] == "question-reviewed" for rows in eligible.values() for q in rows
+        ),
+        "records_without_operations": sum(not q["operations"] for rows in eligible.values() for q in rows),
         "missing_inventories": [benchmark["id"] for benchmark in id_benchmarks if not benchmark["review"]],
         "facets": facets,
     }
@@ -276,12 +265,17 @@ def category_markdown(statistics: dict) -> str:
         "Use these counts to find candidate workflows for review, alongside scientific decisions, "
         "available observed inputs and an executable reward. They are not generation quotas.",
         "",
-        f"{statistics['operation_reviewed_records']:,} records have a source-protocol or output-contract "
-        "review of operation boundaries. This is not an individual verifier audit. "
-        f"{statistics['unresolved_applications']:,} records have no resolved biological application; "
-        "they remain in the eligible denominator and skill counts.",
+        f"{statistics['decomposed_records']:,} records have a question-level operation decomposition. "
+        f"{statistics['records_without_operations']:,} records have no operation annotations yet; "
+        "other migrated operation lists can also be incomplete. "
+        f"{statistics['unresolved_context']:,} records have no resolved scientific context. "
+        "All eligible records remain in the denominator; missing annotations are not zero demand.",
     ]
-    for facet, title in (("skills", "Analytical skills"), ("applications", "Biological applications")):
+    for facet, title in (
+        ("workflows", "Workflows"),
+        ("operations", "Analytical operations"),
+        ("scientific_context", "Scientific context"),
+    ):
         lines += [
             "",
             f"## {title}",

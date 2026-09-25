@@ -10,13 +10,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "research cohort sampling",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -44,7 +37,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-0325493",
@@ -56,12 +61,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "repeated imaging variance models",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -89,7 +88,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-1854976",
@@ -101,12 +110,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "physiological signal classification",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -134,7 +137,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "physiology"
+      ],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-0201225",
@@ -146,12 +157,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "sample to patient diagnostic evaluation",
-      "skills": [
-        "model-evaluation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -179,7 +184,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-9070543",
@@ -191,16 +206,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "longitudinal drug response",
-      "skills": [
-        "normalization",
-        "dose-response",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -228,7 +233,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "dose-response"
+      ],
+      "operations": [
+        "normalization",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-6746514",
@@ -240,12 +258,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "eeg model comparison",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -273,7 +285,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "physiology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-1683542",
@@ -285,12 +307,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "exercise meta analysis",
-      "skills": [
-        "intervals",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -317,7 +333,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-3894632",
@@ -329,13 +354,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "multi modal clinical survival",
-      "skills": [
-        "association",
-        "survival"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -363,7 +381,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "association",
+        "survival"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-5496369",
@@ -375,13 +402,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "metabolomic diagnosis and prognosis",
-      "skills": [
-        "model-evaluation"
-      ],
-      "applications": [
-        "metabolomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -409,7 +429,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "metabolomics",
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-3497606",
@@ -421,13 +452,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "iterative tomography reconstruction",
-      "skills": [
-        "image-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -455,7 +479,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "image-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-7156696",
@@ -467,10 +501,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "tissue light fluence comparison",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -497,7 +527,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-3269870",
@@ -509,14 +547,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
       "source_group": "",
       "workflow": "clinical team performance classification",
-      "skills": [
-        "model-evaluation",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -543,7 +573,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-2816027",
@@ -555,13 +597,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "cancer expression signature comparison",
-      "skills": [
-        "enrichment",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -589,7 +624,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "enrichment"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-9054015",
@@ -601,12 +646,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "screening population risk model",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -634,7 +673,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-0851068",
@@ -646,12 +695,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "medical image classification",
-      "skills": [
-        "model-evaluation"
-      ],
-      "applications": [
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -679,7 +722,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "bioimaging"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-1394704",
@@ -691,12 +744,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "epidemiological model comparison",
-      "skills": [
-        "model-evaluation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -724,7 +771,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-9911222",
@@ -736,10 +793,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "cancer alteration exclusivity",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -767,7 +820,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-7716865",
@@ -779,10 +840,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "research power audit",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -810,7 +867,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-4933686",
@@ -822,17 +887,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "genomic association and survival",
-      "skills": [
-        "survival",
-        "intervals",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -860,7 +914,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "survival",
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-1175539",
@@ -872,13 +940,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "clinical imaging group comparison",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "clinical",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -906,7 +967,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical",
+        "bioimaging"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-4180912",
@@ -918,11 +990,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "metabolic phenotype classification",
-      "skills": [
-        "model-evaluation",
-        "network"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -950,7 +1017,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "model-evaluation",
+        "network"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-2708693",
@@ -962,10 +1038,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "registration publication discrepancy review",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -993,7 +1065,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-4252248",
@@ -1005,16 +1085,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "pharmacogenomic response network",
-      "skills": [
-        "model-evaluation",
-        "network",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1042,7 +1112,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "network"
+      ],
+      "operations": [
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-7186268",
@@ -1054,10 +1138,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "longitudinal laboratory records",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1085,7 +1165,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "capsule-3849634",
@@ -1097,12 +1185,6 @@
       "source_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
       "source_group": "",
       "workflow": "longitudinal biomarker meta analysis",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1130,7 +1212,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

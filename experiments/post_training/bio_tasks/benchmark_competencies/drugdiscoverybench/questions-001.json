@@ -10,14 +10,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "cohort proportions",
-      "skills": [
-        "survival",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -45,7 +37,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "survival",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac42225",
@@ -57,19 +61,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "sequence construct accounting",
-      "skills": [
-        "variant-analysis",
-        "chromatin",
-        "database-query",
-        "sequence-design",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -95,7 +86,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "chromatin",
+        "database-query",
+        "sequence-design"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac4222a",
@@ -107,14 +115,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -140,7 +140,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac4222b",
@@ -152,16 +162,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "methylation",
-        "protein-structure"
-      ],
-      "applications": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -189,7 +189,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "methylation",
+        "protein-structure"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac4222c",
@@ -201,10 +215,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure catalog filtering",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -232,7 +242,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac4222f",
@@ -244,17 +262,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target evidence ranking",
-      "skills": [
-        "variant-analysis",
-        "variant-consequence",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -282,7 +289,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "variant-consequence",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b03699a937c74c3ac42233",
@@ -294,16 +316,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target evidence ranking",
-      "skills": [
-        "variant-analysis",
-        "variant-consequence",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -331,7 +343,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "variant-consequence",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c6d",
@@ -343,15 +369,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand contact geometry",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -377,7 +394,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c73",
@@ -389,13 +418,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "binding site comparison",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -421,7 +443,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c76",
@@ -433,15 +464,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "chromatin",
-        "protein-structure"
-      ],
-      "applications": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -467,7 +489,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "chromatin",
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c77",
@@ -479,13 +512,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -511,7 +537,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c78",
@@ -523,14 +559,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "clinical compound catalog",
-      "skills": [
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -558,7 +586,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c7c",
@@ -570,13 +610,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand identity",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -602,7 +635,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b34fde93a696047cbf9c7f",
@@ -614,16 +656,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -649,7 +681,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology",
+        "microbiology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5e2",
@@ -661,15 +706,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -697,7 +733,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5e9",
@@ -709,13 +758,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target evidence ranking",
-      "skills": [
-        "dose-response",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -743,7 +785,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f0",
@@ -755,16 +808,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target evidence ranking",
-      "skills": [
-        "chromatin",
-        "methylation",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -792,7 +835,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "methylation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f1",
@@ -804,12 +860,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "annotated peptide processing",
-      "skills": [
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -835,7 +885,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "proteomics"
+      ],
+      "workflows": [
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f3",
@@ -847,17 +905,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure metal survey",
-      "skills": [
-        "clustering",
-        "protein-structure",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -883,7 +930,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "molecular-structure",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f5",
@@ -895,15 +956,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -931,7 +983,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f6",
@@ -943,15 +1008,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -979,7 +1035,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f8",
@@ -991,16 +1060,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "methylation",
-        "protein-structure"
-      ],
-      "applications": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1028,7 +1087,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "methylation",
+        "protein-structure"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f9",
@@ -1040,15 +1113,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1076,7 +1140,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fa",
@@ -1088,13 +1165,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "bioactivity selection",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1122,7 +1192,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fb",
@@ -1134,15 +1215,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand contact geometry",
-      "skills": [
-        "network",
-        "protein-structure",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1168,7 +1240,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "network",
+        "protein-structure"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fc",
@@ -1180,15 +1264,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure affinity ranking",
-      "skills": [
-        "prediction",
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1216,7 +1291,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c600",
@@ -1228,14 +1316,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1261,7 +1341,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c603",
@@ -1273,13 +1365,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand contact geometry",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1305,7 +1390,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c606",
@@ -1317,16 +1411,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "alignment-signal",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1354,7 +1438,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "alignment-signal",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c60b",
@@ -1366,18 +1464,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "multisource network joins",
-      "skills": [
-        "enrichment",
-        "spatial",
-        "database-query",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1405,7 +1491,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "enrichment",
+        "spatial",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c60e",
@@ -1417,14 +1520,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1450,7 +1545,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c611",
@@ -1462,12 +1567,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "sequence construct accounting",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1493,7 +1592,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c615",
@@ -1505,14 +1612,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand contact geometry",
-      "skills": [
-        "protein-structure",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1538,7 +1637,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c616",
@@ -1550,16 +1660,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "assay regression influence",
-      "skills": [
-        "regression",
-        "dose-response",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1587,7 +1687,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "regression",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "model-fitting",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c617",
@@ -1599,14 +1714,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent compound selection",
-      "skills": [
-        "molecular-descriptors",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1632,7 +1739,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c618",
@@ -1644,15 +1763,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target to chemical neighbors",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1678,7 +1788,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c61f",
@@ -1690,18 +1811,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "clinical compound catalog",
-      "skills": [
-        "variant-analysis",
-        "database-query",
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1729,7 +1838,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "functional-genomics",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "record-retrieval",
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c620",
@@ -1741,17 +1867,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "multisource network joins",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1777,7 +1892,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "molecular-structure",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c625",
@@ -1789,16 +1918,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target to chemical neighbors",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1824,7 +1943,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c626",
@@ -1836,14 +1969,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "sequence construct accounting",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1869,7 +1994,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "microbiology"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c62b",
@@ -1881,15 +2016,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure catalog filtering",
-      "skills": [
-        "protein-structure",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1915,7 +2041,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c634",
@@ -1927,12 +2066,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "binding site comparison",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1958,7 +2091,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c637",
@@ -1970,14 +2111,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2003,7 +2136,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c638",
@@ -2015,12 +2158,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "binding site comparison",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2046,7 +2183,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63b",
@@ -2058,14 +2203,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2091,7 +2228,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63e",
@@ -2103,13 +2250,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "bioactivity selection",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2137,7 +2277,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63f",
@@ -2149,16 +2300,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "transcript folding",
-      "skills": [
-        "variant-analysis",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2186,7 +2327,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c642",
@@ -2198,13 +2353,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "bioactivity selection",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2232,7 +2380,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9329",
@@ -2244,15 +2403,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2278,7 +2428,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9335",
@@ -2290,14 +2453,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2323,7 +2478,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9338",
@@ -2335,15 +2501,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent compound selection",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2369,7 +2526,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa933a",
@@ -2381,14 +2551,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2414,7 +2576,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa933c",
@@ -2426,14 +2598,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2459,7 +2623,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa934c",
@@ -2471,12 +2645,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "annotated peptide processing",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2502,7 +2670,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9350",
@@ -2514,12 +2692,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "protein identity ranking",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2547,7 +2719,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9351",
@@ -2559,14 +2741,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2592,7 +2766,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa935f",
@@ -2604,16 +2788,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "molecular-descriptors",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2639,7 +2813,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9360",
@@ -2651,14 +2839,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2684,7 +2864,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9368",
@@ -2696,16 +2886,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2731,7 +2911,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa936a",
@@ -2743,13 +2937,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2775,7 +2962,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9371",
@@ -2787,13 +2983,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand contact geometry",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2819,7 +3008,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa937e",
@@ -2831,14 +3029,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand identity",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2864,7 +3054,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9387",
@@ -2876,14 +3076,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2909,7 +3101,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0177",
@@ -2921,14 +3123,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand identity",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2954,7 +3148,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b017a",
@@ -2966,15 +3170,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "assay selected common substructure",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3000,7 +3195,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b017f",
@@ -3012,15 +3220,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "structure catalog filtering",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3046,7 +3245,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0183",
@@ -3058,14 +3268,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "molecular descriptors",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3091,7 +3293,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology",
+        "microbiology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0184",
@@ -3103,15 +3315,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand charge state",
-      "skills": [
-        "protein-structure",
-        "molecular-descriptors",
-        "statistics"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3137,7 +3340,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure",
+        "molecular-descriptors"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0192",
@@ -3149,16 +3364,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent compound selection",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3184,7 +3389,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01ab",
@@ -3196,14 +3415,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent compound selection",
-      "skills": [
-        "molecular-descriptors",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3229,7 +3440,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b1",
@@ -3241,15 +3464,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "assay selected common substructure",
-      "skills": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3275,7 +3489,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "dose-response",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b2",
@@ -3287,13 +3514,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "ligand identity",
-      "skills": [
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3319,7 +3539,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-structure",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "protein-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b5",
@@ -3331,13 +3560,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "molecular-descriptors",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3363,7 +3585,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01c1",
@@ -3375,13 +3608,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "patent descriptor selection",
-      "skills": [
-        "molecular-descriptors",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -3407,7 +3633,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a172cd01d78a1a5ec9f5bc7",
@@ -3419,18 +3656,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target affinity model",
-      "skills": [
-        "prediction",
-        "orthology",
-        "molecular-descriptors",
-        "evidence-extraction"
-      ],
-      "applications": [
-        "genome-sequence",
-        "molecular-evolution",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3458,7 +3683,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "molecular-evolution",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "orthology",
+        "molecular-descriptors",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "prediction",
+        "evidence-extraction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a172cd01d78a1a5ec9f5bca",
@@ -3470,16 +3712,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "rnaseq to homology",
-      "skills": [
-        "differential-expression",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3507,7 +3739,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "clinical"
+      ],
+      "workflows": [
+        "differential-expression",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a19dd9c5446b4eb01f76209",
@@ -3519,13 +3765,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "bioactivity selection",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3553,7 +3792,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a19dd9c5446b4eb01f7620b",
@@ -3565,18 +3815,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "epigenetic marker evidence",
-      "skills": [
-        "model-evaluation",
-        "intervals",
-        "methylation",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3604,7 +3842,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics",
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "intervals",
+        "methylation",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "model-evaluation",
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b551",
@@ -3616,14 +3871,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "target evidence ranking",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence",
-        "chemical-biology",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3651,7 +3898,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "chemical-biology",
+        "microbiology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b556",
@@ -3663,15 +3922,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "domain confidence comparison",
-      "skills": [
-        "database-query",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3699,7 +3949,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b558",
@@ -3711,13 +3975,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "bioactivity selection",
-      "skills": [
-        "database-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3745,7 +4002,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "6a232796afa0e46251ad3d57",
@@ -3757,14 +4025,6 @@
       "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
       "source_group": "",
       "workflow": "screen hit artifact filtering",
-      "skills": [
-        "database-query",
-        "evidence-extraction",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3792,7 +4052,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

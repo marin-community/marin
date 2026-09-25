@@ -10,18 +10,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/a-15-7/task.json",
       "source_group": "",
       "workflow": "Integrate multiple omics views and infer molecular subtypes",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "variant-analysis",
-        "integration",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -49,7 +37,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "integration"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "a-15-8",
@@ -61,16 +64,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/a-15-8/task.json",
       "source_group": "",
       "workflow": "Preprocess paired chromatin/RNA assays and compare single- and joint-modality embeddings",
-      "skills": [
-        "dimension-reduction",
-        "integration",
-        "chromatin",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -100,7 +93,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "integration",
+        "chromatin"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "a-15-9",
@@ -112,15 +118,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/a-15-9/task.json",
       "source_group": "",
       "workflow": "Fit cross-omics expression modules and test disease associations",
-      "skills": [
-        "association",
-        "network",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -148,7 +145,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "association",
+        "network"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "a-15-10",
@@ -160,14 +169,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/a-15-10/task.json",
       "source_group": "",
       "workflow": "Estimate genetic-instrument effects with IVW and MR-Egger",
-      "skills": [
-        "integration",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -195,7 +196,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-1-1",
@@ -207,11 +219,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-1-1/task.json",
       "source_group": "",
       "workflow": "Summarize numeric distributions with location and spread statistics",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -239,7 +246,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-1-2",
@@ -251,10 +268,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-1-2/task.json",
       "source_group": "",
       "workflow": "Measure skewness and classify distribution shape",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -282,7 +295,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-1-3",
@@ -294,10 +315,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-1-3/task.json",
       "source_group": "",
       "workflow": "Rank numeric variables by relative variation",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -325,7 +342,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-1-4",
@@ -337,10 +362,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-1-4/task.json",
       "source_group": "",
       "workflow": "Bin numeric variables and calculate discrete entropy",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -368,7 +389,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-1-5",
@@ -380,10 +409,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-1-5/task.json",
       "source_group": "",
       "workflow": "Test numeric distributions for normality",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -411,7 +436,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-1",
@@ -423,11 +456,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-1/task.json",
       "source_group": "",
       "workflow": "Apply conjunctions of clinical cohort filters",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -455,7 +483,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-2",
@@ -467,12 +505,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-2/task.json",
       "source_group": "",
       "workflow": "Impute numeric medians and audit missingness changes",
-      "skills": [
-        "prediction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -500,7 +532,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-3",
@@ -512,15 +554,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-3/task.json",
       "source_group": "",
       "workflow": "Impute mixed clinical/genomic measurements using nearest neighbours",
-      "skills": [
-        "prediction",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -548,7 +581,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-4",
@@ -560,12 +606,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-4/task.json",
       "source_group": "",
       "workflow": "Reshape expression data while retaining sample/gene identities",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -593,7 +633,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-5",
@@ -605,13 +655,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-5/task.json",
       "source_group": "",
       "workflow": "Join clinical and expression records on patient identity",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -639,7 +682,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-6",
@@ -651,13 +705,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-6/task.json",
       "source_group": "",
       "workflow": "Aggregate expression into a gene-by-tissue pivot table",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -685,7 +732,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-7",
@@ -697,11 +756,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-7/task.json",
       "source_group": "",
       "workflow": "Encode categorical variables and preserve source rows",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -729,7 +783,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-8",
@@ -741,10 +805,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-8/task.json",
       "source_group": "",
       "workflow": "Calculate a correlation matrix and extract high-correlation pairs",
-      "skills": [
-        "association"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -772,7 +832,13 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-9",
@@ -784,10 +850,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-9/task.json",
       "source_group": "",
       "workflow": "Compute ordered rolling averages",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -815,7 +877,13 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-10",
@@ -827,13 +895,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-10/task.json",
       "source_group": "",
       "workflow": "Partition a modelling cohort while preserving class proportions",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -861,7 +922,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-11",
@@ -873,11 +946,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-11/task.json",
       "source_group": "",
       "workflow": "Construct scaled polynomial and interaction features",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -905,7 +973,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-12",
@@ -917,11 +995,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-12/task.json",
       "source_group": "",
       "workflow": "Classify column semantics including ordered categories and dates",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -949,7 +1022,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-13",
@@ -961,13 +1044,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-13/task.json",
       "source_group": "",
       "workflow": "Join noisy names with an explicit fuzzy-match policy",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -995,7 +1071,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-14",
@@ -1007,11 +1095,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-14/task.json",
       "source_group": "",
       "workflow": "Detect and cap numeric outliers using interquartile bounds",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1039,7 +1122,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-2-15",
@@ -1051,13 +1144,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-2-15/task.json",
       "source_group": "",
       "workflow": "Flatten VCF attributes according to declared header cardinalities",
-      "skills": [
-        "variant-analysis",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1085,7 +1171,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-1",
@@ -1097,14 +1193,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-1/task.json",
       "source_group": "",
       "workflow": "Standardize gene expression and render a clustered heatmap",
-      "skills": [
-        "normalization",
-        "clustering",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1131,7 +1219,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-2",
@@ -1143,12 +1244,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-2/task.json",
       "source_group": "",
       "workflow": "Fit a bivariate relationship and display uncertainty",
-      "skills": [
-        "association",
-        "regression",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1175,7 +1270,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association",
+        "regression"
+      ],
+      "operations": [
+        "model-fitting",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-3",
@@ -1187,13 +1292,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-3/task.json",
       "source_group": "",
       "workflow": "Aggregate mutations by sample and visualize ordered burdens",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1220,7 +1318,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-4",
@@ -1232,12 +1342,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-4/task.json",
       "source_group": "",
       "workflow": "Summarize disease-grade frequencies as a composition chart",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1264,7 +1368,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-5",
@@ -1276,11 +1390,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-5/task.json",
       "source_group": "",
       "workflow": "Display numeric correlations on a diverging heatmap",
-      "skills": [
-        "association",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1307,7 +1416,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-6",
@@ -1319,15 +1436,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-6/task.json",
       "source_group": "",
       "workflow": "Join expression and drug response, rank correlations and visualize extremes",
-      "skills": [
-        "association",
-        "dose-response",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1354,7 +1462,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "association",
+        "dose-response"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-7",
@@ -1366,13 +1486,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-7/task.json",
       "source_group": "",
       "workflow": "Display a gene's expression across tissues with individual observations",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1399,7 +1512,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "microbiology"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-8",
@@ -1411,13 +1535,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-8/task.json",
       "source_group": "",
       "workflow": "Display differential-expression effects and annotate significant genes",
-      "skills": [
-        "transformation",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1444,7 +1561,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "transformation",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-9",
@@ -1456,14 +1585,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-9/task.json",
       "source_group": "",
       "workflow": "Count longitudinal disease-state transitions and display flows",
-      "skills": [
-        "variant-analysis",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1490,7 +1611,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-10",
@@ -1502,15 +1634,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-10/task.json",
       "source_group": "",
       "workflow": "Arrange genome-wide association statistics by coordinate",
-      "skills": [
-        "transformation",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1537,7 +1660,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "data-preparation",
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "transformation",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-11",
@@ -1549,12 +1687,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-11/task.json",
       "source_group": "",
       "workflow": "Compare burden distributions across cancer types",
-      "skills": [
-        "visualization"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1581,7 +1713,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-12",
@@ -1593,12 +1735,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-12/task.json",
       "source_group": "",
       "workflow": "Stratify longitudinal measurements and display common-scale panels",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1626,7 +1762,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-13",
@@ -1638,15 +1782,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-13/task.json",
       "source_group": "",
       "workflow": "Threshold expression correlations and display weighted co-expression hubs",
-      "skills": [
-        "association",
-        "network",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1672,7 +1807,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "network"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-14",
@@ -1684,13 +1831,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-14/task.json",
       "source_group": "",
       "workflow": "Reconcile dated clinical events and display patient timelines",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1717,7 +1857,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-3-15",
@@ -1729,13 +1881,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-3-15/task.json",
       "source_group": "",
       "workflow": "Rank differential genes and display signed effects",
-      "skills": [
-        "differential-expression",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1762,7 +1907,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-1",
@@ -1774,13 +1929,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-1/task.json",
       "source_group": "",
       "workflow": "Test feature-wise group differences and control multiple testing",
-      "skills": [
-        "multiple-testing",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1808,7 +1956,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "multiple-testing"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-2",
@@ -1820,13 +1978,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-2/task.json",
       "source_group": "",
       "workflow": "Fit a group ANOVA, conditionally compare pairs and visualize results",
-      "skills": [
-        "group-comparison",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -1853,7 +2004,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-3",
@@ -1865,12 +2026,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-3/task.json",
       "source_group": "",
       "workflow": "Compare mutation frequencies with exact contingency tests",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1898,7 +2053,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-4",
@@ -1910,14 +2073,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-4/task.json",
       "source_group": "",
       "workflow": "Estimate paired changes with confidence intervals",
-      "skills": [
-        "group-comparison",
-        "intervals",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1945,7 +2100,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "group-comparison",
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-5",
@@ -1957,12 +2123,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-5/task.json",
       "source_group": "",
       "workflow": "Test multi-group differences nonparametrically and compare groups post hoc",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1990,7 +2150,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-6",
@@ -2002,12 +2172,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-6/task.json",
       "source_group": "",
       "workflow": "Model repeated measurements with subject dependence",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2035,7 +2199,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-7",
@@ -2047,12 +2219,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-7/task.json",
       "source_group": "",
       "workflow": "Test an observed event proportion against a prespecified null",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2080,7 +2246,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-8",
@@ -2092,12 +2268,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-8/task.json",
       "source_group": "",
       "workflow": "Test a monotonic trend across ordered groups",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2125,7 +2295,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-9",
@@ -2137,14 +2315,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-9/task.json",
       "source_group": "",
       "workflow": "Permute treatment labels to assess a median difference",
-      "skills": [
-        "survival",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2172,7 +2342,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "survival"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-10",
@@ -2184,12 +2365,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-10/task.json",
       "source_group": "",
       "workflow": "Estimate exposure odds ratios and confidence limits",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2217,7 +2392,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-11",
@@ -2229,12 +2414,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-11/task.json",
       "source_group": "",
       "workflow": "Estimate standardized effects and plan sample size under a power target",
-      "skills": [
-        "group-comparison",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2261,7 +2440,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-12",
@@ -2273,13 +2461,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-12/task.json",
       "source_group": "",
       "workflow": "Compare unequal-variance groups and bootstrap a standardized effect",
-      "skills": [
-        "group-comparison",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2307,7 +2488,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-13",
@@ -2319,14 +2510,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-13/task.json",
       "source_group": "",
       "workflow": "Fit treatment-by-time effects with subject random intercepts",
-      "skills": [
-        "transformation",
-        "regression"
-      ],
-      "applications": [
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2354,7 +2537,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "transformation",
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-14",
@@ -2366,15 +2561,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-14/task.json",
       "source_group": "",
       "workflow": "Estimate rank correlation and uncertainty",
-      "skills": [
-        "association",
-        "intervals",
-        "statistics"
-      ],
-      "applications": [
-        "microbiology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2402,7 +2588,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology",
+        "clinical"
+      ],
+      "workflows": [
+        "association",
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-4-15",
@@ -2414,12 +2612,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-4-15/task.json",
       "source_group": "",
       "workflow": "Test independence between categorical clinical variables",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2447,7 +2639,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-1",
@@ -2459,12 +2659,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-1/task.json",
       "source_group": "",
       "workflow": "Standardize measurements and build a Ward clustering dendrogram",
-      "skills": [
-        "clustering",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2491,7 +2685,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-2",
@@ -2503,11 +2708,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-2/task.json",
       "source_group": "",
       "workflow": "Fit K-means and report centres and within-cluster dispersion",
-      "skills": [
-        "clustering",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2535,7 +2735,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-3",
@@ -2547,10 +2757,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-3/task.json",
       "source_group": "",
       "workflow": "Fit density clusters and classify core, border and noise points",
-      "skills": [
-        "clustering"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2578,7 +2784,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-4",
@@ -2590,12 +2804,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-4/task.json",
       "source_group": "",
       "workflow": "Fit a Gaussian mixture and report distribution parameters",
-      "skills": [
-        "clustering",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2622,7 +2830,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-5",
@@ -2634,12 +2853,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-5/task.json",
       "source_group": "",
       "workflow": "Repeat clustering and estimate pairwise assignment stability",
-      "skills": [
-        "clustering",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2666,7 +2879,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-6",
@@ -2678,12 +2902,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-6/task.json",
       "source_group": "",
       "workflow": "Select cluster count using silhouette scores",
-      "skills": [
-        "clustering",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2710,7 +2928,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-7",
@@ -2722,13 +2951,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-7/task.json",
       "source_group": "",
       "workflow": "Construct a similarity graph and inspect Laplacian eigengaps",
-      "skills": [
-        "normalization",
-        "clustering",
-        "network",
-        "visualization"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2754,7 +2976,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-8",
@@ -2766,11 +2998,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-8/task.json",
       "source_group": "",
       "workflow": "Compare cluster partitions with label-invariant agreement",
-      "skills": [
-        "clustering",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2798,7 +3025,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-9",
@@ -2810,11 +3047,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-9/task.json",
       "source_group": "",
       "workflow": "Compare observed cluster dispersion with reference distributions",
-      "skills": [
-        "clustering",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2842,7 +3074,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-5-10",
@@ -2854,14 +3096,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-5-10/task.json",
       "source_group": "",
       "workflow": "Fuse multi-omics similarities and cluster the combined graph",
-      "skills": [
-        "clustering",
-        "integration",
-        "network"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2887,7 +3121,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration",
+        "network"
+      ],
+      "operations": [
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-1",
@@ -2899,13 +3144,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-1/task.json",
       "source_group": "",
       "workflow": "Standardize expression and quantify principal-component variance",
-      "skills": [
-        "dimension-reduction",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2933,7 +3171,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-2",
@@ -2945,14 +3195,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-2/task.json",
       "source_group": "",
       "workflow": "Transform counts and display group-labelled principal components",
-      "skills": [
-        "dimension-reduction",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -2979,7 +3221,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-3",
@@ -2991,12 +3246,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-3/task.json",
       "source_group": "",
       "workflow": "Factor nonnegative expression into sample scores and gene loadings",
-      "skills": [
-        "dimension-reduction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3024,7 +3273,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-4",
@@ -3036,13 +3295,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-4/task.json",
       "source_group": "",
       "workflow": "Select factorization rank from repeated consensus clustering",
-      "skills": [
-        "dimension-reduction",
-        "association",
-        "clustering",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3070,7 +3322,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-5",
@@ -3082,14 +3344,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-5/task.json",
       "source_group": "",
       "workflow": "Embed single-cell data with t-SNE and display known annotations",
-      "skills": [
-        "dimension-reduction",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3118,7 +3372,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-6",
@@ -3130,13 +3397,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-6/task.json",
       "source_group": "",
       "workflow": "Embed single-cell data with UMAP and display known annotations",
-      "skills": [
-        "dimension-reduction",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3165,7 +3425,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-7",
@@ -3177,10 +3448,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-7/task.json",
       "source_group": "",
       "workflow": "Choose latent-factor count using parallel analysis and report loadings",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3208,7 +3475,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-8",
@@ -3220,13 +3495,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-8/task.json",
       "source_group": "",
       "workflow": "Train an autoencoder and export bottleneck representations",
-      "skills": [
-        "dimension-reduction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3254,7 +3522,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-9",
@@ -3266,13 +3545,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-9/task.json",
       "source_group": "",
       "workflow": "Embed distances and measure group separation and reconstruction stress",
-      "skills": [
-        "dimension-reduction",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3300,7 +3572,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-6-10",
@@ -3312,10 +3596,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-6-10/task.json",
       "source_group": "",
       "workflow": "Estimate paired-view canonical correlations",
-      "skills": [
-        "association"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3343,7 +3623,13 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-1",
@@ -3355,11 +3641,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-1/task.json",
       "source_group": "",
       "workflow": "Train a random forest and report held-out discrimination and feature importance",
-      "skills": [
-        "classification",
-        "model-evaluation"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3387,7 +3668,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-2",
@@ -3399,11 +3690,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-2/task.json",
       "source_group": "",
       "workflow": "Train a support-vector classifier and compare training/test discrimination",
-      "skills": [
-        "classification",
-        "model-evaluation"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3431,7 +3717,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-3",
@@ -3443,13 +3739,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-3/task.json",
       "source_group": "",
       "workflow": "Normalize signal lengths, train a convolutional classifier and evaluate held-out ECGs",
-      "skills": [
-        "network",
-        "signal-analysis"
-      ],
-      "applications": [
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3477,7 +3766,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "physiology"
+      ],
+      "workflows": [
+        "network",
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-4",
@@ -3489,12 +3787,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-4/task.json",
       "source_group": "",
       "workflow": "Compare class-weight policies with held-out precision-recall performance",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3522,7 +3814,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-5",
@@ -3534,12 +3837,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-5/task.json",
       "source_group": "",
       "workflow": "Compare neighbour-distance metrics on held-out classification",
-      "skills": [
-        "group-comparison",
-        "classification",
-        "model-evaluation"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3567,7 +3864,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "group-comparison",
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-6",
@@ -3579,13 +3887,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-6/task.json",
       "source_group": "",
       "workflow": "Fit a naive Bayes classifier and inspect correlated predictive features",
-      "skills": [
-        "association",
-        "model-evaluation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3613,7 +3914,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "association",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-7",
@@ -3625,18 +3937,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-7/task.json",
       "source_group": "",
       "workflow": "Fit a clinical/genetic response tree and evaluate held-out predictions",
-      "skills": [
-        "classification",
-        "prediction",
-        "model-evaluation",
-        "variant-analysis",
-        "dose-response"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3664,7 +3964,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation",
+        "variant-analysis",
+        "dose-response"
+      ],
+      "operations": [
+        "classification",
+        "prediction",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-8",
@@ -3676,14 +3993,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-8/task.json",
       "source_group": "",
       "workflow": "Compare linear and nonlinear support-vector disease classifiers",
-      "skills": [
-        "group-comparison",
-        "classification",
-        "model-evaluation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3711,7 +4020,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "group-comparison",
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-9",
@@ -3723,14 +4045,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-9/task.json",
       "source_group": "",
       "workflow": "Fit expression-based logistic classification and rank coefficients",
-      "skills": [
-        "regression",
-        "group-comparison",
-        "model-evaluation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3758,7 +4072,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "regression",
+        "group-comparison",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-fitting",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-7-10",
@@ -3770,12 +4097,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-7-10/task.json",
       "source_group": "",
       "workflow": "Iteratively pseudo-label training observations and evaluate self-training",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -3803,7 +4124,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-1",
@@ -3815,11 +4147,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-1/task.json",
       "source_group": "",
       "workflow": "Select nonzero predictors with LASSO",
-      "skills": [
-        "feature-selection",
-        "regression"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3847,7 +4174,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "feature-selection",
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-2",
@@ -3859,14 +4195,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-2/task.json",
       "source_group": "",
       "workflow": "Predict age from methylation and rank forest feature importance",
-      "skills": [
-        "feature-selection",
-        "methylation"
-      ],
-      "applications": [
-        "epigenomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3894,7 +4222,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics",
+        "clinical"
+      ],
+      "workflows": [
+        "methylation"
+      ],
+      "operations": [
+        "feature-selection"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-3",
@@ -3906,11 +4245,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-3/task.json",
       "source_group": "",
       "workflow": "Tune boosted regression with cross-validation and evaluate a held-out set",
-      "skills": [
-        "regression",
-        "model-evaluation"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3938,7 +4272,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "regression",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-fitting",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-4",
@@ -3950,14 +4294,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-4/task.json",
       "source_group": "",
       "workflow": "Select methylation predictors with training-only Elastic Net",
-      "skills": [
-        "regression",
-        "methylation",
-        "statistics"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3985,7 +4321,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "regression",
+        "methylation"
+      ],
+      "operations": [
+        "model-fitting",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-5",
@@ -3997,15 +4345,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-5/task.json",
       "source_group": "",
       "workflow": "Construct time windows, train recurrent forecasts and evaluate future occupancy",
-      "skills": [
-        "normalization",
-        "group-comparison",
-        "model-evaluation",
-        "network"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4033,7 +4372,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "group-comparison",
+        "model-evaluation",
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-6",
@@ -4045,14 +4397,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-6/task.json",
       "source_group": "",
       "workflow": "Standardize genetic features and train an early-stopped neural regressor",
-      "skills": [
-        "group-comparison",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4080,7 +4424,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-7",
@@ -4092,15 +4447,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-7/task.json",
       "source_group": "",
       "workflow": "Build out-of-fold stacking features and compare held-out regression errors",
-      "skills": [
-        "group-comparison",
-        "model-evaluation",
-        "database-query",
-        "simulation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4128,7 +4474,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "group-comparison",
+        "model-evaluation",
+        "database-query",
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "model-evaluation",
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-8",
@@ -4140,13 +4500,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-8/task.json",
       "source_group": "",
       "workflow": "Fit smooth covariate effects with a GAM and evaluate held-out fit",
-      "skills": [
-        "regression",
-        "group-comparison"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4174,7 +4527,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "group-comparison"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-9",
@@ -4186,12 +4550,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-9/task.json",
       "source_group": "",
       "workflow": "Fit interaction and polynomial effects in multiple regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4219,7 +4577,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-8-10",
@@ -4231,12 +4599,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-8-10/task.json",
       "source_group": "",
       "workflow": "Transform compositional taxa and compare sparse conditional-quantile effects",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4264,7 +4626,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "microbiology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-9-2",
@@ -4276,13 +4648,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-9-2/task.json",
       "source_group": "",
       "workflow": "Fit covariate-adjusted survival effects with an explicit reference category",
-      "skills": [
-        "survival",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4310,7 +4675,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "survival"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-9-3",
@@ -4322,14 +4697,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-9-3/task.json",
       "source_group": "",
       "workflow": "Screen univariable survival effects and control discovery rate",
-      "skills": [
-        "multiple-testing",
-        "survival",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4357,7 +4724,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "survival"
+      ],
+      "operations": [
+        "multiple-testing",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-9-4",
@@ -4369,15 +4747,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-9-4/task.json",
       "source_group": "",
       "workflow": "Tune penalized Cox selection and refit selected predictors",
-      "skills": [
-        "feature-selection",
-        "model-evaluation",
-        "survival",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4405,7 +4774,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "survival"
+      ],
+      "operations": [
+        "feature-selection",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-1",
@@ -4417,12 +4799,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-1/task.json",
       "source_group": "",
       "workflow": "Cross-validate a classifier with an explicit positive class",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -4450,7 +4826,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-2",
@@ -4462,13 +4849,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-2/task.json",
       "source_group": "",
       "workflow": "Fit stratified logistic classification and compare ranking metrics",
-      "skills": [
-        "regression",
-        "model-evaluation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4496,7 +4876,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "regression",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-fitting",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-3",
@@ -4508,13 +4900,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-3/task.json",
       "source_group": "",
       "workflow": "Fit stratified forest classification and report class confusion",
-      "skills": [
-        "classification",
-        "model-evaluation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -4542,7 +4927,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-4",
@@ -4554,11 +4951,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-4/task.json",
       "source_group": "",
       "workflow": "Fit boosted classification and explain training predictions with SHAP",
-      "skills": [
-        "classification",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -4586,7 +4978,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-5",
@@ -4598,12 +4999,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-5/task.json",
       "source_group": "",
       "workflow": "Compare soft-voting classification to its constituent models",
-      "skills": [
-        "regression",
-        "model-evaluation",
-        "database-query"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4631,7 +5026,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "regression",
+        "model-evaluation",
+        "database-query"
+      ],
+      "operations": [
+        "model-fitting",
+        "model-evaluation",
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-6",
@@ -4643,11 +5050,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-6/task.json",
       "source_group": "",
       "workflow": "Compare leave-one-out and holdout regression estimates",
-      "skills": [
-        "regression",
-        "model-evaluation"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4675,7 +5077,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "regression",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-fitting",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-7",
@@ -4687,14 +5099,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-7/task.json",
       "source_group": "",
       "workflow": "Evaluate multiclass ranking with macro and micro averaging",
-      "skills": [
-        "classification",
-        "model-evaluation",
-        "methylation"
-      ],
-      "applications": [
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -4722,7 +5126,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation",
+        "methylation"
+      ],
+      "operations": [
+        "classification",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-8",
@@ -4734,14 +5151,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-8/task.json",
       "source_group": "",
       "workflow": "Compare predicted and reference gene sets with overlap metrics",
-      "skills": [
-        "differential-expression",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4769,7 +5178,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-9",
@@ -4781,13 +5202,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-9/task.json",
       "source_group": "",
       "workflow": "Select logistic predictors by forward AIC improvement",
-      "skills": [
-        "regression",
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -4815,7 +5229,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling"
+      ],
+      "operations": [
+        "model-fitting",
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-10-10",
@@ -4827,18 +5253,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-10-10/task.json",
       "source_group": "",
       "workflow": "Align arbitrary cluster labels and calculate partition agreement",
-      "skills": [
-        "normalization",
-        "clustering",
-        "variant-analysis",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -4868,7 +5282,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-11-1",
@@ -4880,10 +5310,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-11-1/task.json",
       "source_group": "",
       "workflow": "Combine prevalence and test characteristics with Bayes' rule",
-      "skills": [
-        "sensitivity"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4911,7 +5337,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "sensitivity"
+      ],
+      "operations": [
+        "sensitivity"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-11-2",
@@ -4923,13 +5357,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-11-2/task.json",
       "source_group": "",
       "workflow": "Update binomial efficacy priors and compare posterior distributions",
-      "skills": [
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Create the requested scientific figure and submit the plotted data plus an explicit figure specification. Freeze the required variables, grouping, scales and annotations so the scientific content can be checked.",
       "outputs": [
@@ -4956,7 +5383,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-11-3",
@@ -4968,12 +5407,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-11-3/task.json",
       "source_group": "",
       "workflow": "Update binding-efficiency priors and simulate posterior comparisons",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -5001,7 +5434,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-11-4",
@@ -5013,19 +5456,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-11-4/task.json",
       "source_group": "",
       "workflow": "Fit Bayesian regression and compare uncertainty with frequentist estimates",
-      "skills": [
-        "regression",
-        "prediction",
-        "intervals",
-        "variant-analysis",
-        "dose-response",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -5053,7 +5483,25 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "regression",
+        "predictive-modeling",
+        "intervals",
+        "variant-analysis",
+        "dose-response"
+      ],
+      "operations": [
+        "model-fitting",
+        "prediction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-11-5",
@@ -5065,14 +5513,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-11-5/task.json",
       "source_group": "",
       "workflow": "Fit longitudinal hierarchical effects and inspect posterior variance",
-      "skills": [
-        "simulation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -5100,7 +5540,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "mechanistic-modeling"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-12-1",
@@ -5112,10 +5563,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-12-1/task.json",
       "source_group": "",
       "workflow": "Decompose a seasonal series and remove its seasonal component",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -5143,7 +5590,13 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-12-2",
@@ -5155,12 +5608,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-12-2/task.json",
       "source_group": "",
       "workflow": "Build patient-specific lag features and multi-horizon forecasts",
-      "skills": [
-        "signal-analysis"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -5188,7 +5635,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "signal-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-12-3",
@@ -5200,14 +5655,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-12-3/task.json",
       "source_group": "",
       "workflow": "Estimate empirical state transitions and propagate a Markov chain",
-      "skills": [
-        "classification",
-        "variant-analysis",
-        "signal-analysis"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -5235,7 +5682,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "variant-analysis",
+        "signal-analysis"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-12-4",
@@ -5247,14 +5706,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-12-4/task.json",
       "source_group": "",
       "workflow": "Define a biomarker stratum, fit a Cox model and predict survival",
-      "skills": [
-        "classification",
-        "survival",
-        "statistics"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -5282,7 +5733,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "survival"
+      ],
+      "operations": [
+        "classification",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "b-12-5",
@@ -5294,13 +5757,6 @@
       "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69/tasks/b-12-5/task.json",
       "source_group": "",
       "workflow": "Evaluate lagged regression with expanding-window cross-validation",
-      "skills": [
-        "prediction",
-        "model-evaluation"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -5333,7 +5789,19 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "Fit predictors under five expanding-window splits and report RMSE mean/SD. The solver explicitly evaluates models; time segments do not imply image segmentation. Fold summaries belong to model evaluation."
-      }
+      },
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "model-evaluation"
+      ],
+      "operations": [
+        "prediction",
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

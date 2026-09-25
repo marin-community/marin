@@ -10,8 +10,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -22,7 +20,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "1",
@@ -34,8 +36,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -46,7 +46,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "2",
@@ -58,8 +62,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -70,7 +72,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "3",
@@ -82,8 +88,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -94,7 +98,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "4",
@@ -106,8 +114,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -118,7 +124,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "5",
@@ -130,8 +140,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -142,7 +150,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "6",
@@ -154,8 +166,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -166,7 +176,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "7",
@@ -178,8 +192,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -190,7 +202,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "8",
@@ -202,8 +218,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -214,7 +228,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "9",
@@ -226,8 +244,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -238,7 +254,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "10",
@@ -250,8 +270,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -262,7 +280,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "11",
@@ -274,8 +296,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -286,7 +306,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "12",
@@ -298,8 +322,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -310,7 +332,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "13",
@@ -322,8 +348,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -334,7 +358,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "14",
@@ -346,8 +374,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -358,7 +384,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "15",
@@ -370,8 +400,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -382,7 +410,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "16",
@@ -394,8 +426,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -406,7 +436,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "17",
@@ -418,8 +452,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -430,7 +462,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "18",
@@ -442,8 +478,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -454,7 +488,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "19",
@@ -466,8 +504,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -478,7 +514,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "20",
@@ -490,8 +530,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -502,7 +540,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "21",
@@ -514,8 +556,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -526,7 +566,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "22",
@@ -538,8 +582,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -550,7 +592,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "23",
@@ -562,8 +608,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -574,7 +618,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "24",
@@ -586,8 +634,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -598,7 +644,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "25",
@@ -610,8 +660,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -622,7 +670,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "26",
@@ -634,8 +686,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -646,7 +696,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "27",
@@ -658,8 +712,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -670,7 +722,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "28",
@@ -682,8 +738,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -694,7 +748,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "29",
@@ -706,8 +764,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -718,7 +774,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "30",
@@ -730,8 +790,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -742,7 +800,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "31",
@@ -754,8 +816,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -766,7 +826,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "32",
@@ -778,8 +842,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -790,7 +852,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "33",
@@ -802,8 +868,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -814,7 +878,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "34",
@@ -826,8 +894,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -838,7 +904,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "35",
@@ -850,8 +920,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -862,7 +930,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "36",
@@ -874,8 +946,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -886,7 +956,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "37",
@@ -898,8 +972,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -910,7 +982,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "38",
@@ -922,8 +998,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -934,7 +1008,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "39",
@@ -946,8 +1024,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -958,7 +1034,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "40",
@@ -970,8 +1050,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -982,7 +1060,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "41",
@@ -994,8 +1076,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1006,7 +1086,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "42",
@@ -1018,8 +1102,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1030,7 +1112,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "43",
@@ -1042,8 +1128,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1054,7 +1138,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "44",
@@ -1066,8 +1154,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1078,7 +1164,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "45",
@@ -1090,8 +1180,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1102,7 +1190,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "46",
@@ -1114,8 +1206,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1126,7 +1216,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "47",
@@ -1138,8 +1232,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1150,7 +1242,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "48",
@@ -1162,8 +1258,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1174,7 +1268,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "49",
@@ -1186,8 +1284,6 @@
       "source_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
       "source_group": "",
       "workflow": "research context to single cell analysis plan",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -1198,7 +1294,11 @@
       "review_sources": [],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     }
   ]
 }

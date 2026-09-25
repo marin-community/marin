@@ -10,13 +10,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -46,7 +39,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:178",
@@ -58,13 +62,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -94,7 +91,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:197",
@@ -106,13 +114,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -142,7 +143,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:63",
@@ -154,14 +166,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -191,7 +195,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "physiology"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:54",
@@ -203,13 +219,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -239,7 +248,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:107",
@@ -251,13 +271,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -287,7 +300,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:50",
@@ -299,13 +323,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -335,7 +352,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:174",
@@ -347,13 +375,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -383,7 +404,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:211",
@@ -395,13 +427,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -431,7 +456,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:169",
@@ -443,13 +479,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -479,7 +508,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:58",
@@ -491,13 +531,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -527,7 +560,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:48",
@@ -539,13 +583,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -575,7 +612,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:88",
@@ -587,13 +635,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -623,7 +664,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:21",
@@ -635,13 +687,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -671,7 +716,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:57",
@@ -683,13 +739,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -719,7 +768,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:160",
@@ -731,14 +791,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -768,7 +820,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:207",
@@ -780,13 +844,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -816,7 +873,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:187",
@@ -828,13 +896,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -864,7 +925,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:129",
@@ -876,13 +948,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -912,7 +977,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:37",
@@ -924,13 +1000,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -960,7 +1029,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:157",
@@ -972,14 +1052,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1009,7 +1081,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "proteomics"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:203",
@@ -1021,13 +1105,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1057,7 +1134,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:1",
@@ -1069,13 +1157,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1105,7 +1186,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:52",
@@ -1117,13 +1209,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1153,7 +1238,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:149",
@@ -1165,13 +1261,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1201,7 +1290,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:130",
@@ -1213,13 +1313,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1249,7 +1342,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:151",
@@ -1261,13 +1365,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1297,7 +1394,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:103",
@@ -1309,14 +1417,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1346,7 +1446,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "proteomics"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:99",
@@ -1358,13 +1470,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1394,7 +1499,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:116",
@@ -1406,13 +1522,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1442,7 +1551,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:87",
@@ -1454,13 +1574,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1490,7 +1603,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:202",
@@ -1502,13 +1626,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1538,7 +1655,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:74",
@@ -1550,13 +1678,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1586,7 +1707,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:121",
@@ -1598,13 +1730,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1634,7 +1759,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:214",
@@ -1646,13 +1782,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1682,7 +1811,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:20",
@@ -1694,13 +1834,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1730,7 +1863,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:188",
@@ -1742,13 +1886,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1778,7 +1915,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:71",
@@ -1790,13 +1938,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1826,7 +1967,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:106",
@@ -1838,13 +1990,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1874,7 +2019,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:14",
@@ -1886,13 +2042,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1922,7 +2071,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:92",
@@ -1934,13 +2094,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1970,7 +2123,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:179",
@@ -1982,13 +2146,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2018,7 +2175,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_variant_prioritization:102",
@@ -2030,13 +2198,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas variant evidence",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2066,7 +2227,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:302",
@@ -2078,12 +2250,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2113,7 +2279,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:236",
@@ -2125,12 +2301,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2160,7 +2330,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:207",
@@ -2172,15 +2352,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "methylation",
-        "database-query"
-      ],
-      "applications": [
-        "epigenomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2210,7 +2381,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "epigenomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "methylation",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:212",
@@ -2222,15 +2406,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query",
-        "expression-quantification"
-      ],
-      "applications": [
-        "functional-genomics",
-        "microbiology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2260,7 +2435,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "microbiology",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:317",
@@ -2272,13 +2460,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2308,7 +2489,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:251",
@@ -2320,13 +2512,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2356,7 +2541,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:339",
@@ -2368,14 +2564,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2405,7 +2593,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:318",
@@ -2417,13 +2617,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2453,7 +2646,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:269",
@@ -2465,13 +2669,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2501,7 +2698,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:201",
@@ -2513,12 +2721,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2548,7 +2750,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:161",
@@ -2560,12 +2772,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2595,7 +2801,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:43",
@@ -2607,12 +2823,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2642,7 +2852,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:217",
@@ -2654,14 +2874,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2691,7 +2903,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:190",
@@ -2703,15 +2927,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2741,7 +2956,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:259",
@@ -2753,13 +2981,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2789,7 +3010,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:105",
@@ -2801,13 +3033,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2837,7 +3062,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:53",
@@ -2849,14 +3085,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2886,7 +3114,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:1",
@@ -2898,13 +3138,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2934,7 +3167,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:49",
@@ -2946,14 +3190,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2983,7 +3219,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:80",
@@ -2995,14 +3243,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3032,7 +3272,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:205",
@@ -3044,13 +3296,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3080,7 +3325,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:34",
@@ -3092,13 +3348,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3128,7 +3377,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "microbiology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:263",
@@ -3140,13 +3400,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3176,7 +3429,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:91",
@@ -3188,13 +3452,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3224,7 +3481,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:52",
@@ -3236,14 +3504,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3273,7 +3533,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:264",
@@ -3285,13 +3557,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3321,7 +3586,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:241",
@@ -3333,13 +3609,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3369,7 +3638,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:13",
@@ -3381,13 +3661,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3417,7 +3690,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:88",
@@ -3429,13 +3713,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3465,7 +3742,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:273",
@@ -3477,13 +3765,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3513,7 +3794,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:166",
@@ -3525,14 +3817,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3562,7 +3846,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:342",
@@ -3574,13 +3870,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3610,7 +3899,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:134",
@@ -3622,12 +3922,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3657,7 +3951,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:306",
@@ -3669,12 +3973,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3704,7 +4002,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:334",
@@ -3716,13 +4024,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3752,7 +4053,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:243",
@@ -3764,13 +4076,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3800,7 +4105,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:54",
@@ -3812,13 +4128,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3848,7 +4157,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:50",
@@ -3860,14 +4180,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3897,7 +4209,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:174",
@@ -3909,13 +4233,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3945,7 +4262,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:189",
@@ -3957,13 +4285,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3993,7 +4314,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:346",
@@ -4005,15 +4337,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "proteomics",
-        "chemical-biology",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4043,7 +4366,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "proteomics",
+        "chemical-biology",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:187",
@@ -4055,12 +4391,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4090,7 +4420,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:169",
@@ -4102,14 +4442,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query",
-        "expression-quantification"
-      ],
-      "applications": [
-        "functional-genomics",
-        "microbiology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4139,7 +4471,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "microbiology"
+      ],
+      "workflows": [
+        "database-query",
+        "expression-quantification"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:58",
@@ -4151,14 +4495,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4188,7 +4524,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:48",
@@ -4200,13 +4548,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4236,7 +4577,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:235",
@@ -4248,12 +4600,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4283,7 +4629,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:252",
@@ -4295,13 +4651,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4331,7 +4680,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:21",
@@ -4343,13 +4703,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4379,7 +4732,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:313",
@@ -4391,12 +4755,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4426,7 +4784,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "screen_gene_retrieval:160",
@@ -4438,13 +4806,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "screen context gene retrieval",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4474,7 +4835,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:256",
@@ -4486,12 +4858,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4524,7 +4890,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:563",
@@ -4536,12 +4910,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4575,7 +4943,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:533",
@@ -4587,12 +4963,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4626,7 +4996,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:430",
@@ -4638,12 +5016,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4676,7 +5048,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:100",
@@ -4688,12 +5068,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4726,7 +5100,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:226",
@@ -4738,12 +5120,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4776,7 +5152,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

@@ -10,16 +10,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_cumulus_gc_count_immature.json",
       "source_group": "",
       "workflow": "spatially resolved cell subtypes",
-      "skills": [
-        "clustering",
-        "cell-annotation",
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -50,7 +40,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "curio_ovary_follicle_count_immature",
@@ -62,15 +65,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_follicle_count_immature.json",
       "source_group": "",
       "workflow": "spatial anatomical structures",
-      "skills": [
-        "clustering",
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -100,7 +94,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "curio_ovary_oocyte_count_per_timepoint",
@@ -112,13 +118,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_oocyte_count_per_timepoint.json",
       "source_group": "",
       "workflow": "spatial cell timecourse",
-      "skills": [
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -148,7 +147,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "visium_bone_celltype_lineage_resolution_limit",
@@ -160,21 +169,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/visium_bone_celltype_lineage_resolution_limit.json",
       "source_group": "",
       "workflow": "spatial detection resolution",
-      "skills": [
-        "clustering",
-        "prediction",
-        "cell-annotation",
-        "deconvolution",
-        "trajectory",
-        "spatial",
-        "network",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -204,7 +198,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "cell-annotation",
+        "deconvolution",
+        "trajectory",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "clustering",
+        "prediction",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "xenium_kidney_celltype_fib_immune_temporal",
@@ -216,13 +229,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/xenium_kidney_celltype_fib_immune_temporal.json",
       "source_group": "",
       "workflow": "spatial cell composition timecourse",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -252,7 +258,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "curio_ovary_batch_driven_clustering",
@@ -264,17 +281,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/clustering/curio_ovary_batch_driven_clustering.json",
       "source_group": "",
       "workflow": "sample confounded clustering",
-      "skills": [
-        "clustering",
-        "integration",
-        "spatial",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -305,7 +311,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "integration",
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "MOTIF04_neuronal_female_tf_family",
@@ -317,18 +337,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/MOTIF04_neuronal_female_tf_family.json",
       "source_group": "",
       "workflow": "donor aware feature comparison",
-      "skills": [
-        "enrichment",
-        "clustering",
-        "spatial",
-        "chromatin",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics",
-        "physiology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -358,7 +366,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics",
+        "physiology"
+      ],
+      "workflows": [
+        "enrichment",
+        "spatial",
+        "chromatin"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "SPATIAL10_genome_wide_de_pct",
@@ -370,17 +393,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/SPATIAL10_genome_wide_de_pct.json",
       "source_group": "",
       "workflow": "donor aware genome wide comparison",
-      "skills": [
-        "differential-expression",
-        "spatial",
-        "chromatin",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -410,7 +422,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "spatial",
+        "chromatin"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DR01_batch_confounded_clustering",
@@ -422,14 +448,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/dimensionality_reduction/DR01_batch_confounded_clustering.json",
       "source_group": "",
       "workflow": "sample confounded clustering",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "clustering",
-        "statistics"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -458,7 +476,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "NORM01_batch_correction",
@@ -470,18 +502,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/NORM01_batch_correction.json",
       "source_group": "",
       "workflow": "batch correction diagnostics",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "feature-selection",
-        "clustering",
-        "read-qc",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -509,7 +529,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "read-qc"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "norm_01_opc_olig_maturation_foldchange",
@@ -521,13 +556,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_01_opc_olig_maturation_foldchange.json",
       "source_group": "",
       "workflow": "targeted panel cell contrast",
-      "skills": [
-        "normalization",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -557,7 +585,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "norm_02_myelin_gene_coexpression_normalization",
@@ -569,14 +609,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_02_myelin_gene_coexpression_normalization.json",
       "source_group": "",
       "workflow": "targeted panel coexpression",
-      "skills": [
-        "normalization",
-        "association"
-      ],
-      "applications": [
-        "transcriptomics",
-        "molecular-structure"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -606,7 +638,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [
+        "normalization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "qc_01_endothelial_doublet_assessment",
@@ -618,15 +661,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/qc/qc_01_endothelial_doublet_assessment.json",
       "source_group": "",
       "workflow": "spatial segmentation qc",
-      "skills": [
-        "spatial",
-        "image-analysis",
-        "statistics",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -657,7 +691,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial",
+        "image-analysis",
+        "cell-qc"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "SPATIAL07_sex_housekeeping_de",
@@ -669,16 +715,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/SPATIAL07_sex_housekeeping_de.json",
       "source_group": "",
       "workflow": "donor aware control gene test",
-      "skills": [
-        "differential-expression",
-        "spatial",
-        "chromatin",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -708,7 +744,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "spatial",
+        "chromatin"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "xenium_kidney_spatial_cn7_composition_day14",
@@ -720,16 +769,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_cn7_composition_day14.json",
       "source_group": "",
       "workflow": "niche versus tissue enrichment",
-      "skills": [
-        "enrichment",
-        "composition",
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -759,7 +798,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "enrichment",
+        "composition",
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2",
@@ -771,14 +823,6 @@
       "source_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2.json",
       "source_group": "",
       "workflow": "spatial cell colocalization",
-      "skills": [
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -808,7 +852,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

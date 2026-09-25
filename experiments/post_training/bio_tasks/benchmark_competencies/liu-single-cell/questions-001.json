@@ -10,15 +10,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "reference based cell annotation",
-      "skills": [
-        "classification",
-        "cell-annotation",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -48,7 +39,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "cell-annotation"
+      ],
+      "operations": [
+        "classification",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "decoupler",
@@ -60,23 +64,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "marker enrichment cell annotation",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "feature-selection",
-        "group-comparison",
-        "enrichment",
-        "clustering",
-        "cell-annotation",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -106,7 +93,27 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "immunology"
+      ],
+      "workflows": [
+        "group-comparison",
+        "enrichment",
+        "cell-annotation"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "paga",
@@ -118,18 +125,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "partition graph trajectory",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "trajectory",
-        "spatial",
-        "network",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -159,7 +154,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "trajectory",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scvelo",
@@ -171,19 +181,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "splicing dynamics velocity",
-      "skills": [
-        "normalization",
-        "clustering",
-        "variant-analysis",
-        "trajectory",
-        "network",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "systems-biology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -211,7 +208,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "trajectory",
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scgen",
@@ -223,14 +236,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "perturbation response prediction",
-      "skills": [
-        "dimension-reduction",
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -260,7 +265,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "destvi",
@@ -272,20 +289,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "reference to spatial deconvolution",
-      "skills": [
-        "normalization",
-        "transformation",
-        "feature-selection",
-        "composition",
-        "deconvolution",
-        "spatial",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -317,7 +320,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "composition",
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "feature-selection",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "stereoscope",
@@ -329,22 +349,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "reference to spatial deconvolution",
-      "skills": [
-        "normalization",
-        "transformation",
-        "feature-selection",
-        "read-qc",
-        "cell-annotation",
-        "deconvolution",
-        "spatial",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -376,7 +380,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "immunology"
+      ],
+      "workflows": [
+        "read-qc",
+        "cell-annotation",
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "feature-selection",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cell2location",
@@ -388,17 +411,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "spatial cell abundance",
-      "skills": [
-        "regression",
-        "composition",
-        "deconvolution",
-        "spatial",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -429,7 +441,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "regression",
+        "composition",
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [
+        "model-fitting",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "squidpy",
@@ -441,17 +468,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "three dimensional neighborhood counts",
-      "skills": [
-        "enrichment",
-        "clustering",
-        "spatial",
-        "network",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -481,7 +497,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "enrichment",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "leiden",
@@ -493,23 +523,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "multi sample clustering",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "feature-selection",
-        "clustering",
-        "read-qc",
-        "network",
-        "statistics",
-        "data-management",
-        "visualization",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -537,7 +550,27 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "read-qc",
+        "network",
+        "cell-qc"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "doucling",
@@ -549,22 +582,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "cluster assisted doublet detection",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "feature-selection",
-        "clustering",
-        "cell-annotation",
-        "network",
-        "evidence-extraction",
-        "statistics",
-        "data-management",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -592,7 +609,27 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "network",
+        "evidence-extraction",
+        "cell-qc"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mira",
@@ -604,15 +641,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "chromatin topic modeling",
-      "skills": [
-        "chromatin",
-        "network",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -642,7 +670,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "network"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mofa",
@@ -654,19 +694,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "paired multiomic factorization",
-      "skills": [
-        "clustering",
-        "integration",
-        "spatial",
-        "chromatin",
-        "network",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -694,7 +721,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "integration",
+        "spatial",
+        "chromatin",
+        "network"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scmomat",
@@ -706,20 +749,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "partially paired multiomic integration",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "integration",
-        "chromatin",
-        "network",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -749,7 +778,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "integration",
+        "chromatin",
+        "network"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scpoli",
@@ -761,17 +807,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "conditional atac representation",
-      "skills": [
-        "dimension-reduction",
-        "chromatin",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -799,7 +834,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cellrank",
@@ -811,20 +860,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "velocity connectivity fate kernels",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "variant-analysis",
-        "trajectory",
-        "spatial",
-        "network",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "systems-biology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -854,7 +889,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "trajectory",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scgen-integration",
@@ -866,17 +918,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "condition aware batch removal",
-      "skills": [
-        "dimension-reduction",
-        "integration",
-        "network",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -906,7 +947,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "integration",
+        "network"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "triku",
@@ -918,17 +973,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "neighborhood based feature selection",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "feature-selection",
-        "network",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -958,7 +1002,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "feature-selection",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "hotspot",
@@ -970,21 +1028,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "spatial coexpression modules",
-      "skills": [
-        "normalization",
-        "transformation",
-        "dimension-reduction",
-        "feature-selection",
-        "association",
-        "spatial",
-        "network",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1014,7 +1057,25 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "dimension-reduction",
+        "feature-selection",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scvi",
@@ -1026,16 +1087,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "count model atlas integration",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "integration",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1063,7 +1114,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scanvi",
@@ -1075,16 +1139,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "semi supervised atlas integration",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "integration",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1112,7 +1166,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scanorama",
@@ -1124,20 +1191,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "spatial section integration",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "feature-selection",
-        "clustering",
-        "read-qc",
-        "integration",
-        "spatial",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1167,7 +1220,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "read-qc",
+        "integration",
+        "spatial"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "harmony",
@@ -1179,16 +1249,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "covariate adjusted latent integration",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "integration",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1216,7 +1276,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cellassign",
@@ -1228,16 +1301,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "probabilistic marker annotation",
-      "skills": [
-        "normalization",
-        "classification",
-        "cell-annotation",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1267,7 +1330,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "cell-annotation"
+      ],
+      "operations": [
+        "normalization",
+        "classification",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "contrastivevi",
@@ -1279,14 +1356,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "perturbation specific latent variation",
-      "skills": [
-        "dimension-reduction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1314,7 +1383,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "peakvi",
@@ -1326,17 +1407,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "binary accessibility modeling",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "chromatin",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1364,7 +1434,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "poissonvi",
@@ -1376,18 +1460,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "fragment count accessibility modeling",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "chromatin",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1415,7 +1487,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "totalvi",
@@ -1427,17 +1514,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "held out protein imputation",
-      "skills": [
-        "feature-selection",
-        "prediction",
-        "integration",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1467,7 +1543,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "integration"
+      ],
+      "operations": [
+        "feature-selection",
+        "prediction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "multivi",
@@ -1479,19 +1570,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "partially paired modality imputation",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "prediction",
-        "integration",
-        "chromatin",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1519,7 +1597,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "integration",
+        "chromatin"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "prediction",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "tangram",
@@ -1531,19 +1626,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "reference cell to tissue mapping",
-      "skills": [
-        "deconvolution",
-        "spatial",
-        "chromatin",
-        "image-analysis",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics",
-        "bioimaging"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -1574,7 +1656,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics",
+        "bioimaging"
+      ],
+      "workflows": [
+        "deconvolution",
+        "spatial",
+        "chromatin",
+        "image-analysis"
+      ],
+      "operations": [
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "spage",
@@ -1586,18 +1684,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "cross platform spatial gene imputation",
-      "skills": [
-        "normalization",
-        "association",
-        "prediction",
-        "model-evaluation",
-        "integration",
-        "spatial",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -1628,7 +1714,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "predictive-modeling",
+        "model-evaluation",
+        "integration",
+        "spatial"
+      ],
+      "operations": [
+        "normalization",
+        "prediction",
+        "model-evaluation",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "graphst",
@@ -1640,16 +1743,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "multi section spatial domains",
-      "skills": [
-        "clustering",
-        "integration",
-        "spatial",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1679,7 +1772,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration",
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gimvi",
@@ -1691,18 +1797,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "joint spatial expression imputation",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "prediction",
-        "spatial",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -1733,7 +1827,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "spatial"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "prediction",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sedr",
@@ -1745,19 +1855,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "spatial expression denoising",
-      "skills": [
-        "normalization",
-        "feature-selection",
-        "association",
-        "prediction",
-        "spatial",
-        "network",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1787,7 +1884,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "predictive-modeling",
+        "spatial",
+        "network"
+      ],
+      "operations": [
+        "normalization",
+        "feature-selection",
+        "prediction",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "spagcn",
@@ -1799,21 +1913,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "histology informed spatial domains",
-      "skills": [
-        "normalization",
-        "transformation",
-        "feature-selection",
-        "integration",
-        "spatial",
-        "network",
-        "image-analysis",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "bioimaging"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -1843,7 +1942,25 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "bioimaging"
+      ],
+      "workflows": [
+        "integration",
+        "spatial",
+        "network",
+        "image-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "feature-selection",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cellphonedb",
@@ -1855,19 +1972,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "microenvironment conditioned communication",
-      "skills": [
-        "normalization",
-        "clustering",
-        "deconvolution",
-        "communication",
-        "database-query",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "molecular-structure",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1895,7 +1999,24 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "molecular-structure",
+        "immunology"
+      ],
+      "workflows": [
+        "deconvolution",
+        "communication",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "clustering",
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deeptree",
@@ -1907,18 +2028,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "correlation based gene selection",
-      "skills": [
-        "normalization",
-        "feature-selection",
-        "association",
-        "clustering",
-        "database-query",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1946,7 +2055,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "database-query"
+      ],
+      "operations": [
+        "normalization",
+        "feature-selection",
+        "clustering",
+        "record-retrieval",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scdemon",
@@ -1958,15 +2083,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "single cell coexpression modules",
-      "skills": [
-        "dimension-reduction",
-        "association",
-        "network",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1996,7 +2112,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "network"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deseq2",
@@ -2008,15 +2136,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "count model differential expression",
-      "skills": [
-        "differential-expression",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2044,7 +2163,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "resolvi",
@@ -2056,15 +2187,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "spatial contamination correction",
-      "skills": [
-        "dimension-reduction",
-        "spatial",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -2094,7 +2216,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "novosparc",
@@ -2106,12 +2240,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "atlas constrained spatial reconstruction",
-      "skills": [
-        "normalization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -2140,7 +2268,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "normalization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cellchat",
@@ -2152,17 +2290,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "ligand receptor network inference",
-      "skills": [
-        "communication",
-        "network",
-        "database-query",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2190,7 +2317,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "communication",
+        "network",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "seurat-1",
@@ -2202,16 +2344,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "rna protein cell characterization",
-      "skills": [
-        "clustering",
-        "integration",
-        "abundance",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "proteomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2241,7 +2373,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "proteomics"
+      ],
+      "workflows": [
+        "integration",
+        "abundance"
+      ],
+      "operations": [
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "seurat-2",
@@ -2253,19 +2398,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "reference to spatial label transfer",
-      "skills": [
-        "differential-expression",
-        "clustering",
-        "cell-annotation",
-        "integration",
-        "spatial",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -2296,7 +2428,23 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "cell-annotation",
+        "integration",
+        "spatial"
+      ],
+      "operations": [
+        "clustering",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sctransform",
@@ -2308,18 +2456,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "count variance stabilization",
-      "skills": [
-        "normalization",
-        "dimension-reduction",
-        "clustering",
-        "cell-annotation",
-        "statistics",
-        "data-management",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2348,7 +2484,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "normalization",
+        "dimension-reduction",
+        "clustering",
+        "descriptive-statistics",
+        "data-management",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "singlecellhaystack",
@@ -2360,16 +2511,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "distribution aware gene selection",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "differential-expression",
-        "clustering",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2399,7 +2540,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "clustering",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scpnmf",
@@ -2411,16 +2565,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "projective factor gene selection",
-      "skills": [
-        "dimension-reduction",
-        "feature-selection",
-        "association",
-        "integration",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2448,7 +2592,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association",
+        "integration"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "feature-selection",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scry",
@@ -2460,13 +2617,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "deviance based feature selection",
-      "skills": [
-        "feature-selection",
-        "clustering"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2494,7 +2644,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "feature-selection",
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scorpius",
@@ -2506,15 +2668,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "trajectory associated gene selection",
-      "skills": [
-        "feature-selection",
-        "cell-annotation",
-        "trajectory",
-        "visualization"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2544,7 +2697,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "trajectory"
+      ],
+      "operations": [
+        "feature-selection",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "nichenet",
@@ -2556,17 +2721,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
       "source_group": "",
       "workflow": "ligand to target prioritization",
-      "skills": [
-        "communication",
-        "network",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2594,7 +2748,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "communication",
+        "network",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "decoupler--data2",
@@ -2606,14 +2773,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "marker enrichment cell annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2642,7 +2801,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "paga--data2",
@@ -2654,15 +2823,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "partition graph trajectory",
-      "skills": [
-        "clustering",
-        "trajectory",
-        "network"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2692,7 +2852,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "trajectory",
+        "network"
+      ],
+      "operations": [
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "destvi--data2",
@@ -2704,14 +2876,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "reference to spatial deconvolution",
-      "skills": [
-        "deconvolution",
-        "spatial",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -2743,7 +2907,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "leiden--data2",
@@ -2755,14 +2930,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "multi sample clustering",
-      "skills": [
-        "dimension-reduction",
-        "clustering",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2792,7 +2959,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "exploratory-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "dimension-reduction",
+        "clustering",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mofa--data2",
@@ -2804,12 +2984,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "paired multiomic factorization",
-      "skills": [
-        "integration"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2839,7 +3013,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "triku--data2",
@@ -2851,12 +3033,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "neighborhood based feature selection",
-      "skills": [
-        "feature-selection"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2886,7 +3062,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "feature-selection"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "hotspot--data2",
@@ -2898,14 +3084,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "spatial coexpression modules",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -2935,7 +3113,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "scanvi--data2",
@@ -2947,13 +3137,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "semi supervised atlas integration",
-      "skills": [
-        "integration",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2981,7 +3164,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "contrastivevi--data2",
@@ -2993,13 +3186,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "perturbation specific latent variation",
-      "skills": [
-        "dimension-reduction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3027,7 +3213,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "exploratory-analysis"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "peakvi--data2",
@@ -3039,14 +3236,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "binary accessibility modeling",
-      "skills": [
-        "chromatin",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3074,7 +3263,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gimvi--data2",
@@ -3086,14 +3286,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "joint spatial expression imputation",
-      "skills": [
-        "prediction",
-        "spatial",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -3124,7 +3316,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "spatial"
+      ],
+      "operations": [
+        "prediction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cellchat--data2",
@@ -3136,13 +3340,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "ligand receptor network inference",
-      "skills": [
-        "communication",
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -3177,7 +3374,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "question-output",
         "note": "CellChat uses annotated spatial expression and JSON scale factors. A directory named spatial_imaging_data does not imply pixel analysis."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "communication",
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sctransform--data2",
@@ -3189,16 +3395,6 @@
       "source_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
       "source_group": "",
       "workflow": "count variance stabilization",
-      "skills": [
-        "normalization",
-        "transformation",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3227,7 +3423,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

@@ -10,13 +10,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/histopathologic-cancer-detection/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/histopathologic-cancer-detection",
       "workflow": "histopathology classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -47,7 +40,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/hms-harmful-brain-activity-classification",
@@ -59,13 +63,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/hms-harmful-brain-activity-classification/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/hms-harmful-brain-activity-classification",
       "workflow": "eeg probability prediction",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "physiology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -96,7 +93,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "physiology",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/osic-pulmonary-fibrosis-progression",
@@ -108,14 +116,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/osic-pulmonary-fibrosis-progression/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/osic-pulmonary-fibrosis-progression",
       "workflow": "longitudinal pulmonary function prediction",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "physiology",
-        "clinical",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -146,7 +146,19 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "physiology",
+        "clinical",
+        "bioimaging"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/ranzcr-clip-catheter-line-classification",
@@ -158,13 +170,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/ranzcr-clip-catheter-line-classification/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/ranzcr-clip-catheter-line-classification",
       "workflow": "radiograph multilabel classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -195,7 +200,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/rsna-miccai-brain-tumor-radiogenomic-classification",
@@ -207,14 +223,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/rsna-miccai-brain-tumor-radiogenomic-classification/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/rsna-miccai-brain-tumor-radiogenomic-classification",
       "workflow": "mri radiogenomic classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -245,7 +253,19 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical",
+        "epigenomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/stanford-covid-vaccine",
@@ -257,12 +277,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/stanford-covid-vaccine/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/stanford-covid-vaccine",
       "workflow": "rna measurement prediction",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "rna-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -293,7 +307,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "rna-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/uw-madison-gi-tract-image-segmentation",
@@ -305,13 +329,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/uw-madison-gi-tract-image-segmentation/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/uw-madison-gi-tract-image-segmentation",
       "workflow": "medical image segmentation",
-      "skills": [
-        "image-segmentation"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -344,7 +361,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "image-segmentation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle/ventilator-pressure-prediction",
@@ -356,12 +382,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle/ventilator-pressure-prediction/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/ventilator-pressure-prediction",
       "workflow": "breath pressure regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -392,7 +412,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "physiology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/bms-molecular-translation",
@@ -404,12 +434,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/bms-molecular-translation/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/bms-molecular-translation",
       "workflow": "chemical image transcription",
-      "skills": [
-        "chemical-image-recognition"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -440,7 +464,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "chemical-image-recognition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/rsna-2022-cervical-spine-fracture-detection",
@@ -452,13 +484,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/rsna-2022-cervical-spine-fracture-detection/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/rsna-2022-cervical-spine-fracture-detection",
       "workflow": "ct fracture classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -489,7 +514,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/rsna-breast-cancer-detection",
@@ -501,13 +537,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/rsna-breast-cancer-detection/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/rsna-breast-cancer-detection",
       "workflow": "mammography classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -538,7 +567,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/siim-covid19-detection",
@@ -550,14 +590,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/siim-covid19-detection/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/siim-covid19-detection",
       "workflow": "radiograph detection",
-      "skills": [
-        "object-detection",
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -588,7 +620,19 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "object-detection",
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/siim-isic-melanoma-classification",
@@ -600,13 +644,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/siim-isic-melanoma-classification/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/siim-isic-melanoma-classification",
       "workflow": "skin lesion classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -637,7 +674,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "kaggle_big/vinbigdata-chest-xray-abnormalities-detection",
@@ -649,13 +697,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/kaggle_big/vinbigdata-chest-xray-abnormalities-detection/description.md",
       "source_group": "BioML-bench/kaggle/kaggle/vinbigdata-chest-xray-abnormalities-detection",
       "workflow": "radiograph abnormality detection",
-      "skills": [
-        "object-detection"
-      ],
-      "applications": [
-        "bioimaging",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -686,7 +727,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "bioimaging",
+        "clinical"
+      ],
+      "workflows": [
+        "object-detection"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "manual/open-problems-cell-cell-communication-ligand-target",
@@ -698,13 +748,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/manual/open-problems-cell-cell-communication-ligand-target/description.md",
       "source_group": "",
       "workflow": "ligand target ranking",
-      "skills": [
-        "communication"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -738,7 +781,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "communication"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "manual/open-problems-label-projection",
@@ -750,12 +802,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/manual/open-problems-label-projection/description.md",
       "source_group": "",
       "workflow": "reference cell type projection",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -788,7 +834,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Predict cell identities from labeled reference cells. PCA and aligned genes are supplied; batch handling is optional. Cell annotation is the specialized operation; classifier training is not separately counted."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "manual/open-problems-predict-modality",
@@ -800,13 +854,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/manual/open-problems-predict-modality/description.md",
       "source_group": "",
       "workflow": "paired modality prediction",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "proteomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -839,7 +886,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Predict protein abundance from RNA on matched cells. Log transformation and CP10K normalization are already supplied. The grader computes RMSE; the required solver output is the prediction matrix."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics",
+        "proteomics"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "manual/open-problems-single-cell-perturbations",
@@ -851,13 +909,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/manual/open-problems-single-cell-perturbations/description.md",
       "source_group": "",
       "workflow": "held out perturbation response",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -890,7 +941,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "manual/open-problems-spatially-variable-genes",
@@ -902,12 +964,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/manual/open-problems-spatially-variable-genes/description.md",
       "source_group": "",
       "workflow": "spatial variability ranking",
-      "skills": [
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -940,7 +996,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Compute spatial variability scores for genes from expression and coordinates. Validation data and an example diffusion method are supplied; neither generic prediction nor simulation is a required separate operation."
-      }
+      },
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-hclint-1",
@@ -952,12 +1016,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-hclint-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-hclint-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -988,7 +1046,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-hppb-1",
@@ -1000,12 +1068,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-hppb-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-hppb-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1036,7 +1098,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-perm-1",
@@ -1048,12 +1120,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-perm-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-perm-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1084,7 +1150,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-r-1",
@@ -1096,12 +1172,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1132,7 +1202,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-rclint-1",
@@ -1144,12 +1224,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-rclint-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-rclint-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1180,7 +1254,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-rppb-1",
@@ -1192,12 +1276,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-rppb-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-rppb-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1228,7 +1306,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-adme-fang-solu-1",
@@ -1240,12 +1328,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-adme-fang-solu-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/adme-fang-solu-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1276,7 +1358,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-egfr-wt-mut-c-1",
@@ -1288,12 +1380,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-egfr-wt-mut-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-egfr-wt-mut-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1324,7 +1410,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-egfr-wt-mut-r-1",
@@ -1336,12 +1432,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-egfr-wt-mut-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-egfr-wt-mut-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1372,7 +1462,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-kit-wt-mut-c-1",
@@ -1384,12 +1484,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-kit-wt-mut-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-kit-wt-mut-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1420,7 +1514,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-kit-wt-mut-r-1",
@@ -1432,12 +1536,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-kit-wt-mut-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-kit-wt-mut-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1468,7 +1566,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-ret-wt-mut-c-1",
@@ -1480,12 +1588,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-ret-wt-mut-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-ret-wt-mut-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1516,7 +1618,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis1-ret-wt-mut-r-1",
@@ -1528,12 +1640,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis1-ret-wt-mut-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis1-ret-wt-mut-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1564,7 +1670,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-egfr-wt-c-1",
@@ -1576,12 +1692,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-egfr-wt-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-egfr-wt-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1612,7 +1722,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-egfr-wt-r-1",
@@ -1624,12 +1744,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-egfr-wt-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-egfr-wt-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1660,7 +1774,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-kit-wt-c-1",
@@ -1672,12 +1796,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-kit-wt-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1708,7 +1826,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-kit-wt-r-1",
@@ -1720,12 +1848,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-kit-wt-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-kit-wt-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1756,7 +1878,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-lok-slk-c-1",
@@ -1768,12 +1900,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-lok-slk-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-lok-slk-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1804,7 +1930,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-lok-slk-r-1",
@@ -1816,12 +1952,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-lok-slk-r-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-lok-slk-r-1",
       "workflow": "molecular property regression",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1852,7 +1982,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "polarishub/polaris-pkis2-ret-wt-c-1",
@@ -1864,12 +2004,6 @@
       "source_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/tasks/polarishub/polaris-pkis2-ret-wt-c-1/description.md",
       "source_group": "BioML-bench/polaris/polaris/pkis2-ret-wt-c-1",
       "workflow": "molecular property classification",
-      "skills": [
-        "classification"
-      ],
-      "applications": [
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -1900,7 +2034,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
-      }
+      },
+      "scientific_context": [
+        "chemical-biology"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "classification"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

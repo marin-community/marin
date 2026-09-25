@@ -10,17 +10,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/cell_typing/T04a_endothelin_niche_sources.json",
       "source_group": "",
       "workflow": "single nucleus cluster annotation",
-      "skills": [
-        "normalization",
-        "transformation",
-        "feature-selection",
-        "dimension-reduction",
-        "clustering",
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Execute the specified normalization, HVG, PCA and Leiden workflow; assign clusters using the stated marker-panel means. Return mural-nucleus counts and per-marker detection/score evidence. Compare the assignment under a prespecified marker-detection sensitivity check.",
       "outputs": [
@@ -48,7 +37,21 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [
+        "normalization",
+        "transformation",
+        "feature-selection",
+        "dimension-reduction",
+        "clustering"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "tapestri_ccus_clustering_12_largest_mutant_clone",
@@ -60,13 +63,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/clustering/tapestri_ccus_clustering_12_largest_mutant_clone.json",
       "source_group": "",
       "workflow": "single cell clonal genotypes",
-      "skills": [
-        "variant-analysis",
-        "composition"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -95,7 +91,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DE01_pseudobulk_de",
@@ -107,13 +112,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/differential_expression/DE01_pseudobulk_de.json",
       "source_group": "",
       "workflow": "paired donor pseudobulk",
-      "skills": [
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -143,7 +141,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "dr_05_pca_preprocessing_sentinels",
@@ -155,13 +162,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/dimensionality_reduction/dr_05_pca_preprocessing_sentinels.json",
       "source_group": "",
       "workflow": "single cell pca diagnostics",
-      "skills": [
-        "dimension-reduction",
-        "association"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -190,7 +190,17 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [
+        "dimension-reduction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "NRM01_sparse_normalization",
@@ -202,13 +212,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/normalization/NRM01_sparse_normalization.json",
       "source_group": "",
       "workflow": "depth aware variable genes",
-      "skills": [
-        "feature-selection",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Filter genes detected in fewer than 10 cells, select 2,000 HVGs under a declared count-aware method, and return the three requested count and prevalence statistics. Preserve sparse zeros in every denominator.",
       "outputs": [
@@ -235,7 +238,19 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "feature-selection",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bd_rhapsody_tnbc_panel_aware_qc",
@@ -247,15 +262,6 @@
       "source_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/qc/bd_rhapsody_tnbc_panel_aware_qc.json",
       "source_group": "",
       "workflow": "panel aware single cell qc",
-      "skills": [
-        "cell-qc",
-        "cell-annotation",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -284,7 +290,19 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-qc",
+        "cell-annotation"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

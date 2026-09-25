@@ -10,17 +10,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/mlabaffinity_s7_antibody_display_sorting_0066/eval.json",
       "source_group": "",
       "workflow": "Audit representation coverage and predictive evidence at previously unvaried sequence positions",
-      "skills": [
-        "association",
-        "model-evaluation",
-        "variant-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -48,7 +37,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "immunology"
+      ],
+      "workflows": [
+        "association",
+        "model-evaluation",
+        "variant-analysis"
+      ],
+      "operations": [
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "tcellengagerengineering_s6_imaging_flow_cytometry_0100",
@@ -60,19 +64,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/tcellengagerengineering_s6_imaging_flow_cytometry_0100/eval.json",
       "source_group": "",
       "workflow": "Compare classifier agreement and multi-rater reliability across distinct annotation panels",
-      "skills": [
-        "model-evaluation",
-        "image-analysis",
-        "database-query",
-        "evidence-extraction",
-        "statistics",
-        "visualization"
-      ],
-      "applications": [
-        "genome-sequence",
-        "immunology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -100,7 +91,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence",
+        "immunology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "model-evaluation",
+        "image-analysis",
+        "database-query",
+        "evidence-extraction"
+      ],
+      "operations": [
+        "model-evaluation",
+        "record-retrieval",
+        "evidence-extraction",
+        "descriptive-statistics",
+        "visualization"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cd98hccrossspeciesengineering_s8_pk_0035",
@@ -112,15 +122,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hccrossspeciesengineering_s8_pk_0035/eval.json",
       "source_group": "",
       "workflow": "Summarize organ exposure while assessing what a radiolabel can establish about persistence",
-      "skills": [
-        "sequence-query",
-        "intervals",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -146,7 +147,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "sequence-query",
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084",
@@ -158,15 +171,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084/eval.json",
       "source_group": "",
       "workflow": "Reconcile concentration, tissue fractionation and microscopy for delivery assessment",
-      "skills": [
-        "image-analysis",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -192,7 +196,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "image-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "adc_doxlinker_nuclear_signal_nocall",
@@ -204,14 +220,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/adc_doxlinker_nuclear_signal_nocall/eval.json",
       "source_group": "",
       "workflow": "Compare payload localization with carrier uptake before interpreting delivery",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -239,7 +247,19 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "denton2022_s6_dose_selection_readout_choice",
@@ -251,17 +271,6 @@
       "source_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/denton2022_s6_dose_selection_readout_choice/eval.json",
       "source_group": "",
       "workflow": "Reconcile posted longitudinal outcomes with a fitted population model to assess readout timing",
-      "skills": [
-        "trajectory",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -289,7 +298,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "chemical-biology",
+        "functional-genomics",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "trajectory"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

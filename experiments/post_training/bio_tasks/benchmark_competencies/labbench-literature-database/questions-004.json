@@ -10,13 +10,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -51,7 +44,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:bf5f37e3-e372-4095-94e4-6b82da5495f5",
@@ -63,13 +67,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -104,7 +101,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:78bd3944-b97e-4257-b1fc-f002f10a0b9b",
@@ -116,13 +124,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -157,7 +158,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:0f08b7bc-f61b-4350-9d6f-21acbba570c2",
@@ -169,13 +181,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -210,7 +215,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:434a83e2-fb4b-4f2f-8d00-d5eaf534659e",
@@ -222,13 +238,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -263,7 +272,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:d789b1ff-082d-4390-8832-30626e8c18f3",
@@ -275,13 +295,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -316,7 +329,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:82985215-58eb-40f7-8d02-5ed35da21823",
@@ -328,13 +352,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -369,7 +386,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:c99f4ebc-7cfb-41eb-aff9-4a96f0e02dd4",
@@ -381,13 +409,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -422,7 +443,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:07c2c64d-c31d-4746-8c6f-0cfae5902536",
@@ -434,13 +466,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -475,7 +500,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:fb6fe7d0-d344-470c-8095-631096413a3a",
@@ -487,13 +523,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -528,7 +557,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:22dad82e-2618-49d7-9ab1-aa7f6806b1ee",
@@ -540,13 +580,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -581,7 +614,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:b5e7055c-797c-4ce9-b8a4-2bf8a3cdcc5f",
@@ -593,13 +637,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -634,7 +671,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:a2641a64-07e9-4cbd-896e-6efc46a8a159",
@@ -646,13 +694,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -687,7 +728,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:daa9db5a-fa8a-4f2c-94ac-ebfbdff14d00",
@@ -699,13 +751,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -740,7 +785,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:f983ecfc-57e3-4af8-882d-063b112e257d",
@@ -752,13 +808,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -793,7 +842,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:c8fab964-b62e-499f-83db-4fb61f2f76de",
@@ -805,13 +865,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -846,7 +899,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:6fed4d96-755f-405d-9db2-4ab8dbcf8b52",
@@ -858,13 +922,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -899,7 +956,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:cf84e46c-66c7-451b-9660-68b0335e5c90",
@@ -911,13 +979,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -952,7 +1013,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:2c19f1ab-7ab6-40fa-a5fa-174f745b6bc2",
@@ -964,13 +1036,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1005,7 +1070,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1c99d8da-ba8b-47e6-9ed4-daab57d0c296",
@@ -1017,13 +1093,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1058,7 +1127,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:45317bcb-0039-46bb-9dc5-9cfc6f231418",
@@ -1070,13 +1150,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1111,7 +1184,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:442669ae-b0ce-44bd-a897-f024c87d5865",
@@ -1123,13 +1207,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1164,7 +1241,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:52633227-8b91-4550-86a6-78e6b7034e65",
@@ -1176,13 +1264,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1217,7 +1298,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:4acafecc-4099-4a02-bdc7-55c69753eb3e",
@@ -1229,13 +1321,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1270,7 +1355,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1cb80332-4b42-41c9-8c39-8ab2db3fd09b",
@@ -1282,13 +1378,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1323,7 +1412,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:2f3799fb-5ad9-4864-86cf-62e5b45bd97f",
@@ -1335,13 +1435,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1376,7 +1469,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:fd7173d0-4f31-4f02-8e60-f3054f0ac2ff",
@@ -1388,13 +1492,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1429,7 +1526,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:92c41257-5801-4068-9055-5249e4e6ea4d",
@@ -1441,13 +1549,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1482,7 +1583,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:44de64da-6379-40af-b907-ae764a8c8740",
@@ -1494,13 +1606,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1535,7 +1640,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:79cdbe61-4311-441e-8a50-f53b57390a6e",
@@ -1547,13 +1663,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1588,7 +1697,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:d6a871ec-2cce-41fe-81db-6ea06540446d",
@@ -1600,13 +1720,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1641,7 +1754,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:3bfe209d-c068-48cd-b962-0e6c1cba2c69",
@@ -1653,13 +1777,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1694,7 +1811,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:8be984ec-edba-48a6-aab9-5d6980421fb2",
@@ -1706,13 +1834,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1747,7 +1868,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:6d8da7cd-2222-4931-8c63-89310a239d88",
@@ -1759,13 +1891,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1800,7 +1925,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:7a56c4b4-1876-4f82-94e7-9874ca30e3b6",
@@ -1812,13 +1948,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1853,7 +1982,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1c0204af-d080-42af-b85d-79b1f2c94975",
@@ -1865,13 +2005,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1906,7 +2039,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:36042ccb-c7e2-4044-93b0-a32e83a5f3f0",
@@ -1918,13 +2062,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1959,7 +2096,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:6403a95b-35b6-4084-bd40-ba55ff4136a6",
@@ -1971,13 +2119,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2012,7 +2153,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:786cd441-853b-4d62-a628-f83737e0ec93",
@@ -2024,13 +2176,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2065,7 +2210,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ac928bca-b390-4646-b01f-11258e1f27ea",
@@ -2077,13 +2233,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2118,7 +2267,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:2d7e0bfd-e8ad-46c7-a3be-4eea0b987d06",
@@ -2130,13 +2290,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2171,7 +2324,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:5abeb176-0db3-4f6b-8cd9-94302c162813",
@@ -2183,13 +2347,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2224,7 +2381,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:49fb5fe4-7158-4c94-aa48-6ca46bd61216",
@@ -2236,13 +2404,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2277,7 +2438,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:aa448b09-2008-4446-b959-9370cce6433c",
@@ -2289,13 +2461,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2330,7 +2495,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:0d4ebe88-6849-4b86-9053-a2f5ac23454a",
@@ -2342,13 +2518,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2383,7 +2552,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1fcfe3f9-a128-47cc-bf4b-96a2d2e77e5a",
@@ -2395,13 +2575,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2436,7 +2609,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ef4bf168-5c7c-476c-be4b-8301fa04d72f",
@@ -2448,13 +2632,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2489,7 +2666,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:a0b26778-bb56-4034-be60-efd1b22c5da8",
@@ -2501,13 +2689,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2542,7 +2723,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:9989d0f3-5f89-45c1-8322-e5a38d7a8e53",
@@ -2554,13 +2746,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2595,7 +2780,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:5c04cfb4-bbaa-4bc8-8c78-5ef65e7e8077",
@@ -2607,13 +2803,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2648,7 +2837,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1f282d01-1f76-464e-9ef0-7a43e751359a",
@@ -2660,13 +2860,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2701,7 +2894,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:bedd4cd8-a6d8-4846-9e9b-d43c40532f2d",
@@ -2713,13 +2917,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2754,7 +2951,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:760f8300-1ca2-4e47-b435-77ecffb24b53",
@@ -2766,13 +2974,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2807,7 +3008,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:eefd5302-a89b-4829-b5a9-0f2acb755dc7",
@@ -2819,13 +3031,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2860,7 +3065,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:5f7d977a-b9db-4f90-8318-75add4018f1d",
@@ -2872,13 +3088,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2913,7 +3122,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ee5d78f0-debe-4b16-a7e8-10be7310f928",
@@ -2925,13 +3145,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2966,7 +3179,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:79f85935-33cd-49a5-8397-cfc22c000319",
@@ -2978,13 +3202,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3019,7 +3236,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:fc9fcafc-c6bb-4c3e-a950-1acf062337b1",
@@ -3031,13 +3259,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3072,7 +3293,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ae6bcb06-c33e-4810-bf58-f671b42ffab8",
@@ -3084,13 +3316,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3125,7 +3350,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:07cc5f3d-7a46-46ba-a097-2b4e4fc8d7ac",
@@ -3137,13 +3373,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3178,7 +3407,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:17088f26-4c19-4049-a669-6c86f17b0834",
@@ -3190,13 +3430,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3231,7 +3464,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:f9136be2-b4e6-4e47-bfd2-9cb648f69513",
@@ -3243,13 +3487,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3284,7 +3521,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:06ec26dc-10ae-488b-9a5f-503c63d816a1",
@@ -3296,13 +3544,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3337,7 +3578,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:c3b303d4-b14e-48d8-8ffd-1736766ba9b6",
@@ -3349,13 +3601,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3390,7 +3635,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:620523ea-a683-4c93-b082-7b57f84d289b",
@@ -3402,13 +3658,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3443,7 +3692,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:06115fea-23a0-40fb-b088-6ab711311e78",
@@ -3455,13 +3715,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3496,7 +3749,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:e71100d1-92ec-4262-8482-c4e236ca3d66",
@@ -3508,13 +3772,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3549,7 +3806,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:68b94c0c-b52c-4b7f-836f-40cb588e4507",
@@ -3561,13 +3829,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3602,7 +3863,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:acd19456-1c96-4795-8cd5-33e9a038c35b",
@@ -3614,13 +3886,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3655,7 +3920,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:b1cf8542-ce24-4bb0-8655-043b2cf4d96a",
@@ -3667,13 +3943,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3708,7 +3977,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:7c108aea-dd45-4460-8a07-1845ba7d3212",
@@ -3720,13 +4000,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3761,7 +4034,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ff8d1a92-14fc-4c05-8986-e507c07ecb71",
@@ -3773,13 +4057,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3814,7 +4091,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:9ab418cb-d0d4-4562-a6aa-56f5dee61356",
@@ -3826,13 +4114,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3867,7 +4148,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:bc2e405a-50bc-42a1-859e-9ce4a5720ff8",
@@ -3879,13 +4171,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3920,7 +4205,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:5b370dc8-9117-49f4-a95b-601a72d81f87",
@@ -3932,13 +4228,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3973,7 +4262,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:f894e47f-5c2f-4133-bfec-1a98d48b2ca0",
@@ -3985,13 +4285,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4026,7 +4319,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:7ed60970-262c-4b41-9cf6-1319c34dcbfa",
@@ -4038,13 +4342,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4079,7 +4376,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:0fdd21fa-f647-4cc5-8346-e83815856899",
@@ -4091,13 +4399,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4132,7 +4433,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ec4f6c11-3510-40c3-a0c2-6aa56f1d72cb",
@@ -4144,13 +4456,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4185,7 +4490,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:673c9f89-0915-4403-99a4-465f7ab0a498",
@@ -4197,13 +4513,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4238,7 +4547,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:bf5d840d-9a83-4473-a3ee-08a283685bdd",
@@ -4250,13 +4570,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4291,7 +4604,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ff5dde2f-4f83-482a-91cc-e49691e12d18",
@@ -4303,13 +4627,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4344,7 +4661,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:3beaf5b4-c348-4d57-80e2-a07bfbaa7df2",
@@ -4356,13 +4684,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4397,7 +4718,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1a31c885-f262-447e-94de-19b76ae9793c",
@@ -4409,13 +4741,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4450,7 +4775,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:6fd99ebb-8f45-468c-a26a-ceeb35055182",
@@ -4462,13 +4798,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4503,7 +4832,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:a9f4e99e-1ce0-41b6-89de-84bc372aa8ea",
@@ -4515,13 +4855,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4556,7 +4889,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:5cb4a247-a6c4-4713-b9e5-cae796b3d7ca",
@@ -4568,13 +4912,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4609,7 +4946,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:ad205e15-9bb8-4333-b108-8f81e5d5dabc",
@@ -4621,13 +4969,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4662,7 +5003,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:d0c6a9a3-4de6-47ee-a525-66989374b1da",
@@ -4674,13 +5026,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4715,7 +5060,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:c6e2ddb1-723b-4502-94d0-e6671e317311",
@@ -4727,13 +5083,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4768,7 +5117,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:4f588cd3-a2aa-4fba-bca7-01eb090e2f07",
@@ -4780,13 +5140,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4821,7 +5174,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:9f1a2c31-4127-4e46-ba21-46b7996d00c8",
@@ -4833,13 +5197,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4874,7 +5231,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:04079033-bb78-406b-953e-88094d10d270",
@@ -4886,13 +5254,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4927,7 +5288,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:01ab4c47-66e9-44c5-9c8f-f2d690e712db",
@@ -4939,13 +5311,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4980,7 +5345,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:17645872-33cb-45e5-bbfe-3ff8999fdc6c",
@@ -4992,13 +5368,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5033,7 +5402,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:83e5d790-7009-411f-a9e3-d9c3f24b5722",
@@ -5045,13 +5425,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5086,7 +5459,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:804dfc31-f0f0-4af0-ae5b-307d10901722",
@@ -5098,13 +5482,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5139,7 +5516,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:3b710b98-5d54-4c30-a31d-ed0c910c8b03",
@@ -5151,13 +5539,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5192,7 +5573,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:9ad8854e-5e2a-45e0-9a1b-5eec7ea8bcff",
@@ -5204,13 +5596,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5245,7 +5630,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:297bde6f-bda2-4dfa-9cd4-3a0326ff174c",
@@ -5257,13 +5653,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5298,7 +5687,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:162bf1d9-c9d3-4795-973e-640255f58d14",
@@ -5310,13 +5710,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5351,7 +5744,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:1c1f7808-dc87-4bc0-a0e0-e86c386c1b59",
@@ -5363,13 +5767,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5404,7 +5801,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:9018d665-89e9-4ee9-b583-6fe9ae57a5c9",
@@ -5416,12 +5824,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5455,7 +5857,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:94fdf213-8ec9-4d11-8c7c-728c69d1e7e7",
@@ -5467,12 +5879,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5506,7 +5912,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:7d5070a8-9868-424e-b7ed-be0eda44dee0",
@@ -5518,12 +5934,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5557,7 +5967,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:be2f3876-95be-46af-96de-737b007ae573",
@@ -5569,12 +5989,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5608,7 +6022,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:2b5acf2a-b467-4103-9917-18bd5bfc5809",
@@ -5620,12 +6044,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5659,7 +6077,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:749fa02f-d3e4-4c65-b25d-adee88dae0a1",
@@ -5671,12 +6099,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5710,7 +6132,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:63c6ae88-502d-4685-ae29-1dd089c532e7",
@@ -5722,12 +6154,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5761,7 +6187,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "DbQA:8de75104-1f03-4f21-bd26-a22dc6899a03",
@@ -5773,12 +6209,6 @@
       "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5812,7 +6242,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

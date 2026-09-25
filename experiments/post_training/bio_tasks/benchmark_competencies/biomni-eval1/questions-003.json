@@ -10,13 +10,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -46,7 +39,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:328",
@@ -58,13 +62,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -94,7 +91,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:492",
@@ -106,13 +114,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -142,7 +143,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:134",
@@ -154,13 +166,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -190,7 +195,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:306",
@@ -202,13 +218,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -238,7 +247,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:480",
@@ -250,13 +270,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -286,7 +299,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:319",
@@ -298,13 +322,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -334,7 +351,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1475",
@@ -346,15 +374,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -384,7 +403,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:959",
@@ -396,15 +428,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -434,7 +457,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1588",
@@ -446,14 +482,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -483,7 +511,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:283",
@@ -495,14 +535,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -532,7 +564,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:797",
@@ -544,14 +588,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -581,7 +617,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1378",
@@ -593,14 +641,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -630,7 +670,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:225",
@@ -642,14 +694,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -679,7 +723,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:26",
@@ -691,15 +747,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -729,7 +776,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "physiology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1497",
@@ -741,14 +801,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -778,7 +830,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:437",
@@ -790,14 +854,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -827,7 +883,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1645",
@@ -839,14 +907,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -876,7 +936,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:229",
@@ -888,15 +960,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -926,7 +989,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:37",
@@ -938,14 +1014,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -975,7 +1043,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:749",
@@ -987,14 +1067,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1024,7 +1096,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1045",
@@ -1036,14 +1120,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1073,7 +1149,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:469",
@@ -1085,14 +1173,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1122,7 +1202,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1435",
@@ -1134,14 +1226,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1171,7 +1255,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1662",
@@ -1183,14 +1279,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1220,7 +1308,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:687",
@@ -1232,14 +1332,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1269,7 +1361,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1554",
@@ -1281,14 +1385,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1318,7 +1414,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:639",
@@ -1330,14 +1438,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1367,7 +1467,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1453",
@@ -1379,14 +1491,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1416,7 +1520,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1218",
@@ -1428,15 +1544,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "bioimaging"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1466,7 +1573,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1158",
@@ -1478,15 +1598,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1516,7 +1627,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1403",
@@ -1528,14 +1652,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1565,7 +1681,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1300",
@@ -1577,14 +1705,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1614,7 +1734,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1538",
@@ -1626,14 +1758,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1663,7 +1787,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:800",
@@ -1675,14 +1811,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1712,7 +1840,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:160",
@@ -1724,14 +1864,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1761,7 +1893,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:956",
@@ -1773,14 +1917,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1810,7 +1946,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1186",
@@ -1822,14 +1970,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1859,7 +1999,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:821",
@@ -1871,14 +2023,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1908,7 +2052,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1463",
@@ -1920,15 +2076,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1958,7 +2105,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:877",
@@ -1970,14 +2130,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2007,7 +2159,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:913",
@@ -2019,14 +2183,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2056,7 +2212,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:152",
@@ -2068,14 +2236,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2105,7 +2265,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1549",
@@ -2117,14 +2289,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2154,7 +2318,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:509",
@@ -2166,15 +2342,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2204,7 +2371,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1135",
@@ -2216,14 +2396,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2253,7 +2425,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1250",
@@ -2265,14 +2449,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2302,7 +2478,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1612",
@@ -2314,15 +2502,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2352,7 +2531,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:103",
@@ -2364,14 +2556,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2401,7 +2585,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:586",
@@ -2413,14 +2609,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2450,7 +2638,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1572",
@@ -2462,14 +2662,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2499,7 +2691,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1143",
@@ -2511,14 +2715,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2548,7 +2744,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:53",
@@ -2560,14 +2768,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2597,7 +2797,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:151",
@@ -2609,15 +2821,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2647,7 +2850,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:403",
@@ -2659,14 +2875,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2696,7 +2904,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:1640",
@@ -2708,14 +2928,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2745,7 +2957,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_pharmaprojects:207",
@@ -2757,14 +2981,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "chemical-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2794,7 +3010,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "chemical-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:90",
@@ -2806,13 +3034,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2842,7 +3063,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:48",
@@ -2854,13 +3086,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2890,7 +3115,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:88",
@@ -2902,13 +3138,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2938,7 +3167,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:107",
@@ -2950,13 +3190,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2986,7 +3219,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:21",
@@ -2998,13 +3242,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3034,7 +3271,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:57",
@@ -3046,13 +3294,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3082,7 +3323,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:75",
@@ -3094,13 +3346,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3130,7 +3375,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:32",
@@ -3142,13 +3398,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3178,7 +3427,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:140",
@@ -3190,13 +3450,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3226,7 +3479,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:59",
@@ -3238,13 +3502,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3274,7 +3531,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:63",
@@ -3286,13 +3554,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3322,7 +3583,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:132",
@@ -3334,13 +3606,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3370,7 +3635,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:37",
@@ -3382,13 +3658,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3418,7 +3687,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:136",
@@ -3430,13 +3710,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3466,7 +3739,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:1",
@@ -3478,13 +3762,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3514,7 +3791,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:52",
@@ -3526,13 +3814,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3562,7 +3843,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:130",
@@ -3574,13 +3866,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3610,7 +3895,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:103",
@@ -3622,13 +3918,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3658,7 +3947,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:99",
@@ -3670,13 +3970,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3706,7 +3999,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:116",
@@ -3718,13 +4022,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3754,7 +4051,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:87",
@@ -3766,13 +4074,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3802,7 +4103,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:74",
@@ -3814,13 +4126,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3850,7 +4155,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:121",
@@ -3862,13 +4178,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3898,7 +4207,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:145",
@@ -3910,13 +4230,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3946,7 +4259,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:20",
@@ -3958,13 +4282,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3994,7 +4311,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:71",
@@ -4006,13 +4334,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4042,7 +4363,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:106",
@@ -4054,13 +4386,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4090,7 +4415,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:14",
@@ -4102,13 +4438,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4138,7 +4467,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:92",
@@ -4150,13 +4490,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4186,7 +4519,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "rare_disease_diagnosis:102",
@@ -4198,13 +4542,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "rare disease evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4234,7 +4571,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "crispr_delivery:10",
@@ -4246,8 +4594,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4258,7 +4604,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:22",
@@ -4270,8 +4620,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4282,7 +4630,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:18",
@@ -4294,8 +4646,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4306,7 +4656,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:49",
@@ -4318,8 +4672,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4330,7 +4682,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:20",
@@ -4342,8 +4698,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4354,7 +4708,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:7",
@@ -4366,8 +4724,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4378,7 +4734,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:42",
@@ -4390,8 +4750,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4402,7 +4760,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:14",
@@ -4414,8 +4776,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4426,7 +4786,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:28",
@@ -4438,8 +4802,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4450,7 +4812,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "crispr_delivery:38",
@@ -4462,8 +4828,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "delivery method selection",
-      "skills": [],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "",
       "outputs": [],
@@ -4474,7 +4838,11 @@
       "review_sources": [],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [],
+      "operations": [],
+      "decomposition_status": "not-applicable"
     },
     {
       "task_id": "lab_bench_dbqa:207",
@@ -4486,12 +4854,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4525,7 +4887,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:212",
@@ -4537,12 +4909,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4576,7 +4942,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:295",
@@ -4588,13 +4964,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4629,7 +4998,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:476",
@@ -4641,12 +5021,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4680,7 +5054,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:251",
@@ -4692,13 +5076,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -4731,7 +5108,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:511",
@@ -4743,12 +5131,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "interaction database query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "protein-function"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4783,7 +5165,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "protein-function"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:477",
@@ -4795,12 +5187,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4834,7 +5220,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:303",
@@ -4846,13 +5242,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4887,7 +5276,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:350",
@@ -4899,13 +5299,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4940,7 +5333,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:269",
@@ -4952,13 +5356,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -4991,7 +5388,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:201",
@@ -5003,12 +5411,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5042,7 +5444,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:161",
@@ -5054,12 +5466,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5093,7 +5499,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:43",
@@ -5105,12 +5521,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "cytoband gene query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -5144,7 +5554,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

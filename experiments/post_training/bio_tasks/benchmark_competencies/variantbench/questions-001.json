@@ -10,17 +10,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/cis_mr_bcaa/eval.json",
       "source_group": "",
       "workflow": "cis mendelian randomization",
-      "skills": [
-        "association",
-        "variant-analysis",
-        "population-genetics",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -48,7 +37,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics",
+        "clinical"
+      ],
+      "workflows": [
+        "association",
+        "variant-analysis",
+        "population-genetics"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "fine_mapping_effector_gene_prioritization",
@@ -60,18 +63,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/fine_mapping_effector_gene_prioritization/eval.json",
       "source_group": "",
       "workflow": "credible set mechanistic evidence",
-      "skills": [
-        "variant-analysis",
-        "variant-consequence",
-        "spatial",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -99,7 +90,21 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "variant-consequence",
+        "spatial",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chry_father_son_concordance_11",
@@ -111,16 +116,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/chry_father_son_concordance_11/eval.json",
       "source_group": "",
       "workflow": "sex chromosome family concordance",
-      "skills": [
-        "variant-analysis",
-        "evidence-ranking",
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -148,7 +143,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "ont_rfc1_repeat_expansion_pathogenicity",
@@ -160,16 +168,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/ont_rfc1_repeat_expansion_pathogenicity/eval.json",
       "source_group": "",
       "workflow": "long read repeat genotyping",
-      "skills": [
-        "variant-analysis",
-        "variant-consequence",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
       "context_tags": [
         "long-read"
       ],
@@ -199,7 +197,20 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "variant-consequence"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "small_variant_calling_mnv_codon_consequence",
@@ -211,20 +222,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/small_variant_calling_mnv_codon_consequence/eval.json",
       "source_group": "",
       "workflow": "read phased codon consequences",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query",
-        "variant-analysis",
-        "variant-consequence",
-        "population-genetics",
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -250,7 +247,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query",
+        "variant-analysis",
+        "variant-consequence",
+        "population-genetics",
+        "database-query"
+      ],
+      "operations": [
+        "sequence-alignment",
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sv_chromosome_end_signal",
@@ -262,14 +278,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/sv_chromosome_end_signal/eval.json",
       "source_group": "",
       "workflow": "structural variant distribution qc",
-      "skills": [
-        "read-qc",
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -297,7 +305,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "molecular-structure"
+      ],
+      "workflows": [
+        "read-qc",
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall",
@@ -309,20 +327,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall/eval.json",
       "source_group": "",
       "workflow": "somatic calls to expressed epitope candidates",
-      "skills": [
-        "prediction",
-        "variant-analysis",
-        "image-analysis",
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -351,7 +355,26 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "molecular-structure",
+        "clinical"
+      ],
+      "workflows": [
+        "predictive-modeling",
+        "variant-analysis",
+        "image-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "prediction",
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "eval_stage4_annotated_vcf",
@@ -363,17 +386,6 @@
       "source_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/eval_stage4_annotated_vcf/eval.json",
       "source_group": "",
       "workflow": "annotated somatic variants to epitope candidates",
-      "skills": [
-        "variant-analysis",
-        "database-query",
-        "evidence-ranking",
-        "statistics"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -402,7 +414,22 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query",
+        "evidence-ranking"
+      ],
+      "operations": [
+        "record-retrieval",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

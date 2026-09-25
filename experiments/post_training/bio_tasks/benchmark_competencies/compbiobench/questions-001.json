@@ -10,13 +10,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "identifier resolution",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -44,7 +37,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bam-infer-read-length-q1",
@@ -56,12 +60,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "alignment inspection",
-      "skills": [
-        "read-qc"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -89,7 +87,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "read-qc"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "differential-composition-q1",
@@ -101,13 +107,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -137,7 +136,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "genomic-state-q1",
@@ -149,17 +157,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "regulatory annotation",
-      "skills": [
-        "chromatin",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -187,7 +184,22 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cryptic-exon-q1",
@@ -199,14 +211,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript structure discovery",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -232,7 +236,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "read-paper-download-file-parse-q1",
@@ -244,14 +260,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "study artifact discovery",
-      "skills": [
-        "evidence-extraction",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -279,7 +287,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "evidence-extraction"
+      ],
+      "operations": [
+        "evidence-extraction",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "huggingface-entropy-q1",
@@ -291,13 +311,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "sequence model uncertainty",
-      "skills": [
-        "model-evaluation",
-        "statistics"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -325,7 +338,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "ml-model-track-overlap-q1",
@@ -337,15 +361,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "resource provenance join",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -373,7 +388,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "compute-gc-content-interval-q1",
@@ -385,14 +413,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "strand aware reference query",
-      "skills": [
-        "sequence-query",
-        "intervals"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -418,7 +438,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "intervals"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "reverse-search-gwas-q1",
@@ -430,13 +460,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "data source identification",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -464,7 +487,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "pathogenic-variant-lookup-q1",
@@ -476,15 +510,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "variant evidence integration",
-      "skills": [
-        "variant-consequence",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -512,7 +537,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-consequence",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "identify-donor-q1",
@@ -524,14 +560,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genotype demultiplexing",
-      "skills": [
-        "variant-analysis",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -559,7 +587,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "contaminated-rna-q3",
@@ -571,14 +610,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read taxonomy",
-      "skills": [
-        "sequence-alignment",
-        "taxonomic-profiling"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -606,7 +637,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "taxonomic-profiling"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "hic-differential-loop-q1",
@@ -618,14 +661,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "differential chromatin contact",
-      "skills": [
-        "chromatin",
-        "group-comparison"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -653,7 +688,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "encode-atac-pipeline-q1",
@@ -665,14 +710,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "atac pipeline",
-      "skills": [
-        "sequence-alignment",
-        "chromatin"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -700,7 +737,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "chromatin"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "pooled-infer-donors-q1",
@@ -712,14 +761,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genotype demultiplexing",
-      "skills": [
-        "variant-analysis",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -749,7 +790,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "overexpress-tf-q1",
@@ -761,16 +813,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "motif enrichment",
-      "skills": [
-        "motifs",
-        "enrichment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -798,7 +840,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "motifs",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "conservation-lookup-q1",
@@ -810,16 +864,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "ortholog sequence comparison",
-      "skills": [
-        "orthology",
-        "sequence-alignment"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -847,7 +891,21 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "orthology",
+        "sequence-alignment"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "splice-pred-q1",
@@ -859,14 +917,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "splice model inference",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -894,7 +944,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "borzoi-rnaseq-q1",
@@ -906,14 +968,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genomic track prediction",
-      "skills": [
-        "prediction"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Produce the requested predictions or structured outputs for every evaluation example. Freeze the biological split, output identities and numerical metric before solving; retain the source endpoint and declare any runtime-bounding adaptation.",
       "outputs": [
@@ -941,7 +995,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "predictive-modeling"
+      ],
+      "operations": [
+        "prediction"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "calculate-average-gene-expression-q1",
@@ -953,14 +1019,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "annotated expression query",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -990,7 +1048,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "covid-patient-q1",
@@ -1002,13 +1073,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological state identification",
-      "skills": [
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1038,7 +1102,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "saluki-setup-optimize-q1",
@@ -1050,15 +1123,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "sequence model optimization",
-      "skills": [
-        "sequence-design",
-        "model-evaluation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1084,7 +1148,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "molecular-evolution"
+      ],
+      "workflows": [
+        "sequence-design",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "identify-related-q1",
@@ -1096,12 +1173,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "population genetics",
-      "skills": [
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1129,7 +1200,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "population-genetics"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "ep-interactions-q1",
@@ -1141,16 +1220,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "regulatory evidence integration",
-      "skills": [
-        "chromatin",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1178,7 +1247,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sample-swap-rna-q1",
@@ -1190,12 +1271,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological label reconciliation",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1225,7 +1300,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gene-fusion-q2",
@@ -1237,14 +1322,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript structure discovery",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1270,7 +1347,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "retina-score-snps-q1",
@@ -1282,14 +1371,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "variant model evaluation",
-      "skills": [
-        "variant-consequence",
-        "model-evaluation"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1317,7 +1398,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "variant-consequence",
+        "model-evaluation"
+      ],
+      "operations": [
+        "model-evaluation"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "atac-tn5-shift-q1",
@@ -1329,15 +1422,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "fragment shift inference",
-      "skills": [
-        "read-qc",
-        "chromatin"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1365,7 +1449,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "read-qc",
+        "chromatin"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "finding-geo-q1",
@@ -1377,13 +1472,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "data source identification",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1413,7 +1501,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deg-simple-q1",
@@ -1425,14 +1524,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read to expression contrast",
-      "skills": [
-        "sequence-alignment",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1464,7 +1555,19 @@
         "fastq-quality-trimming",
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "differential-expression"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bigwig-density-q1",
@@ -1476,14 +1579,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genomic signal query",
-      "skills": [
-        "intervals",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1511,7 +1606,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gtf-5-utr-median-len-q1",
@@ -1523,15 +1629,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript annotation query",
-      "skills": [
-        "sequence-query",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1557,7 +1654,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "contaminated-rna-q2",
@@ -1569,14 +1679,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read taxonomy",
-      "skills": [
-        "sequence-alignment",
-        "taxonomic-profiling"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1604,7 +1706,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "taxonomic-profiling"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sample-swap-rna-q2",
@@ -1616,12 +1730,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological label reconciliation",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -1651,7 +1759,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "multiome-match-atac-rna-q1",
@@ -1663,13 +1781,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "cross modality matching",
-      "skills": [
-        "integration"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1697,7 +1808,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "integration"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "spatial-sim-q2",
@@ -1709,15 +1829,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "spatial deconvolution",
-      "skills": [
-        "deconvolution",
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -1748,7 +1859,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "reverse-encode-q1",
@@ -1760,14 +1882,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "data source identification",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1795,7 +1909,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "compute-hvg-jaccard-q1",
@@ -1807,13 +1933,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "variable gene comparison",
-      "skills": [
-        "normalization",
-        "feature-selection"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1841,7 +1960,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "normalization",
+        "feature-selection"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deleterious-mutation-q1",
@@ -1853,15 +1983,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read to functional variant",
-      "skills": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1889,7 +2010,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "variant-analysis",
+        "variant-consequence"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "genome-assembly-contiguity-q1",
@@ -1901,13 +2035,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "assembly contiguity",
-      "skills": [
-        "assembly"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1937,7 +2064,16 @@
       "existing_mapping_status": "workflow-validated",
       "recipes": [
         "real-phix-assembly"
-      ]
+      ],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "assembly"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "1000G-retrieve-genotype-q1",
@@ -1949,13 +2085,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "population genotype query",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1983,7 +2112,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotate-variant-regulatory-overlap-q1",
@@ -1995,15 +2135,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genomic interval composition",
-      "skills": [
-        "intervals",
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2029,7 +2160,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "intervals",
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "extract-rna-secondary-structure-q1",
@@ -2041,12 +2183,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "rna folding",
-      "skills": [
-        "rna-structure"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2074,7 +2210,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "rna-structure"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "protein-shape-q1",
@@ -2086,13 +2230,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "structure projection",
-      "skills": [
-        "sequence-alignment",
-        "protein-structure"
-      ],
-      "applications": [
-        "molecular-structure"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -2121,7 +2258,18 @@
       "recipes": [
         "real-mmcif-chain-geometry",
         "real-mmcif-contact-degree"
-      ]
+      ],
+      "scientific_context": [
+        "molecular-structure"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "protein-structure"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deg-simple-q2",
@@ -2133,14 +2281,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read to expression contrast",
-      "skills": [
-        "sequence-alignment",
-        "differential-expression"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2170,7 +2310,19 @@
       "existing_mapping_status": "component-only",
       "recipes": [
         "splice-psi"
-      ]
+      ],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "differential-expression"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "match-genotypes-q1",
@@ -2182,13 +2334,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genotype metadata matching",
-      "skills": [
-        "variant-analysis",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2216,7 +2361,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "spatial-sim-q1",
@@ -2228,15 +2383,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "spatial deconvolution",
-      "skills": [
-        "deconvolution",
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -2267,7 +2413,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology",
+        "bioimaging"
+      ],
+      "workflows": [
+        "deconvolution",
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "compute-nonoverlapping-exonic-length-q1",
@@ -2279,14 +2436,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript annotation query",
-      "skills": [
-        "sequence-query",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2312,7 +2461,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "atac-doublet-q1",
@@ -2324,13 +2485,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "single cell doublet detection",
-      "skills": [
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2360,7 +2514,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "cell-qc"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "enriched-motif-identification-q1",
@@ -2372,15 +2535,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "motif enrichment",
-      "skills": [
-        "motifs",
-        "enrichment"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2408,7 +2562,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "motifs",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "find-deletion-q1",
@@ -2420,14 +2585,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "copy number discovery",
-      "skills": [
-        "read-qc",
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2455,7 +2612,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "read-qc",
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "three-way-barnyard-q1",
@@ -2467,15 +2634,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "multispecies single cell",
-      "skills": [
-        "sequence-alignment",
-        "taxonomic-profiling",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2505,7 +2663,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "taxonomic-profiling",
+        "cell-qc"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "subtype-inflammation-q1",
@@ -2517,14 +2688,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "single cell state annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2553,7 +2716,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "read-proportions-q1",
@@ -2565,14 +2738,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read origin abundance",
-      "skills": [
-        "sequence-alignment",
-        "statistics"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2600,7 +2765,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment"
+      ],
+      "operations": [
+        "sequence-alignment",
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sample-swap-atac-q2",
@@ -2612,13 +2789,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological label reconciliation",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "epigenomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2648,7 +2818,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "exogenous-mix-reads-q1",
@@ -2660,14 +2841,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "mixture identifiability",
-      "skills": [
-        "deconvolution"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2695,7 +2868,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "deconvolution"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "perturb-seq-align-q1",
@@ -2707,15 +2890,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "perturbation signature analysis",
-      "skills": [
-        "differential-expression",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2745,7 +2919,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "immunology"
+      ],
+      "workflows": [
+        "differential-expression",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas-ancestry-q1",
@@ -2757,12 +2942,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "population genetics",
-      "skills": [
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2790,7 +2969,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "population-genetics"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gene-info-grab-q1",
@@ -2802,15 +2989,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript annotation query",
-      "skills": [
-        "sequence-query",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2836,7 +3014,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "genome-coords-q1",
@@ -2848,16 +3039,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "longitudinal contact association",
-      "skills": [
-        "association",
-        "chromatin"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "systems-biology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -2887,7 +3068,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "systems-biology"
+      ],
+      "workflows": [
+        "association",
+        "chromatin"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "mystery-peak-set-q1",
@@ -2899,16 +3092,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "chromatin assay identification",
-      "skills": [
-        "chromatin",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2936,7 +3119,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "phase-chain-q1",
@@ -2948,13 +3143,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read backed phasing",
-      "skills": [
-        "sequence-alignment",
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -2982,7 +3170,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "population-genetics"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "enformer-basic-q1",
@@ -2994,10 +3193,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "model architecture inspection",
-      "skills": [
-        "model-inspection"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3025,7 +3220,13 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "model-inspection"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bedtools-ops-q1",
@@ -3037,14 +3238,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genomic interval composition",
-      "skills": [
-        "intervals",
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -3070,7 +3263,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "orf-annot-q1",
@@ -3082,15 +3285,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "coding region inference",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -3116,7 +3310,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence",
+        "systems-biology"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "reverse-search-gwas-q2",
@@ -3128,13 +3333,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "data source identification",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3162,7 +3360,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "disease-samples-q1",
@@ -3174,13 +3383,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological state identification",
-      "skills": [
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3208,7 +3410,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "contaminated-rna-q1",
@@ -3220,14 +3431,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read taxonomy",
-      "skills": [
-        "sequence-alignment",
-        "taxonomic-profiling"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3255,7 +3458,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "taxonomic-profiling"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "variant-coordinate-lookup-q1",
@@ -3267,13 +3482,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "identifier resolution",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3301,7 +3509,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "histone-chip-q1",
@@ -3313,14 +3532,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "chromatin assay identification",
-      "skills": [
-        "chromatin",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3348,7 +3559,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "cell-proportions-q1",
@@ -3360,12 +3581,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "cell composition",
-      "skills": [
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3395,7 +3610,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "three-way-barnyard-q2",
@@ -3407,15 +3630,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "multispecies single cell",
-      "skills": [
-        "sequence-alignment",
-        "taxonomic-profiling",
-        "cell-qc"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3445,7 +3659,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "taxonomic-profiling",
+        "cell-qc"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "chip-pioneer-q1",
@@ -3457,16 +3684,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "chromatin perturbation comparison",
-      "skills": [
-        "chromatin",
-        "group-comparison"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3494,7 +3711,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "epigenomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "deleterious-mutation-q2",
@@ -3506,14 +3735,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read to functional variant",
-      "skills": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3541,7 +3762,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "variant-analysis",
+        "variant-consequence"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bam-ops-q1",
@@ -3553,12 +3786,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "alignment inspection",
-      "skills": [
-        "read-qc"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3586,7 +3813,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "read-qc"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "perturb-seq-effect-q1",
@@ -3598,14 +3833,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "perturbation signature analysis",
-      "skills": [
-        "differential-expression",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3633,7 +3860,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "differential-expression",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "exogenous-mix-reads-q2",
@@ -3645,14 +3882,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "mixture identifiability",
-      "skills": [
-        "deconvolution"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3680,7 +3909,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "deconvolution"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "align-one-sequence-to-reference-q1",
@@ -3692,13 +3931,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "sequence localization",
-      "skills": [
-        "sequence-alignment"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -3726,7 +3958,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "promoter-sequence-retrieval-q1",
@@ -3738,15 +3981,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "strand aware reference query",
-      "skills": [
-        "sequence-query",
-        "intervals"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -3772,7 +4006,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "intervals"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "bedtools-chromhmm-q1",
@@ -3784,15 +4029,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "genomic interval composition",
-      "skills": [
-        "intervals",
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -3818,7 +4054,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "intervals",
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lung-cancer-sc-q1",
@@ -3830,15 +4077,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "single cell state annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "clinical",
-        "immunology"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3867,7 +4105,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "clinical",
+        "immunology"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "tissue-fibroblast-q1",
@@ -3879,13 +4128,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "single cell state annotation",
-      "skills": [
-        "cell-annotation"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -3914,7 +4156,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "cell-annotation"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "characterize-response-q1",
@@ -3926,15 +4177,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological state identification",
-      "skills": [
-        "evidence-ranking"
-      ],
-      "applications": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3962,7 +4204,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "functional-genomics",
+        "immunology",
+        "systems-biology"
+      ],
+      "workflows": [
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "geo-lookup-read-matrix-market-q1",
@@ -3974,13 +4227,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "public sparse count query",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell"
       ],
@@ -4010,7 +4256,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotate-variant-gene-impact-q1",
@@ -4022,15 +4279,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "variant consequence annotation",
-      "skills": [
-        "variant-consequence",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4058,7 +4306,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence",
+        "clinical"
+      ],
+      "workflows": [
+        "variant-consequence",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "vcf-infer-build-q1",
@@ -4070,14 +4331,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "reference build inference",
-      "skills": [
-        "variant-analysis",
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4103,7 +4356,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gene-pair-ordering-fraction-q1",
@@ -4115,14 +4378,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "annotated expression query",
-      "skills": [
-        "statistics",
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4150,7 +4405,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "immunology"
+      ],
+      "workflows": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "1000G-retrieve-genotype-q2",
@@ -4162,14 +4430,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "population genotype query",
-      "skills": [
-        "variant-analysis",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4197,7 +4457,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-analysis",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "odd-one-out-q1",
@@ -4209,14 +4481,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "chromatin assay identification",
-      "skills": [
-        "chromatin",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4244,7 +4508,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "chromatin",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gene-expression-query-q1",
@@ -4256,13 +4530,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "tissue expression query",
-      "skills": [
-        "statistics",
-        "database-query"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4290,7 +4557,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "descriptive-statistics",
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "afgr-1000g-intersect-atac-q1",
@@ -4302,14 +4580,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "resource provenance join",
-      "skills": [
-        "database-query",
-        "data-management"
-      ],
-      "applications": [
-        "genome-variation",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4337,7 +4607,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval",
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "borzoi-basic-q1",
@@ -4349,10 +4631,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "model architecture inspection",
-      "skills": [
-        "model-inspection"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4380,7 +4658,13 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "model-inspection"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "annotate-variant-gene-impact-q2",
@@ -4392,14 +4676,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "variant consequence annotation",
-      "skills": [
-        "variant-consequence",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4427,7 +4703,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "variant-consequence",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gene-fusion-q1",
@@ -4439,14 +4727,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "transcript structure discovery",
-      "skills": [
-        "sequence-alignment",
-        "sequence-query"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4472,7 +4752,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-alignment",
+        "sequence-query"
+      ],
+      "operations": [
+        "sequence-alignment"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "compute-gccontent-promoter-q1",
@@ -4484,15 +4776,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "strand aware reference query",
-      "skills": [
-        "sequence-query",
-        "intervals"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -4518,7 +4801,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query",
+        "intervals"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "vcf-infer-ancestry-q1",
@@ -4530,12 +4824,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "population genetics",
-      "skills": [
-        "population-genetics"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4563,7 +4851,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "population-genetics"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "find-amplification-q1",
@@ -4575,14 +4871,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "copy number discovery",
-      "skills": [
-        "read-qc",
-        "variant-analysis"
-      ],
-      "applications": [
-        "genome-variation",
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4610,7 +4898,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "genome-sequence"
+      ],
+      "workflows": [
+        "read-qc",
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "sample-swap-atac-q1",
@@ -4622,14 +4920,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "biological label reconciliation",
-      "skills": [
-        "data-management"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4657,7 +4947,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-sequence",
+        "epigenomics"
+      ],
+      "workflows": [
+        "data-preparation"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "variant-status-q1",
@@ -4669,13 +4971,6 @@
       "source_url": "https://huggingface.co/datasets/Genentech/compbiobench-data-v1/blob/86ee0a22e036fef2a98f382f8fd528d5d390dde3/compbiobench.v1.tsv",
       "source_group": "",
       "workflow": "read backed genotype",
-      "skills": [
-        "variant-analysis"
-      ],
-      "applications": [
-        "transcriptomics",
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -4703,7 +4998,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "genome-variation"
+      ],
+      "workflows": [
+        "variant-analysis"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

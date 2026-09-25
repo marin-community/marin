@@ -10,12 +10,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -48,7 +42,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:547",
@@ -60,12 +62,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -99,7 +95,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:571",
@@ -111,12 +115,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -150,7 +148,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:213",
@@ -162,12 +168,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -200,7 +200,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:359",
@@ -212,12 +220,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -250,7 +252,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:171",
@@ -262,12 +272,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -300,7 +304,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:98",
@@ -312,12 +324,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -350,7 +356,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:292",
@@ -362,12 +376,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -400,7 +408,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:215",
@@ -412,12 +428,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -450,7 +460,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:61",
@@ -462,12 +480,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -500,7 +512,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:406",
@@ -512,12 +532,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -550,7 +564,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:47",
@@ -562,12 +584,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -600,7 +616,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:32",
@@ -612,12 +636,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -650,7 +668,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:417",
@@ -662,12 +688,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -700,7 +720,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:267",
@@ -712,12 +740,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -750,7 +772,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:327",
@@ -762,12 +792,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -800,7 +824,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:200",
@@ -812,12 +844,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -850,7 +876,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:134",
@@ -862,13 +896,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "translation context",
-      "skills": [
-        "sequence-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "rna-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -902,7 +929,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
-      }
+      },
+      "scientific_context": [
+        "rna-biology"
+      ],
+      "workflows": [
+        "sequence-query",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:27",
@@ -914,12 +950,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -952,7 +982,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:524",
@@ -964,12 +1002,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1003,7 +1035,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:505",
@@ -1015,12 +1055,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "sequence gc",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1053,7 +1087,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:230",
@@ -1065,12 +1107,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1103,7 +1139,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:489",
@@ -1115,12 +1159,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "sequence gc",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1153,7 +1191,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:260",
@@ -1165,12 +1211,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1203,7 +1243,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:378",
@@ -1215,12 +1263,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1253,7 +1295,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:288",
@@ -1265,12 +1315,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1303,7 +1347,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:418",
@@ -1315,12 +1367,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1353,7 +1399,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:391",
@@ -1365,12 +1419,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1403,7 +1451,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:498",
@@ -1415,12 +1471,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "sequence gc",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1453,7 +1503,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:138",
@@ -1465,13 +1523,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "translation context",
-      "skills": [
-        "sequence-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "rna-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1505,7 +1556,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
-      }
+      },
+      "scientific_context": [
+        "rna-biology"
+      ],
+      "workflows": [
+        "sequence-query",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:62",
@@ -1517,12 +1577,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1555,7 +1609,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:471",
@@ -1567,12 +1629,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1605,7 +1661,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:128",
@@ -1617,13 +1681,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "translation context",
-      "skills": [
-        "sequence-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "rna-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1657,7 +1714,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
-      }
+      },
+      "scientific_context": [
+        "rna-biology"
+      ],
+      "workflows": [
+        "sequence-query",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:583",
@@ -1669,12 +1735,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1708,7 +1768,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:520",
@@ -1720,12 +1788,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction digest",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1759,7 +1821,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:64",
@@ -1771,12 +1841,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1809,7 +1873,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:14",
@@ -1821,12 +1893,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1859,7 +1925,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:156",
@@ -1871,13 +1945,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "translation context",
-      "skills": [
-        "sequence-query",
-        "evidence-ranking"
-      ],
-      "applications": [
-        "rna-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1911,7 +1978,16 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
-      }
+      },
+      "scientific_context": [
+        "rna-biology"
+      ],
+      "workflows": [
+        "sequence-query",
+        "evidence-ranking"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:40",
@@ -1923,12 +1999,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -1961,7 +2031,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:492",
@@ -1973,12 +2051,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "sequence gc",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2011,7 +2083,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:379",
@@ -2023,12 +2103,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "amplicon reconstruction",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2061,7 +2135,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:187",
@@ -2073,12 +2155,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "restriction cloning compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2111,7 +2187,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:216",
@@ -2123,12 +2207,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gibson primer compatibility",
-      "skills": [
-        "sequence-design"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2161,7 +2239,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-design"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_seqqa:52",
@@ -2173,12 +2259,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "orf analysis",
-      "skills": [
-        "sequence-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Return the requested sequences, annotations or construct products in native formats with a coordinate and identity audit. State the reference, strand, assembly and sequence-validity conventions needed to make the result unique or define accepted alternatives.",
       "outputs": [
@@ -2211,7 +2291,15 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "sequence-query"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:212",
@@ -2223,13 +2311,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2259,7 +2340,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:295",
@@ -2271,13 +2363,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2307,7 +2392,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:457",
@@ -2319,13 +2415,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2355,7 +2444,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:251",
@@ -2367,13 +2467,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2403,7 +2496,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:488",
@@ -2415,13 +2519,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2451,7 +2548,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:486",
@@ -2463,13 +2571,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2499,7 +2600,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:303",
@@ -2511,13 +2623,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2547,7 +2652,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:350",
@@ -2559,13 +2675,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2595,7 +2704,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:269",
@@ -2607,13 +2727,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2643,7 +2756,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:201",
@@ -2655,13 +2779,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2691,7 +2808,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:161",
@@ -2703,13 +2831,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2739,7 +2860,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:43",
@@ -2751,13 +2883,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2787,7 +2912,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:217",
@@ -2799,13 +2935,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2835,7 +2964,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:401",
@@ -2847,13 +2987,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2883,7 +3016,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:190",
@@ -2895,13 +3039,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2931,7 +3068,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:309",
@@ -2943,13 +3091,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2979,7 +3120,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:259",
@@ -2991,13 +3143,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3027,7 +3172,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:105",
@@ -3039,13 +3195,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3075,7 +3224,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:53",
@@ -3087,13 +3247,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3123,7 +3276,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:389",
@@ -3135,13 +3299,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3171,7 +3328,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:1",
@@ -3183,13 +3351,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3219,7 +3380,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:441",
@@ -3231,13 +3403,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3267,7 +3432,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:482",
@@ -3279,13 +3455,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3315,7 +3484,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:49",
@@ -3327,13 +3507,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3363,7 +3536,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:419",
@@ -3375,13 +3559,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3411,7 +3588,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:80",
@@ -3423,13 +3611,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3459,7 +3640,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:205",
@@ -3471,13 +3663,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3507,7 +3692,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:34",
@@ -3519,13 +3715,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3555,7 +3744,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:263",
@@ -3567,13 +3767,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3603,7 +3796,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:427",
@@ -3615,13 +3819,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3651,7 +3848,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:366",
@@ -3663,13 +3871,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3699,7 +3900,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:91",
@@ -3711,13 +3923,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3747,7 +3952,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:339",
@@ -3759,13 +3975,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3795,7 +4004,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:473",
@@ -3807,13 +4027,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3843,7 +4056,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:52",
@@ -3855,13 +4079,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3891,7 +4108,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:345",
@@ -3903,13 +4131,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3939,7 +4160,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:264",
@@ -3951,13 +4183,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3987,7 +4212,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:241",
@@ -3999,13 +4235,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4035,7 +4264,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:13",
@@ -4047,13 +4287,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4083,7 +4316,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:315",
@@ -4095,13 +4339,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4131,7 +4368,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:88",
@@ -4143,13 +4391,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4179,7 +4420,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:387",
@@ -4191,13 +4443,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4227,7 +4472,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "patient_gene_detection:273",
@@ -4239,13 +4495,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "phenotype gene prioritization",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4275,7 +4524,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

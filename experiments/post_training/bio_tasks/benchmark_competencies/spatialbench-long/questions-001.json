@@ -10,13 +10,6 @@
       "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/opticnerve_merfish_spatial_colocalization_enrichment/eval.json",
       "source_group": "",
       "workflow": "section aware spatial neighborhood enrichment",
-      "skills": [
-        "cell-annotation",
-        "spatial"
-      ],
-      "applications": [
-        "transcriptomics"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -47,7 +40,16 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics"
+      ],
+      "workflows": [
+        "cell-annotation",
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "visium_perineural_proximity",
@@ -59,15 +61,6 @@
       "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/visium_perineural_proximity/eval.json",
       "source_group": "",
       "workflow": "spatial image and compartment proximity",
-      "skills": [
-        "spatial",
-        "image-analysis",
-        "group-comparison"
-      ],
-      "applications": [
-        "transcriptomics",
-        "bioimaging"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -97,7 +90,18 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "bioimaging"
+      ],
+      "workflows": [
+        "spatial",
+        "image-analysis",
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lineage_metastasis_multilayer_niche_mapping",
@@ -109,16 +113,6 @@
       "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/lineage_metastasis_multilayer_niche_mapping/eval.json",
       "source_group": "",
       "workflow": "lineage to spatial expression programs",
-      "skills": [
-        "phylogeny",
-        "spatial",
-        "differential-expression",
-        "enrichment"
-      ],
-      "applications": [
-        "genome-variation",
-        "transcriptomics"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -148,7 +142,19 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "transcriptomics"
+      ],
+      "workflows": [
+        "phylogeny",
+        "spatial",
+        "differential-expression",
+        "enrichment"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "xenium_organoid_spatial_niche_disruption",
@@ -160,16 +166,6 @@
       "source_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/xenium_organoid_spatial_niche_disruption/eval.json",
       "source_group": "",
       "workflow": "reference to spatial niche comparison",
-      "skills": [
-        "integration",
-        "cell-annotation",
-        "spatial",
-        "composition"
-      ],
-      "applications": [
-        "transcriptomics",
-        "bioimaging"
-      ],
       "context_tags": [
         "single-cell",
         "spatial"
@@ -200,7 +196,19 @@
       ],
       "annotation_basis": "question-specific review",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "transcriptomics",
+        "bioimaging"
+      ],
+      "workflows": [
+        "integration",
+        "cell-annotation",
+        "spatial",
+        "composition"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }

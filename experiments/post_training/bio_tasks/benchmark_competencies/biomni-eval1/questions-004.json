@@ -10,12 +10,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -49,7 +43,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:401",
@@ -61,13 +65,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -102,7 +99,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:190",
@@ -114,12 +122,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -153,7 +155,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:309",
@@ -165,13 +177,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -206,7 +211,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:259",
@@ -218,13 +234,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -257,7 +266,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:105",
@@ -269,13 +289,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "mirna target query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "rna-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -309,7 +322,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "rna-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:53",
@@ -321,12 +345,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "cytoband gene query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -360,7 +378,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:389",
@@ -372,13 +400,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -413,7 +434,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:1",
@@ -425,13 +457,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "disease database difference",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -465,7 +490,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:460",
@@ -477,12 +513,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -516,7 +546,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:505",
@@ -528,12 +568,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "interaction database query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "protein-function"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -568,7 +602,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "protein-function"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:49",
@@ -580,12 +624,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "cytoband gene query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -619,7 +657,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:419",
@@ -631,13 +679,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -672,7 +713,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:80",
@@ -684,13 +736,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "mirna target query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "rna-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -724,7 +769,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "rna-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:205",
@@ -736,12 +792,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -775,7 +825,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:34",
@@ -787,13 +847,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "disease database difference",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -827,7 +880,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:430",
@@ -839,13 +903,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -880,7 +937,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:263",
@@ -892,13 +960,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -931,7 +992,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:427",
@@ -943,13 +1015,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -984,7 +1049,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:493",
@@ -996,12 +1072,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "interaction database query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "protein-function"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1036,7 +1106,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "protein-function"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:366",
@@ -1048,13 +1128,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1089,7 +1162,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:91",
@@ -1101,13 +1185,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "mirna target query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "rna-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1141,7 +1218,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "rna-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:339",
@@ -1153,13 +1241,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1194,7 +1275,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:495",
@@ -1206,12 +1298,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "interaction database query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "protein-function"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1246,7 +1332,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "protein-function"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:52",
@@ -1258,12 +1354,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "cytoband gene query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-sequence"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1297,7 +1387,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-sequence"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:345",
@@ -1309,13 +1409,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1350,7 +1443,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:264",
@@ -1362,13 +1466,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1401,7 +1498,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:241",
@@ -1413,13 +1521,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1452,7 +1553,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:13",
@@ -1464,13 +1576,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "disease database difference",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1504,7 +1609,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:315",
@@ -1516,13 +1632,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1557,7 +1666,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:88",
@@ -1569,13 +1689,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "mirna target query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "rna-biology",
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1609,7 +1722,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "rna-biology",
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:387",
@@ -1621,13 +1745,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1662,7 +1779,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:273",
@@ -1674,13 +1802,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "promoter binding query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics",
-        "epigenomics"
-      ],
       "context_tags": [],
       "reframed_question": "Compute the requested structural measurements, molecular properties or candidate ranking under pinned atom identities, chemical preparation and geometric rules. Return the complete evidence table underlying the requested scalar or selection.",
       "outputs": [
@@ -1713,7 +1834,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics",
+        "epigenomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:166",
@@ -1725,12 +1857,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1764,7 +1890,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:328",
@@ -1776,13 +1912,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "clinical variant evidence",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1817,7 +1946,18 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:514",
@@ -1829,12 +1969,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "interaction database query",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "protein-function"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1869,7 +2003,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "protein-function"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "lab_bench_dbqa:134",
@@ -1881,12 +2025,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gene set membership",
-      "skills": [
-        "database-query"
-      ],
-      "applications": [
-        "functional-genomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1920,7 +2058,17 @@
         "version": "2026-09-25-operation-boundaries-2",
         "scope": "source-protocol",
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
-      }
+      },
+      "scientific_context": [
+        "functional-genomics"
+      ],
+      "workflows": [
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:767",
@@ -1932,13 +2080,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -1968,7 +2109,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:619",
@@ -1980,13 +2132,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2016,7 +2161,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:760",
@@ -2028,13 +2184,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2064,7 +2213,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:645",
@@ -2076,13 +2236,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2112,7 +2265,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:755",
@@ -2124,13 +2288,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2160,7 +2317,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:556",
@@ -2172,13 +2340,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2208,7 +2369,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:812",
@@ -2220,13 +2392,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2256,7 +2421,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:577",
@@ -2268,13 +2444,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2304,7 +2473,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:85",
@@ -2316,14 +2496,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2353,7 +2525,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:242",
@@ -2365,13 +2549,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2401,7 +2578,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:159",
@@ -2413,13 +2601,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2449,7 +2630,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:524",
@@ -2461,14 +2653,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2498,7 +2682,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:35",
@@ -2510,13 +2706,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2546,7 +2735,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:540",
@@ -2558,14 +2758,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2595,7 +2787,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:170",
@@ -2607,13 +2811,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2643,7 +2840,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:654",
@@ -2655,15 +2863,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical",
-        "systems-biology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2693,7 +2892,20 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical",
+        "systems-biology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:728",
@@ -2705,14 +2917,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2742,7 +2946,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:720",
@@ -2754,13 +2970,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2790,7 +2999,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:801",
@@ -2802,13 +3022,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2838,7 +3051,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:95",
@@ -2850,13 +3074,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2886,7 +3103,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:563",
@@ -2898,13 +3126,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2934,7 +3155,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:240",
@@ -2946,13 +3178,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -2982,7 +3207,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:574",
@@ -2994,13 +3230,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3030,7 +3259,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:690",
@@ -3042,14 +3282,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3079,7 +3311,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:460",
@@ -3091,13 +3335,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3127,7 +3364,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:553",
@@ -3139,13 +3387,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3175,7 +3416,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:745",
@@ -3187,13 +3439,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3223,7 +3468,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:206",
@@ -3235,14 +3491,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3272,7 +3520,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:392",
@@ -3284,13 +3544,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3320,7 +3573,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:397",
@@ -3332,13 +3596,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3368,7 +3625,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:721",
@@ -3380,13 +3648,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3416,7 +3677,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:217",
@@ -3428,14 +3700,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3465,7 +3729,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "physiology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:4",
@@ -3477,13 +3753,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3513,7 +3782,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:642",
@@ -3525,13 +3805,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3561,7 +3834,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:761",
@@ -3573,13 +3857,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3609,7 +3886,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:612",
@@ -3621,13 +3909,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3657,7 +3938,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:546",
@@ -3669,13 +3961,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3705,7 +3990,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:683",
@@ -3717,13 +4013,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3753,7 +4042,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:98",
@@ -3765,13 +4065,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3801,7 +4094,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:573",
@@ -3813,13 +4117,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3849,7 +4146,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:406",
@@ -3861,13 +4169,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3897,7 +4198,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:502",
@@ -3909,14 +4221,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "proteomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3946,7 +4250,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "proteomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:47",
@@ -3958,14 +4274,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -3995,7 +4303,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:32",
@@ -4007,13 +4327,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4043,7 +4356,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:200",
@@ -4055,13 +4379,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4091,7 +4408,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:134",
@@ -4103,14 +4431,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "immunology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4140,7 +4460,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "immunology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:27",
@@ -4152,13 +4484,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4188,7 +4513,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:817",
@@ -4200,13 +4536,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4236,7 +4565,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:230",
@@ -4248,13 +4588,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4284,7 +4617,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_opentargets:489",
@@ -4296,14 +4640,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "physiology"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4333,7 +4669,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "physiology"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:630",
@@ -4345,13 +4693,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4381,7 +4722,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:591",
@@ -4393,13 +4745,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4429,7 +4774,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:541",
@@ -4441,14 +4797,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4478,7 +4826,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:85",
@@ -4490,14 +4850,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "metabolomics"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4527,7 +4879,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "metabolomics"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:242",
@@ -4539,13 +4903,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4575,7 +4932,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:159",
@@ -4587,14 +4955,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation",
-        "clinical"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4624,7 +4984,19 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation",
+        "clinical"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:35",
@@ -4636,13 +5008,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4672,7 +5037,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:170",
@@ -4684,13 +5060,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4720,7 +5089,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:543",
@@ -4732,13 +5112,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4768,7 +5141,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:535",
@@ -4780,13 +5164,6 @@
       "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
       "source_group": "",
       "workflow": "gwas causal gene evidence",
-      "skills": [
-        "evidence-ranking",
-        "database-query"
-      ],
-      "applications": [
-        "genome-variation"
-      ],
       "context_tags": [],
       "reframed_question": "Answer the requested query from pinned evidence sources. Return a typed result table and the exact records or source locations supporting each field; define eligibility, ambiguity, missingness and any ranking rule in advance.",
       "outputs": [
@@ -4816,7 +5193,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "genome-variation"
+      ],
+      "workflows": [
+        "evidence-ranking",
+        "database-query"
+      ],
+      "operations": [
+        "record-retrieval"
+      ],
+      "decomposition_status": "provisional"
     }
   ]
 }

@@ -10,13 +10,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
       "source_group": "",
       "workflow": "temporal introduction pathways",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -45,7 +38,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
@@ -57,13 +61,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
       "source_group": "",
       "workflow": "temporal introduction pathways",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -92,7 +89,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2",
@@ -104,13 +112,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
       "source_group": "",
       "workflow": "temporal introduction pathways",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -139,7 +140,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
@@ -151,10 +163,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
       "source_group": "",
       "workflow": "land use introduction association",
-      "skills": [
-        "association"
-      ],
-      "applications": [],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -183,7 +191,13 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1",
@@ -195,12 +209,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
       "source_group": "",
       "workflow": "land use introduction association",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -229,7 +237,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
@@ -241,12 +257,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
       "source_group": "",
       "workflow": "habitat introduction comparison",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -275,7 +285,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1",
@@ -287,13 +305,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
       "source_group": "",
       "workflow": "habitat introduction comparison",
-      "skills": [
-        "group-comparison"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -322,7 +333,16 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "group-comparison"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
@@ -334,12 +354,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
       "source_group": "",
       "workflow": "environmental interaction model",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -368,7 +382,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
@@ -380,12 +404,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
       "source_group": "",
       "workflow": "environmental interaction model",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -414,7 +432,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2",
@@ -426,12 +454,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
       "source_group": "",
       "workflow": "environmental interaction model",
-      "skills": [
-        "statistics"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -460,7 +482,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "descriptive-analysis"
+      ],
+      "operations": [
+        "descriptive-statistics"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
@@ -472,13 +504,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
       "source_group": "",
       "workflow": "residence time invasion model",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -507,7 +532,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
@@ -519,12 +555,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
       "source_group": "",
       "workflow": "residence time invasion model",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -553,7 +583,17 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2",
@@ -565,13 +605,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
       "source_group": "",
       "workflow": "residence time invasion model",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "functional-genomics",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -600,7 +633,18 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "functional-genomics",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
@@ -612,12 +656,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
       "source_group": "",
       "workflow": "spatially adjusted invasion model",
-      "skills": [
-        "spatial"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -648,7 +686,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
@@ -660,12 +706,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
       "source_group": "",
       "workflow": "spatially adjusted invasion model",
-      "skills": [
-        "spatial"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -696,7 +736,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2",
@@ -708,12 +756,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
       "source_group": "",
       "workflow": "spatially adjusted invasion model",
-      "skills": [
-        "spatial"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -744,7 +786,15 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q0",
@@ -756,13 +806,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -793,7 +836,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q1",
@@ -805,13 +859,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "spatial"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -844,7 +891,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q2",
@@ -856,14 +912,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "spatial",
-        "data-management"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [
         "spatial"
       ],
@@ -896,7 +944,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "spatial"
+      ],
+      "operations": [
+        "data-management"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q0",
@@ -908,13 +967,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -945,7 +997,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q1",
@@ -957,12 +1020,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -993,7 +1050,17 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q2",
@@ -1005,13 +1072,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "phylogeny"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1042,7 +1102,16 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "phylogeny"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q0",
@@ -1054,13 +1123,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1091,7 +1153,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q1",
@@ -1103,13 +1176,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
       "source_group": "",
       "workflow": "comparative trait speciation regression",
-      "skills": [
-        "regression"
-      ],
-      "applications": [
-        "molecular-evolution",
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1140,7 +1206,18 @@
       ],
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "molecular-evolution",
+        "ecology"
+      ],
+      "workflows": [
+        "regression"
+      ],
+      "operations": [
+        "model-fitting"
+      ],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q0",
@@ -1152,12 +1229,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
       "source_group": "",
       "workflow": "diversity speciation association",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1186,7 +1257,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q1",
@@ -1198,12 +1277,6 @@
       "source_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
       "source_group": "",
       "workflow": "diversity speciation association",
-      "skills": [
-        "association"
-      ],
-      "applications": [
-        "ecology"
-      ],
       "context_tags": [],
       "reframed_question": "Perform the analysis requested in the source question and return its numerical, categorical or native-artifact results with the evidence needed to recompute them. Replace undefined qualitative terms with a declared threshold, contrast or ranking rule, preserving the biological unit and scientific comparison.",
       "outputs": [
@@ -1232,7 +1305,15 @@
       ],
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
-      "recipes": []
+      "recipes": [],
+      "scientific_context": [
+        "ecology"
+      ],
+      "workflows": [
+        "association"
+      ],
+      "operations": [],
+      "decomposition_status": "provisional"
     }
   ]
 }
