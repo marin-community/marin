@@ -1,0 +1,38 @@
+name: Require write access
+description: Resolve whether a GitHub login has write, maintain, or admin permission on this repository
+
+inputs:
+  login:
+    description: GitHub login of the event author
+    required: true
+  token:
+    description: Token with metadata read on the repository
+    required: false
+    default: ${{ github.token }}
+outputs:
+  allowed:
+    description: "true when the login resolves to write, maintain, or admin"
+    value: ${{ steps.permission.outputs.allowed }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve repository permission
+      id: permission
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        LOGIN: ${{ inputs.login }}
+      run: |
+        set -euo pipefail
+        # The event payload's author_association hides private organization
+        # membership, so ask GitHub for the effective repository permission.
+        # Any failure or unexpected value denies the launch.
+        allowed=false
+        if permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$LOGIN/permission" \
+              --jq .permission 2>/dev/null); then
+          case "$permission" in
+            admin|maintain|write) allowed=true ;;
+          esac
+        fi
+        echo "login=$LOGIN permission=${permission:-unknown} allowed=$allowed"
+        echo "allowed=$allowed" >> "$GITHUB_OUTPUT"

@@ -15,13 +15,7 @@ jobs:
   review:
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (
-        github.event.pull_request.author_association == 'OWNER' ||
-        github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'COLLABORATOR' ||
-        github.event.pull_request.user.login == 'marin-ops-agent[bot]'
-      )
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -33,10 +27,21 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/require-write-access
           sparse-checkout-cone-mode: false
 
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/require-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+
       - name: Launch Loom review
+        if: >-
+          steps.author.outputs.allowed == 'true' ||
+          github.event.pull_request.user.login == 'marin-ops-agent[bot]'
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}
