@@ -41,6 +41,7 @@ HARBOR_REVISION = "d072bef08e54050880b484eb81d892944d1d82fb"
 MAX_DISTINCT_INSTANCE_ATTEMPTS = 64
 MATRIX_VERIFICATION_TIMEOUT = 300
 INPUT_PREVIEW_BYTES = 8000
+ORACLE_ERROR_TAIL_CHARS = 4096
 PARQUET_SCHEMA = pa.schema(
     [
         ("path", pa.string()),
@@ -172,22 +173,30 @@ def validate_instance(
         answer = root / "answer.json"
         program = root / "oracle.pyz"
         program.write_bytes(oracle_archive())
-        subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                str(program),
-                recipe.id,
-                "--inputs",
-                str(root),
-                "--answer",
-                str(answer),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=recipe.oracle_timeout,
-        )
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(program),
+                    recipe.id,
+                    "--inputs",
+                    str(root),
+                    "--answer",
+                    str(answer),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=recipe.oracle_timeout,
+            )
+        except subprocess.CalledProcessError as error:
+            stdout = (error.stdout or "")[-ORACLE_ERROR_TAIL_CHARS:]
+            stderr = (error.stderr or "")[-ORACLE_ERROR_TAIL_CHARS:]
+            raise RuntimeError(
+                f"{recipe.id}: validation oracle exited {error.returncode}\n"
+                f"stdout tail:\n{stdout}\nstderr tail:\n{stderr}"
+            ) from error
         solved = json.loads(answer.read_text())
         reference = root / "reference.json"
         reference.write_text(instance.contract.model_dump_json())

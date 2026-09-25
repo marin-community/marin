@@ -43,6 +43,7 @@ PROFILES = {
     "real-proteome-clustering": EnvironmentProfile(42, "native_validation_runs/9d28dd15e082.json", 2048),
     "real-phix-assembly": EnvironmentProfile(27, "native_validation_runs/cd4c5520958b.json", 4096),
     "real-phix-bam-read-structure": EnvironmentProfile(3, "native_validation_runs/81c78459a53b.json", 2048),
+    "real-dmel-gene-model-audit": EnvironmentProfile(19, "native_validation_runs/1d21faa8f7b0.json", 2048),
 }
 
 

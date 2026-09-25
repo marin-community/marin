@@ -146,7 +146,13 @@ cases without adding them to training. The manifest marks
 
 `real-phix-bam-read-structure` uses 12,000 observed pairs with BWA/SAMtools and
 checks every BAM record, BAI retrieval and four read-audit tables; its fresh oracle
-passed and seven corrupted outputs failed. Harbor validation remains pending.
+passed and seven corrupted outputs failed. The registered Harbor task passed one
+fresh oracle and four negative controls: a wrong MAPQ row, changed BAM with a
+rebuilt index, corrupt index and empty output. The separate verifier checked all
+24,185 native alignment records and complete BAI retrieval. All five Daytona
+trials were cleaned up. The Harbor output remains in a seven-day Iris archive;
+durable regional preservation awaits approval.
+
 `real-heme-pocket-burial` uses complete 4HHB coordinates with Biopython and an
 independent paired-PDB reference. Two native positive and nineteen native negative
 checks passed. Its registered Harbor package passed a fresh oracle, three
@@ -264,6 +270,22 @@ calls. The one-recipe package build passed its oracle and all 15 negative contro
 in 591 seconds with 971 MiB peak RSS; Harbor execution remains pending. GEO reuse policy and study
 attribution are recorded; donor/pool reconciliation and benchmark-lineage review
 remain open. Broad sorting gates do not provide fine cell labels or donors.
+
+`real-singlecell-representation-audit` uses those same 1,422 QC-retained cells
+and 40,312 genes as an observed Smart-seq2 read-count input. It retains genes
+detected in at least ten cells, applies one CP10k normalization and log1p
+transformation, selects 2,000 Seurat-dispersion HVGs, and fits centered,
+unscaled ARPACK PCA. The native Scanpy reference and independent full-artifact
+checks pass. Its canonical Harbor task (SHA-256
+`6d923f20eadabb4459510ed56887a32fdbf36a4669e64df609e0989db0169a29`)
+passed a fresh private oracle and a paired PCA sign-change control. Four
+artifact corruptions failed with the five summary fields intact; empty output
+also failed. All seven Daytona trials were cleaned up, with no model calls.
+The [public example](../../experiments/post_training/bio_tasks/public_examples.json)
+contains the instruction and solver-visible input manifest. The
+[validation record](../../experiments/post_training/bio_tasks/container_validation.json)
+records exact task and source hashes. This tests the declared representation
+workflow on one study; the broad sorting gates remain descriptive labels.
 
 The build requires `--source-cache` pointing to files named by their recorded
 SHA-256 values for this full-study recipe. It does not download data implicitly.

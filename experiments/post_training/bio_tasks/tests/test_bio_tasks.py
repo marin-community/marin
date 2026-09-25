@@ -5,6 +5,7 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.bio_tasks.solvers.formats import reverse_complement, translate
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
 from experiments.post_training.bio_tasks.solvers.phylogeny import solve_phylogeny
+from experiments.post_training.bio_tasks.solvers.real_bam import solve_bam
 from experiments.post_training.bio_tasks.solvers.real_expression import solve_real_expression
 from experiments.post_training.bio_tasks.solvers.real_genomes import solve_real_genome
 from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
@@ -69,6 +71,28 @@ def test_cached_inputs_reach_oracle_and_preserve_binary_bytes(tmp_path):
         validate_instance(recipe, instance, source_cache=tmp_path)
     with pytest.raises(ValueError, match="Changed input content"):
         task_files(recipe, instance, identity(recipe, 0, 0), BASE_IMAGE, TOOL_REF, tmp_path)
+
+
+def test_bam_oracle_handles_in_place_reference_and_copies_separate_reference(tmp_path, monkeypatch):
+    bwa = tmp_path / "bwa"
+    bwa.write_text("#!/bin/sh\nprintf 'fake-bwa-reached\\n' >&2\nexit 42\n")
+    bwa.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    recipe = next(recipe for recipe in RECIPES if recipe.id == "real-phix-bam-read-structure")
+    instance = recipe.generate(0)
+    with pytest.raises(RuntimeError) as failure:
+        validate_instance(recipe, instance)
+    assert "returned non-zero exit status 42" in str(failure.value)
+
+    inputs, output = tmp_path / "inputs", tmp_path / "output"
+    inputs.mkdir()
+    for name, content in instance.inputs.items():
+        (inputs / name).write_text(content)
+    with pytest.raises(subprocess.CalledProcessError):
+        solve_bam(inputs, output)
+    assert "fake-bwa-reached" in (output / "bwa-index.stdout.stderr").read_text()
+    assert (output / "reference.fa").read_bytes() == (inputs / "reference.fa").read_bytes()
 
 
 def test_native_fastq_output_requires_correct_records_even_when_summary_passes(tmp_path):

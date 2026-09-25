@@ -27,6 +27,7 @@ from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clus
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
 from experiments.post_training.bio_tasks.solvers.real_enrichment import solve_enrichment
 from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_gene_model import solve_gene_model
 from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as REAL_GENOMES_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_interaction import solve_interaction
 from experiments.post_training.bio_tasks.solvers.real_phylogeny import solve_phylogeny as solve_cox1_phylogeny
@@ -57,6 +58,7 @@ OUTPUT_SOLVERS = {
     "real-phix-bam-read-structure": solve_bam,
     "real-rnaseq-shrinkage-enrichment-audit": solve_enrichment,
     "real-singlecell-representation-audit": solve_representation,
+    "real-dmel-gene-model-audit": solve_gene_model,
 }
 
 

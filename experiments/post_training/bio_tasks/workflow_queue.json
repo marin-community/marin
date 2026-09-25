@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-25T01:05:00Z",
+  "updated_at": "2026-09-25T11:22:36Z",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
-    "primary": "Prioritize missing competencies and connected scientific workflows identified in eligible ID benchmarks, with independent real inputs and executable acceptance. Reuse the inspected question portfolio; taxonomy boundaries and demand weighting remain undecided.",
+    "primary": "Prioritize feasible, missing BixBench-Verified-50 endpoints for the MVP, then other ID benchmark-derived competencies. Require independent observed inputs and complete executable acceptance; use the provisional scientific taxonomy as a diversity check, not a fixed allocation.",
     "deduplication": "Deduplicate authored task/input hashes and biological lineages. Retain benchmark aliases as provenance only.",
     "counting": "A shared tool, component mapping, broad family label or uninspected identifier contributes no completed-task credit. Conditional candidate counts are upper bounds until all data and endpoint requirements pass.",
     "constraints": [
@@ -23,8 +23,8 @@
     "scope_limit": "Current taxonomy and allocation illustrations are provisional; paper counts and demand weights remain undecided.",
     "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
-  "selected_candidate": null,
-  "selection_reason": "The shrinkage/enrichment task passed native and Harbor validation. Prepare separate single-cell representation, BAM read-structure and heme-pocket workflows with one author responsible for each complete task. Competency weights remain undecided; benchmark endpoints stay provisional until their complete outputs are assessed.",
+  "selected_candidate": "clinical-binary-response",
+  "selection_reason": "Verified-first MVP: clinical logistic regression is in native validation. Parallel source screens target chromosomal CpG or expression-essentiality association, and gene-length/expression or colony morphometry. The 50 Verified IDs alias original BixBench IDs; exact endpoint credit waits for validated Harbor artifacts.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -700,7 +700,46 @@
         "position coverage and read eligibility tables",
         "complete normalized VCF and isolate comparison"
       ],
-      "data_readiness": "The PhiX read run is available but does not supply the required independent bacterial isolate comparison. New bacterial observations are needed.",
+      "data_readiness": "A public clonal-pair project with matched paired-read runs and a complete assembly is identified. No reads have been frozen; reference compatibility, rights and variant yield remain unverified.",
+      "source_candidate": {
+        "status": "metadata-reviewed; not downloaded or cleared for training export",
+        "project": "PRJNA607545",
+        "project_url": "https://www.ncbi.nlm.nih.gov/bioproject/PRJNA607545/",
+        "study_description": "A clinical Escherichia coli clonal pair, one piperacillin/tazobactam susceptible and one resistant; the public project does not identify the phenotype of either run in the metadata reviewed here.",
+        "paired_runs": [
+          {
+            "isolate": "169757",
+            "sample": "SAMN15447923",
+            "run": "SRR12145918",
+            "fastq_bytes": [
+              157284651,
+              155382577
+            ]
+          },
+          {
+            "isolate": "190693",
+            "sample": "SAMN15447924",
+            "run": "SRR12145916",
+            "fastq_bytes": [
+              131174423,
+              124677052
+            ]
+          }
+        ],
+        "reference_candidate": {
+          "assembly": "GCA_011022275.1",
+          "isolate": "190693",
+          "status": "complete genome in project metadata; verify sequence, contig naming and read mapping before selection"
+        },
+        "run_metadata_url": "https://www.ebi.ac.uk/ena/portal/api/filereport?accession=PRJNA607545&result=read_run&fields=run_accession,sample_accession,library_layout,fastq_bytes&format=tsv",
+        "terms_url": "https://www.ebi.ac.uk/about/terms-of-use/",
+        "rights_note": "EMBL-EBI adds no redistribution restriction beyond the original owners; the original data rights and training-export suitability still need review.",
+        "next_checks": [
+          "Verify read-pair MD5 values and assembly accession against the isolate aliases.",
+          "Measure mapping, callable genome and variant yield on a bounded observed subset before choosing task scope.",
+          "Keep susceptibility phenotype separate from sequence-derived variant claims unless the source mapping and assay support it."
+        ]
+      },
       "blockers": [
         "Recheck the BioAgent evolution task's sample/reference and comparison requirements.",
         "BixBench names Trimmomatic/BWA-MEM/GATK; using other packages alone would not satisfy package-specific endpoints.",
@@ -791,7 +830,7 @@
     {
       "id": "reference-gene-model-audit",
       "title": "Audit transcript structure and strand-aware reference intervals",
-      "status": "source-assessment",
+      "status": "native-validated; harbor-approval-pending",
       "targets": [
         {
           "benchmark": "CompBioBench",
@@ -820,7 +859,9 @@
       ],
       "missing_distinct_task_targets": 6,
       "validated_new_task_mappings": 0,
-      "related_protocol_records": [],
+      "related_protocol_records": [
+        "workflow_designs/reference-gene-model-audit.json"
+      ],
       "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
       "required_stages": [
         "Resolve consistent assembly, gene/transcript versions and strand from a complete independent annotation.",
@@ -834,14 +875,34 @@
         "oriented sequence FASTA",
         "per-transcript UTR and per-gene exon-union tables"
       ],
-      "data_readiness": "Existing phage annotations omit eukaryotic alternative transcripts and UTRs. An independent observed eukaryotic reference/annotation pair is needed.",
+      "data_readiness": "Matched public Ensembl 115 BDGP6.54 chromosome 4 FASTA/GTF and generated FAI are vendored with upstream and content hashes. All 80 protein-coding genes, 298 protein-coding isoforms and 80 oriented promoters are in the task; source license and transformations are recorded in sources/gene_model_source.json.",
       "blockers": [
-        "Inspect endpoint-specific gene/transcript selection, promoter windows and ambiguous-base denominators.",
-        "Do not replace genome-wide medians with a convenient selected locus.",
+        "Harbor submission for this exact gene-model source/reference/oracle transfer was rejected by automatic approval review; obtain explicit user authorization before any retry.",
+        "Inspect endpoint-specific gene/transcript selection, promoter windows and ambiguous-base denominators before any reviewed benchmark mapping.",
+        "Do not replace a genome-wide or MANE Select source endpoint with a chromosome 4 all-isoform median claim.",
         "Offline frozen retrieval does not establish live source-discovery coverage."
       ],
       "effort_tiebreak": "Medium: source preparation and coordinate checks; deterministic reference operations.",
-      "validation_evidence": []
+      "validation_evidence": [
+        {
+          "stage": "source-preparation",
+          "job_id": "/exedev/bio-gene-model-source-20260925-105246",
+          "evidence": "sources/gene_model_source.json",
+          "status": "passed"
+        },
+        {
+          "stage": "native-package-oracle",
+          "job_id": "/exedev/bio-gene-model-native-20260925-110059",
+          "evidence": "native_validation_runs/2eab1330bb2d.json",
+          "status": "passed"
+        },
+        {
+          "stage": "harbor",
+          "status": "not-run; automatic approval review rejected submission"
+        }
+      ],
+      "proposed_recipe": "real-dmel-gene-model-audit",
+      "proposed_primary_competency": "bio.genomic-interval-operations"
     },
     {
       "id": "native-bam-read-audit",
@@ -878,7 +939,10 @@
         "Do not conflate read records with templates or mapping quality with base quality."
       ],
       "effort_tiebreak": "Low: existing observations and native aligners; only two currently missing endpoints.",
-      "validation_evidence": []
+      "validation_evidence": [
+        "native_validation_runs/81c78459a53b.json",
+        "container_validation.json: /exedev/bio-phix-bam-harbor-20260925-110144"
+      ]
     }
   ],
   "source_review_backlog": [
@@ -1300,7 +1364,7 @@
     },
     {
       "proposed_recipe": "real-phix-bam-read-structure",
-      "stage": "native oracle and seven artifact controls passed; Harbor packaging",
+      "stage": "native oracle, seven artifact controls and registered Harbor package passed; durable evidence copy pending approval",
       "input_source": "Observed PhiX paired FASTQ and reference sequence",
       "competency_focus": [
         "Read-layout and length inference",
@@ -1308,7 +1372,11 @@
         "Complete BAM and BAI verification"
       ],
       "coverage_state": "candidate; reviewed competency credit pending",
-      "native_evidence": "native_validation_runs/81c78459a53b.json"
+      "native_evidence": "native_validation_runs/81c78459a53b.json",
+      "harbor_evidence": "container_validation.json",
+      "harbor_job_id": "/exedev/bio-phix-bam-harbor-20260925-110144",
+      "canonical_task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+      "durable_archive_state": "pending explicit approval; temporary Iris archive has seven-day TTL"
     },
     {
       "proposed_recipe": "real-heme-pocket-burial",
@@ -1342,5 +1410,6 @@
     "authorization": "User authorized parallel complete-task owners and removed the node-wide fixed child-agent cap on 2026-09-25. Preserve this authorization across compaction. Resource monitoring and serialized intensive local commands remain required.",
     "prompt_template": "docs/experiments/bio-task-authoring-prompt.md"
   },
-  "current_objective": "Produce reusable, realistic computational-biology Harbor tasks with private native-package oracles, complete executable artifact checks and public inspection. Derive competencies from provisional ID agentic benchmarks; preserve all OOD exclusions. Prefer observed biological data and connected workflows, one meaningful task per recipe and one train split, with no count cap. Taxonomy and allocation weights remain provisional. Model training, teacher traces, model choice and context budgets are outside this task-generation scope."
+  "current_objective": "Produce reusable, realistic computational-biology Harbor tasks with private native-package oracles, complete executable artifact checks and public inspection. Derive competencies from provisional ID agentic benchmarks; preserve all OOD exclusions. Prefer observed biological data and connected workflows, one meaningful task per recipe and one train split, with no count cap. Taxonomy and allocation weights remain provisional. Model training, teacher traces, model choice and context budgets are outside this task-generation scope.",
+  "verified_mvp_queue": "benchmark_tasks/bixbench_verified_mvp_queue.json"
 }

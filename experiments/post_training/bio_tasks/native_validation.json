@@ -1321,6 +1321,45 @@
       "checks_file": "native_validation_runs/b1cfab727472.json",
       "checks_sha256": "b1cfab7274724c56fbf3c0323d2a1ab55ab1f480878442975bc8b10f6ed7b756",
       "job_id": "/exedev/bio-singlecell-validation-20260925-011454"
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "5a6794bd09363b42f765fdb991bc8c8ba42f1ffd",
+      "environment_kind": "Checksum-locked Biopython 1.88 on existing reserved TRC CPU; independent positional-union reference and full TSV/FASTA verifier",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-gene-model-native-20260925-110059",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 3,
+        "disk_gib": 8,
+        "timeout_seconds": 2400,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "input_bundle_sha256": "520599b67211f07cfe305b197e043a02cdb84aec8ce5f056ecef839ad93acc93",
+      "output_archive_sha256": "5404fe388a6a913c331179c04b1daf7f9eb059be04c122b8b04cb06a82b55e26",
+      "output_archive_bytes": 16482,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-gene-model-native-20260925-110059/0/678983e1e5243b02/outputs.tar.zst",
+      "archive_storage_status": "Iris 7-day temporary regional output; no durable upload attempted",
+      "checks_file": "native_validation_runs/2eab1330bb2d.json",
+      "checks_sha256": "2eab1330bb2db4f4d6c0e8a7867fcbc5aa51d38be9eaeb273d0742686ea39ff3",
+      "summary": {
+        "expected_repositories": 1,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "planned_cases": 6,
+        "completed_cases": 6,
+        "passing_cases": 1,
+        "negative_checks": 5,
+        "distinct_biological_inputs": 1,
+        "transcript_rows": 298,
+        "gene_rows": 80,
+        "promoter_records": 80
+      },
+      "limitations": "One observed Drosophila chromosome and Ensembl release; task covers protein-coding isoforms, not MANE Select or noncoding transcript universes. Native pass does not establish Harbor pass, exact CompBioBench endpoint coverage, reviewed competency or release credit. Harbor submission was rejected by automatic approval review pending user authorization for this packet."
     }
   ],
   "numerical_portability": [
@@ -2207,6 +2246,15 @@
       "output_archive_sha256": "5cb38db0ee5455f410e173c7eb5bceee2d8569a1aefc82f806d3ad931a7da224",
       "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/5cb38db0ee5455f410e173c7eb5bceee2d8569a1aefc82f806d3ad931a7da224/outputs.tar.zst",
       "next_action": "Check documented public download access; freeze and checksum observed sampled inputs before another native validation."
+    },
+    {
+      "job_id": "/exedev/bio-gene-model-source-20260925-105246",
+      "status": "succeeded",
+      "source_revision": "5a6794bd09363b42f765fdb991bc8c8ba42f1ffd",
+      "output_archive_sha256": "9ad312f782420bebf6dbf68cbcf373b79a3c984babcc6cff708f0b2e4f0a45b2",
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-gene-model-source-20260925-105246/0/747fe18030ebd4e5/outputs.tar.zst",
+      "scope": "Verified Ensembl 115 BDGP6.54 chromosome 4 GTF/FASTA upstream hashes, retained all 9,582 chromosome GTF rows and 1,348,131 reference bases, and vendored three <1 MiB derived assets with their own hashes. This is source preparation, not Harbor validation.",
+      "storage_status": "Iris 7-day temporary regional archive; derived input assets are in repository data paths."
     }
   ]
 }

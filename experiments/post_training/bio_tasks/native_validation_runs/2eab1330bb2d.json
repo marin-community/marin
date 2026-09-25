@@ -1,0 +1,93 @@
+{
+  "artifact_sha256": {
+    "answer.json": "ab20b30cb5de66842bd1a13bb7ef5a5f163f41aeea01f091e0d8b6625d6a3198",
+    "genes.tsv": "53967fe7edf6b3039df140fccedabea560ae16f112f62da6592b7bf1e96a3f52",
+    "promoters.fa": "487c70d941420f9b10488f5a6ba66e97b8df61f8a3ec8db0ba032c4239d99f44",
+    "transcripts.tsv": "7bba4ae4632452b9ca6528ab109636c965e4873807005aa141f0ac377f7a4255"
+  },
+  "checks": {
+    "empty_output": {
+      "artifact_failures": [],
+      "reward": 0.0,
+      "summary_reason": "missing_or_nonregular_answer"
+    },
+    "exon_union_bases": {
+      "artifact_failures": [
+        "genes.tsv"
+      ],
+      "reward": 0.0,
+      "summary_reason": null
+    },
+    "minus_promoter": {
+      "artifact_failures": [
+        "promoters.fa"
+      ],
+      "reward": 0.0,
+      "summary_reason": null
+    },
+    "missing_genes": {
+      "artifact_failures": [
+        "genes.tsv"
+      ],
+      "reward": 0.0,
+      "summary_reason": null
+    },
+    "positive": {
+      "artifact_failures": [],
+      "reward": 1.0,
+      "summary_reason": null
+    },
+    "utr5_bases": {
+      "artifact_failures": [
+        "transcripts.tsv"
+      ],
+      "reward": 0.0,
+      "summary_reason": null
+    }
+  },
+  "contract_sha256": "37b8f17751751e8f4b200d8b4b2c09b253cdb2cd8e48d722cbfc2e8fc317bd13",
+  "gene_rows": 80,
+  "input_sha256": {
+    "annotations.gtf": "a612389a278c17168f3d3919b684ba937097de32372803e17cfd8cda45aa2586",
+    "genome.fa": "37be8963b84dd00b5faa1b0fa6c9bcd8ae8143609b29978b61b012a4b65510ad",
+    "genome.fa.fai": "bf6ec88676160bfaad796c6649e452df4fd411abc16991aeb66612988fc6e377",
+    "query.json": "4804628dd25e1bed877c63a1595de5f37fed0274d1b8dc2b2c18823990e64cc9"
+  },
+  "native_job_id": "/exedev/bio-gene-model-native-20260925-110059",
+  "native_output_archive_sha256": "5404fe388a6a913c331179c04b1daf7f9eb059be04c122b8b04cb06a82b55e26",
+  "native_result": {
+    "accelerators_requested": 0,
+    "artifacts": {
+      "answer.json": {
+        "bytes": 285,
+        "sha256": "ab20b30cb5de66842bd1a13bb7ef5a5f163f41aeea01f091e0d8b6625d6a3198"
+      },
+      "genes.tsv": {
+        "bytes": 5825,
+        "sha256": "53967fe7edf6b3039df140fccedabea560ae16f112f62da6592b7bf1e96a3f52"
+      },
+      "promoters.fa": {
+        "bytes": 17120,
+        "sha256": "487c70d941420f9b10488f5a6ba66e97b8df61f8a3ec8db0ba032c4239d99f44"
+      },
+      "transcripts.tsv": {
+        "bytes": 13933,
+        "sha256": "7bba4ae4632452b9ca6528ab109636c965e4873807005aa141f0ac377f7a4255"
+      }
+    },
+    "execution": "passed",
+    "install_seconds": 10.147871483990457,
+    "model_calls": 0,
+    "oracle_archive_sha256": "1ee0ce410a8c4054b3071c114b35c3efce9919b0925f9baf0c7e18e0533fb46a",
+    "oracle_seconds": 0.4646316879952792,
+    "package_lock_sha256": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+    "peak_child_rss_kib": 68328,
+    "recipe": "real-dmel-gene-model-audit",
+    "source_id": "Ensembl:BDGP6.54:115:chr4"
+  },
+  "passed": true,
+  "promoter_records": 80,
+  "recipe": "real-dmel-gene-model-audit",
+  "summary_checks": 8,
+  "transcript_rows": 298
+}

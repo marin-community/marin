@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-25T11:22:36Z",
+  "benchmark": "BixBench-Verified-50",
+  "inventory": "bixbench-verified-50.json",
+  "purpose": "Choose the next realistic Harbor tasks for a Verified-first MVP. This is an authoring queue, not a coverage ledger.",
+  "counting": "The 50 Verified question IDs alias original BixBench IDs. Count each shared task group once across the two inventories. A workflow-family match, native component, or source question alone earns no completed coverage; validate every claimed endpoint and artifact on independent observed data.",
+  "selection_rule": [
+    "Prefer a connected workflow that can exercise several currently uncovered Verified endpoints without combining unrelated scientific questions.",
+    "Require observed input with verified source identity, rights suitable for training-task redistribution, and no source-capsule or biological-lineage leakage.",
+    "Favor a complete native-package oracle, deterministic artifact checks, and an offline Harbor runtime near or below 30 minutes.",
+    "After each accepted task, recompute missing endpoints and select the next feasible workflow. Do not force a blocked family merely because it has many question IDs."
+  ],
+  "current_assignments": [
+    {
+      "workstream": "clinical-logistic-regression",
+      "owner": "review_enrichment_task",
+      "state": "native reference passed; independent solver and Harbor acceptance pending",
+      "candidate": "clinical-binary-response",
+      "endpoint_ids": [
+        "bix-51-q2",
+        "bix-51-q8"
+      ]
+    },
+    {
+      "workstream": "chromosomal-cpg-density or expression-essentiality-association",
+      "owner": "gene_model_task_sol_high",
+      "state": "independent source and endpoint screening",
+      "candidate": null,
+      "endpoint_ids": [
+        "bix-52-q2",
+        "bix-52-q6",
+        "bix-52-q7",
+        "bix-16-q1",
+        "bix-16-q3",
+        "bix-16-q4"
+      ]
+    },
+    {
+      "workstream": "gene-length-expression-association or colony-morphometry",
+      "owner": "bam_harbor_sol_high",
+      "state": "independent source and endpoint screening",
+      "candidate": null,
+      "endpoint_ids": [
+        "bix-22-q1",
+        "bix-22-q4",
+        "bix-18-q1",
+        "bix-18-q3"
+      ]
+    }
+  ],
+  "source_gates": [
+    {
+      "candidate": "multi-locus-phylogenomic-signal",
+      "state": "deferred",
+      "reason": "Observed Medusozoa mirror has promising native metrics, but exact source-to-CC0 deposit identity and benchmark lineage are unresolved."
+    },
+    {
+      "candidate": "observed-bacterial-resequencing",
+      "state": "deferred",
+      "reason": "The PRJNA607545 reads have confirmed run and strain identities, but the original owner has not explicitly licensed the deposited FASTQ for training-task redistribution. The paper reports already trimmed reads, weakening one required trimming stage."
+    }
+  ],
+  "workflow_families": [
+    {
+      "rank": 1,
+      "family": "clinical-logistic-regression",
+      "question_ids": [
+        "bix-51-q2",
+        "bix-51-q8"
+      ],
+      "capsule_count": 1,
+      "state": "active"
+    },
+    {
+      "rank": 2,
+      "family": "chromosomal-cpg-density",
+      "question_ids": [
+        "bix-52-q2",
+        "bix-52-q6",
+        "bix-52-q7"
+      ],
+      "capsule_count": 1,
+      "state": "source-screening"
+    },
+    {
+      "rank": 3,
+      "family": "expression-essentiality-association",
+      "question_ids": [
+        "bix-16-q3",
+        "bix-16-q1",
+        "bix-16-q4"
+      ],
+      "capsule_count": 1,
+      "state": "source-screening"
+    },
+    {
+      "rank": 4,
+      "family": "gene-length-expression-association",
+      "question_ids": [
+        "bix-22-q1",
+        "bix-22-q4"
+      ],
+      "capsule_count": 1,
+      "state": "source-screening"
+    },
+    {
+      "rank": 5,
+      "family": "colony-morphometry",
+      "question_ids": [
+        "bix-18-q3",
+        "bix-18-q1"
+      ],
+      "capsule_count": 1,
+      "state": "source-screening"
+    },
+    {
+      "rank": null,
+      "family": "bacterial-read-to-variant-workflow",
+      "question_ids": [
+        "bix-61-q5",
+        "bix-61-q2"
+      ],
+      "capsule_count": 2,
+      "state": "source-gated"
+    },
+    {
+      "rank": null,
+      "family": "clinical-variant-cohort-analysis",
+      "question_ids": [
+        "bix-47-q3",
+        "bix-14-q1",
+        "bix-20-q3",
+        "bix-17-q2"
+      ],
+      "capsule_count": 4,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "colony-control-comparisons",
+      "question_ids": [
+        "bix-41-q5"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "colony-dose-response-modeling",
+      "question_ids": [
+        "bix-54-q7"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "combination-treatment-enrichment",
+      "question_ids": [
+        "bix-43-q2",
+        "bix-43-q4"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "crispr-screen-pathway-analysis",
+      "question_ids": [
+        "bix-6-q4"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "directional-rnaseq-enrichment",
+      "question_ids": [
+        "bix-24-q2"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "expression-consensus-clustering",
+      "question_ids": [
+        "bix-27-q5"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "mirna-multiple-testing",
+      "question_ids": [
+        "bix-30-q3"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "multifactor-rnaseq-kegg-enrichment",
+      "question_ids": [
+        "bix-26-q3",
+        "bix-32-q2",
+        "bix-26-q5"
+      ],
+      "capsule_count": 2,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "ortholog-discovery",
+      "question_ids": [
+        "bix-55-q1"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "paired-proteomic-contrasts",
+      "question_ids": [
+        "bix-37-q1",
+        "bix-37-q4"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-gene",
+      "question_ids": [
+        "bix-35-q1",
+        "bix-35-q2"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-long-branch",
+      "question_ids": [
+        "bix-28-q3"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-parsimony-informative",
+      "question_ids": [
+        "bix-12-q2",
+        "bix-12-q5",
+        "bix-12-q4",
+        "bix-12-q6"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-patristic",
+      "question_ids": [
+        "bix-34-q2",
+        "bix-34-q5"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-relative",
+      "question_ids": [
+        "bix-45-q1"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-tree",
+      "question_ids": [
+        "bix-38-q1"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "phylogenetic-treeness",
+      "question_ids": [
+        "bix-11-q1",
+        "bix-11-q2"
+      ],
+      "capsule_count": 1,
+      "state": "alternative-source-needed"
+    },
+    {
+      "rank": null,
+      "family": "rnaseq-sensitivity-and-enrichment",
+      "question_ids": [
+        "bix-53-q2",
+        "bix-53-q5"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "rnaseq-shrunken-effects",
+      "question_ids": [
+        "bix-49-q4"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "rnaseq-target-effects",
+      "question_ids": [
+        "bix-46-q4"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    },
+    {
+      "rank": null,
+      "family": "sex-stratified-rnaseq",
+      "question_ids": [
+        "bix-31-q2"
+      ],
+      "capsule_count": 1,
+      "state": "queued"
+    }
+  ],
+  "prioritization_note": "Only the active task and four source screens are ordered. Remaining families are unranked until source identity, rights, lineage, runtime and endpoint feasibility are assessed."
+}

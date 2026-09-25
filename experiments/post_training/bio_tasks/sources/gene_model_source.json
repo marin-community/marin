@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "source_id": "Ensembl:BDGP6.54:115:chr4",
+  "organism": "Drosophila melanogaster",
+  "assembly": "BDGP6.54",
+  "annotation_release": "Ensembl 115",
+  "chromosome": "4",
+  "retrieved_at": "2026-09-25",
+  "lineage": "FlyBase D. melanogaster reference annotation and BDGP6.54 reference genome as distributed by Ensembl 115",
+  "citation": "FlyBase Consortium. FlyBase: updates to the Drosophila genes and genomes database. Genetics 227(1):iyad211 (2024); Ensembl release 115, BDGP6.54.",
+  "license": "FlyBase annotations and data: CC BY 4.0; Ensembl imposes no restrictions on project-generated data, subject to third-party terms.",
+  "license_sources": [
+    "https://wiki.flybase.org/wiki/FlyBase:About",
+    "https://sep2025.archive.ensembl.org/info/about/legal/disclaimer.html"
+  ],
+  "upstream": {
+    "gtf": {
+      "url": "https://ftp.ensembl.org/pub/release-115/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.115.chr.gtf.gz",
+      "bytes": 7125982,
+      "sha256": "c87b75e6d522033c0912a5ce7742d56b43228a92d3a7316905eff9b94c30087f"
+    },
+    "fasta": {
+      "url": "https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.4.fa.gz",
+      "bytes": 404713,
+      "sha256": "78622035d6f3ec532f165b792ba21c8e0dbf4fceac3a8dfd3d5968ae33f4d0da"
+    }
+  },
+  "transformation": "sources/prepare_gene_model.py retains all 9,582 chromosome 4 GTF feature rows in original order, retains the complete 1,348,131-base chromosome 4 FASTA, and builds a matching FAI. No gene, transcript, or UTR rows are removed during source preparation. The task query then selects the complete protein-coding gene and protein-coding transcript universe; noncoding transcripts, transposable elements, pseudogenes and other chromosomes are excluded from scoring.",
+  "observed_dimensions": {
+    "chromosome_bases": 1348131,
+    "chromosome_gtf_rows": 9582,
+    "chromosome_genes_all_biotypes": 684,
+    "chromosome_transcripts_all_biotypes": 915,
+    "chromosome_five_prime_utr_rows": 575,
+    "chromosome_three_prime_utr_rows": 341,
+    "chromosome_exon_rows": 3733,
+    "chromosome_cds_rows": 2737,
+    "chromosome_protein_coding_genes": 80,
+    "chromosome_protein_coding_transcripts": 298,
+    "protein_coding_genes_with_multiple_protein_coding_isoforms": 69
+  },
+  "benchmark_screening": "Independent public reference release; no CompBioBench biological fixtures or answers are used. This is a workflow adaptation, not exact source-answer reproduction. OOD benchmark exclusions remain in force, and no reviewed competency credit is automatic."
+}

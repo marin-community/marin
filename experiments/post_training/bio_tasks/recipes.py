@@ -25,6 +25,7 @@ from experiments.post_training.bio_tasks.generators.real_clusters import RECIPES
 from experiments.post_training.bio_tasks.generators.real_domains import RECIPES as REAL_DOMAIN_RECIPES
 from experiments.post_training.bio_tasks.generators.real_enrichment import RECIPES as REAL_ENRICHMENT_RECIPES
 from experiments.post_training.bio_tasks.generators.real_expression import RECIPES as REAL_EXPRESSION_RECIPES
+from experiments.post_training.bio_tasks.generators.real_gene_model import RECIPES as REAL_GENE_MODEL_RECIPES
 from experiments.post_training.bio_tasks.generators.real_genomes import RECIPES as REAL_GENOMES_RECIPES
 from experiments.post_training.bio_tasks.generators.real_heme_pocket import RECIPES as REAL_HEME_POCKET_RECIPES
 from experiments.post_training.bio_tasks.generators.real_interaction import RECIPES as REAL_INTERACTION_RECIPES
@@ -915,6 +916,7 @@ RECIPES = (
     *REAL_SINGLECELL_REPRESENTATION_RECIPES,
     *REAL_CLINICAL_RECIPES,
     *REAL_GENOMES_RECIPES,
+    *REAL_GENE_MODEL_RECIPES,
     *REAL_READS_RECIPES,
     *REAL_PROTEINS_RECIPES,
     *REAL_PHYLOGENY_RECIPES,
@@ -944,7 +946,7 @@ RECIPES = (
 
 DOMAIN_RECIPES = {
     "sequence": SEQUENCE_RECIPES + REPO_SEQUENCES_RECIPES + REAL_GENOMES_RECIPES,
-    "genomic-intervals": INTERVAL_RECIPES,
+    "genomic-intervals": INTERVAL_RECIPES + REAL_GENE_MODEL_RECIPES,
     "sequencing-reads": READ_RECIPES + REAL_READS_RECIPES + REAL_BAM_RECIPES,
     "variants": VARIANTS_RECIPES,
     "expression": (

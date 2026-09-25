@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "recipe_id": "real-dmel-gene-model-audit",
+  "workstream_id": "reference-gene-model-audit",
+  "scientific_question": "Across every protein-coding gene model on the observed BDGP6.54 chromosome 4, what are the transcript-region lengths, nonoverlapping gene exon lengths, strand-oriented upstream sequences and their GC composition?",
+  "data_origin": "real public reference annotation and assembly, not an experimental assay",
+  "biological_lineage": "FlyBase D. melanogaster BDGP6.54 reference as distributed by Ensembl 115",
+  "train_split_only": true,
+  "candidate_endpoints": [
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "compute-gc-content-interval-q1",
+      "relationship": "partial workflow adaptation",
+      "covered_method": "Matched FASTA/GTF interval extraction, oriented promoter FASTA, and ACGT-denominator GC counting.",
+      "difference": "The authored interval is a complete 200-base gene-upstream window, not the benchmark's selected interval; live reference retrieval is frozen offline."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "gtf-5-utr-median-len-q1",
+      "relationship": "partial workflow adaptation",
+      "covered_method": "Every retained protein-coding transcript has explicit 5-prime UTR, CDS including stop, 3-prime UTR and exon-union lengths; three medians are floored once after aggregation.",
+      "difference": "The source endpoint uses MANE Select human transcripts; this task uses every protein-coding chromosome 4 Drosophila isoform in Ensembl 115."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "compute-nonoverlapping-exonic-length-q1",
+      "relationship": "partial workflow adaptation",
+      "covered_method": "Gene exon bases are unioned across all retained alternative isoforms before length calculation, with a complete gene table.",
+      "difference": "The source endpoint selects one gene and all its transcripts, including noncoding isoforms. This task covers all protein-coding genes and their protein-coding isoforms."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "gene-info-grab-q1",
+      "relationship": "component only; full endpoint unsupported",
+      "covered_method": "Stable gene IDs, names, coordinates, strands and transcript counts are joined from one release.",
+      "difference": "The mouse source endpoint additionally asks for a canonical protein length, intron count and upstream neighboring gene; those are not requested or graded here."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "promoter-sequence-retrieval-q1",
+      "relationship": "partial workflow adaptation",
+      "covered_method": "Gene TSS, clipped upstream bounds and complete transcription-oriented promoter FASTA are graded on both strands.",
+      "difference": "The zebrafish source endpoint uses a canonical transcript and a -500/+100 window. This task uses each gene boundary and -200/-1."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "task_id": "compute-gccontent-promoter-q1",
+      "relationship": "partial workflow adaptation",
+      "covered_method": "GC numerators, ACGT denominators, ambiguity counts and fractions are graded for every oriented promoter sequence.",
+      "difference": "The original locus/window and live acquisition are not reproduced."
+    }
+  ],
+  "grading": "Deterministic record, TSV and FASTA checks; no LLM judge. Private reference counts genomic positions directly; native oracle uses Biopython parsing and an independent sorted interval sweep.",
+  "exclusions": "All existing OOD exclusions remain unchanged. No benchmark answer or fixture was used as task input. This candidate mapping does not award reviewed competency, ID coverage or release credit.",
+  "native_evidence": "native_validation_runs/2eab1330bb2d.json: checksum-locked Biopython 1.88 on existing reserved CPU passed complete 298-transcript, 80-gene, 80-promoter artifacts and five targeted failing controls. This does not establish Harbor or benchmark endpoint coverage.",
+  "canonical_task_sha256": "21cc9c8b52bada3bc2c2c5e5622f62b04cd7842b4bea1e32127044ab4f792bb5",
+  "remaining_review": "The exact Harbor OracleAgent packet is prepared but not submitted because automatic approval review rejected private source/reference/oracle egress to Iris and Daytona. Scientific source-lineage and endpoint-specific scope review must be recorded before any status or competency promotion."
+}

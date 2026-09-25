@@ -1733,6 +1733,54 @@
         "status": "passed-full-corpus-package-checks",
         "limits": "Host package validation only. Harbor execution, scientific review and benchmark-lineage screening remain separate."
       }
+    },
+    "Ensembl:BDGP6.54:115:chr4": {
+      "landing_page": "https://sep2025.archive.ensembl.org/Drosophila_melanogaster/Info/Index",
+      "lineage": "FlyBase D. melanogaster reference annotation and BDGP6.54 assembly as distributed by Ensembl 115",
+      "license": "FlyBase data and annotations CC BY 4.0; Ensembl project data unrestricted, subject to third-party terms",
+      "license_source": "https://wiki.flybase.org/wiki/FlyBase:About",
+      "citation": "FlyBase Consortium. FlyBase: updates to the Drosophila genes and genomes database. Genetics 227(1):iyad211 (2024); Ensembl 115 BDGP6.54.",
+      "retrieved_at": "2026-09-25",
+      "data_origin": "real",
+      "source_role": "complete chromosome 4 reference sequence and matched gene annotation",
+      "benchmark_screening": "Independent public reference release. No CompBioBench fixture or answer is used. Benchmark adaptation and reviewed competency credit remain pending.",
+      "assets": {
+        "dmel-bdgp6.54-r115-chr4.gtf.gz": {
+          "url": "https://ftp.ensembl.org/pub/release-115/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.115.chr.gtf.gz",
+          "download_sha256": "c87b75e6d522033c0912a5ce7742d56b43228a92d3a7316905eff9b94c30087f",
+          "content_sha256": "a612389a278c17168f3d3919b684ba937097de32372803e17cfd8cda45aa2586",
+          "vendored_sha256": "f2864765b60f73fcb6a5c9603874f747701a6895d34fad7ba7077a994f56cc72",
+          "content_bytes": 2731451,
+          "vendored_bytes": 109319,
+          "transformation": "All 9,582 chromosome 4 GTF rows retained in source order by sources/prepare_gene_model.py; other chromosomes omitted. Gzip level 9, mtime 0."
+        },
+        "dmel-bdgp6.54-r115-chr4.fa.gz": {
+          "url": "https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.4.fa.gz",
+          "download_sha256": "78622035d6f3ec532f165b792ba21c8e0dbf4fceac3a8dfd3d5968ae33f4d0da",
+          "content_sha256": "37be8963b84dd00b5faa1b0fa6c9bcd8ae8143609b29978b61b012a4b65510ad",
+          "vendored_sha256": "169f301852323ce31e7f276f9fe0912678d92f5d7fd57612e250e516458ec0c1",
+          "content_bytes": 1370668,
+          "vendored_bytes": 384881,
+          "transformation": "Complete 1,348,131-base chromosome 4 FASTA content unchanged; gzip level 9, mtime 0."
+        },
+        "dmel-bdgp6.54-r115-chr4.fa.fai.gz": {
+          "url": "https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.4.fa.gz",
+          "download_sha256": "78622035d6f3ec532f165b792ba21c8e0dbf4fceac3a8dfd3d5968ae33f4d0da",
+          "content_sha256": "bf6ec88676160bfaad796c6649e452df4fd411abc16991aeb66612988fc6e377",
+          "vendored_sha256": "a9dab9476ae888b9d991fd42d2296f6d1a6b4fcea0e673c3271f49e09be0773f",
+          "content_bytes": 19,
+          "vendored_bytes": 39,
+          "transformation": "FAI generated for the unchanged chromosome 4 FASTA by sources/prepare_gene_model.py; gzip level 9, mtime 0."
+        }
+      },
+      "source_preparation": {
+        "job_id": "/exedev/bio-gene-model-source-20260925-105246",
+        "output_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-gene-model-source-20260925-105246/0/747fe18030ebd4e5/outputs.tar.zst",
+        "output_sha256": "9ad312f782420bebf6dbf68cbcf373b79a3c984babcc6cff708f0b2e4f0a45b2",
+        "worker": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-20",
+        "duration_seconds": 21.58,
+        "retries": 0
+      }
     }
   },
   "excluded_candidate_lineages": [

@@ -407,7 +407,8 @@
         "real-genome-promoters",
         "real-genome-restriction-digest",
         "real-cox1-tree-comparison",
-        "real-heme-pocket-burial"
+        "real-heme-pocket-burial",
+        "real-dmel-gene-model-audit"
       ],
       "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
       "tool_execution": {
@@ -432,6 +433,12 @@
             "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
             "status": "passed: fresh oracle plus four failing controls; cleanup empty"
           }
+        },
+        {
+          "recipe": "real-dmel-gene-model-audit",
+          "evidence": "native_validation_runs/2eab1330bb2d.json",
+          "status": "passed",
+          "limits": "One matched Drosophila chromosome 4 FASTA/GTF release; all 298 protein-coding isoforms, 80 genes and 80 oriented promoters were checked. Exact human/zebrafish/mouse benchmark endpoints and Harbor validation remain unclaimed."
         }
       ]
     },

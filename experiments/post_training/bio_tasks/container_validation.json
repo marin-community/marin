@@ -2267,82 +2267,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "proteome",
-                  "field": "proteins",
-                  "passed": true,
-                  "expected": 4403,
-                  "actual": 4403
-                },
-                {
-                  "id": "proteome",
-                  "field": "clusters",
-                  "passed": true,
-                  "expected": 4184,
-                  "actual": 4184
-                },
-                {
-                  "id": "proteome",
-                  "field": "singletons",
-                  "passed": true,
-                  "expected": 4029,
-                  "actual": 4029
-                },
-                {
-                  "id": "proteome",
-                  "field": "multimember_clusters",
-                  "passed": true,
-                  "expected": 155,
-                  "actual": 155
-                },
-                {
-                  "id": "proteome",
-                  "field": "nonrepresentative_proteins",
-                  "passed": true,
-                  "expected": 219,
-                  "actual": 219
-                },
-                {
-                  "id": "proteome",
-                  "field": "input_residues",
-                  "passed": true,
-                  "expected": 1354442,
-                  "actual": 1354442
-                },
-                {
-                  "id": "proteome",
-                  "field": "representative_residues",
-                  "passed": true,
-                  "expected": 1283177,
-                  "actual": 1283177
-                }
-              ],
-              "artifact_checks": {
-                "representatives.fa": {
-                  "passed": true,
-                  "records": 4184,
-                  "residues": 1283177
-                },
-                "membership.tsv": {
-                  "passed": true,
-                  "rows": 4403,
-                  "missing": [],
-                  "failures": []
-                },
-                "clusters.tsv": {
-                  "passed": true,
-                  "rows": 4184,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "representatives.fa": {
               "passed": true,
@@ -2432,14 +2356,6 @@
           "exception_info": null,
           "failed_summary_checks": null,
           "summary_check_status": "artifact rejected before summary checks",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "fasta_changed_residues",
-              "artifact": "representatives.fa"
-            }
-          },
           "artifact_checks": {
             "representatives.fa": {
               "passed": false,
@@ -2520,14 +2436,6 @@
           "exception_info": null,
           "failed_summary_checks": null,
           "summary_check_status": "artifact rejected before summary checks",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "fasta_missing_records",
-              "artifact": "representatives.fa"
-            }
-          },
           "artifact_checks": {
             "representatives.fa": {
               "passed": false,
@@ -2608,87 +2516,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "proteome",
-                  "field": "proteins",
-                  "passed": true,
-                  "expected": 4403,
-                  "actual": 4403
-                },
-                {
-                  "id": "proteome",
-                  "field": "clusters",
-                  "passed": true,
-                  "expected": 4184,
-                  "actual": 4184
-                },
-                {
-                  "id": "proteome",
-                  "field": "singletons",
-                  "passed": true,
-                  "expected": 4029,
-                  "actual": 4029
-                },
-                {
-                  "id": "proteome",
-                  "field": "multimember_clusters",
-                  "passed": true,
-                  "expected": 155,
-                  "actual": 155
-                },
-                {
-                  "id": "proteome",
-                  "field": "nonrepresentative_proteins",
-                  "passed": true,
-                  "expected": 219,
-                  "actual": 219
-                },
-                {
-                  "id": "proteome",
-                  "field": "input_residues",
-                  "passed": true,
-                  "expected": 1354442,
-                  "actual": 1354442
-                },
-                {
-                  "id": "proteome",
-                  "field": "representative_residues",
-                  "passed": true,
-                  "expected": 1283177,
-                  "actual": 1283177
-                }
-              ],
-              "artifact_checks": {
-                "representatives.fa": {
-                  "passed": true,
-                  "records": 4184,
-                  "residues": 1283177
-                },
-                "membership.tsv": {
-                  "passed": false,
-                  "rows": 4403,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "A0A385XJ53",
-                      "field": "representative"
-                    }
-                  ]
-                },
-                "clusters.tsv": {
-                  "passed": true,
-                  "rows": 4184,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "representatives.fa": {
               "passed": true,
@@ -2875,100 +2702,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "comparison",
-                  "field": "genes_modeled",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "genes_testable",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "interaction_genes",
-                  "passed": true,
-                  "expected": 2679,
-                  "actual": 2679
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only",
-                  "passed": true,
-                  "expected": 3319,
-                  "actual": 3319
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only_without_interaction",
-                  "passed": true,
-                  "expected": 1458,
-                  "actual": 1458
-                },
-                {
-                  "id": "comparison",
-                  "field": "both_same_direction",
-                  "passed": true,
-                  "expected": 601,
-                  "actual": 601
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "design.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "contrast_weights.tsv": {
-                  "passed": true,
-                  "rows": 3,
-                  "missing": [],
-                  "failures": []
-                },
-                "basal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "luminal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "interaction_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_calls.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -3103,105 +2836,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "comparison",
-                  "field": "genes_modeled",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "genes_testable",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "interaction_genes",
-                  "passed": true,
-                  "expected": 2679,
-                  "actual": 2679
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only",
-                  "passed": true,
-                  "expected": 3319,
-                  "actual": 3319
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only_without_interaction",
-                  "passed": true,
-                  "expected": 1458,
-                  "actual": 1458
-                },
-                {
-                  "id": "comparison",
-                  "field": "both_same_direction",
-                  "passed": true,
-                  "expected": 601,
-                  "actual": 601
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "design.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "contrast_weights.tsv": {
-                  "passed": false,
-                  "rows": 3,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "interaction",
-                      "field": "luminal_pregnant"
-                    }
-                  ]
-                },
-                "basal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "luminal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "interaction_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_calls.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -3349,105 +2983,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "comparison",
-                  "field": "genes_modeled",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "genes_testable",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "interaction_genes",
-                  "passed": true,
-                  "expected": 2679,
-                  "actual": 2679
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only",
-                  "passed": true,
-                  "expected": 3319,
-                  "actual": 3319
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only_without_interaction",
-                  "passed": true,
-                  "expected": 1458,
-                  "actual": 1458
-                },
-                {
-                  "id": "comparison",
-                  "field": "both_same_direction",
-                  "passed": true,
-                  "expected": 601,
-                  "actual": 601
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "design.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "contrast_weights.tsv": {
-                  "passed": true,
-                  "rows": 3,
-                  "missing": [],
-                  "failures": []
-                },
-                "basal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "luminal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "interaction_results.tsv": {
-                  "passed": false,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "497097",
-                      "field": "log2_fold_change"
-                    }
-                  ]
-                },
-                "gene_calls.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -3595,105 +3130,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "comparison",
-                  "field": "genes_modeled",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "genes_testable",
-                  "passed": true,
-                  "expected": 18418,
-                  "actual": 18418
-                },
-                {
-                  "id": "comparison",
-                  "field": "interaction_genes",
-                  "passed": true,
-                  "expected": 2679,
-                  "actual": 2679
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only",
-                  "passed": true,
-                  "expected": 3319,
-                  "actual": 3319
-                },
-                {
-                  "id": "comparison",
-                  "field": "one_population_only_without_interaction",
-                  "passed": true,
-                  "expected": 1458,
-                  "actual": 1458
-                },
-                {
-                  "id": "comparison",
-                  "field": "both_same_direction",
-                  "passed": true,
-                  "expected": 601,
-                  "actual": 601
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "design.tsv": {
-                  "passed": true,
-                  "rows": 12,
-                  "missing": [],
-                  "failures": []
-                },
-                "contrast_weights.tsv": {
-                  "passed": true,
-                  "rows": 3,
-                  "missing": [],
-                  "failures": []
-                },
-                "basal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "luminal_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "interaction_results.tsv": {
-                  "passed": true,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_calls.tsv": {
-                  "passed": false,
-                  "rows": 18418,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "497097",
-                      "field": "one_population_only_without_interaction"
-                    }
-                  ]
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -3906,171 +3342,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "assembly",
-                  "field": "read_pairs",
-                  "passed": true,
-                  "expected": 12000,
-                  "actual": 12000
-                },
-                {
-                  "id": "assembly",
-                  "field": "input_bases",
-                  "passed": true,
-                  "expected": 2400000,
-                  "actual": 2400000
-                },
-                {
-                  "id": "assembly",
-                  "field": "contigs",
-                  "passed": true,
-                  "expected": 4,
-                  "actual": 4
-                },
-                {
-                  "id": "assembly",
-                  "field": "assembled_bases",
-                  "passed": true,
-                  "expected": 6364,
-                  "actual": 6364
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_length",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "n50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "l50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "ng50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "lg50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_contigs",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_covered_bases",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_uncovered_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "multiply_covered_reference_bases",
-                  "passed": true,
-                  "expected": 55,
-                  "actual": 55
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_query_bases",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "matches",
-                  "passed": true,
-                  "expected": 5436,
-                  "actual": 5436
-                },
-                {
-                  "id": "assembly",
-                  "field": "substitutions",
-                  "passed": true,
-                  "expected": 5,
-                  "actual": 5
-                },
-                {
-                  "id": "assembly",
-                  "field": "inserted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "deleted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                }
-              ],
-              "artifact_checks": {
-                "contigs.fa": {
-                  "passed": true,
-                  "records": 4,
-                  "residues": 6364
-                },
-                "read_qc.tsv": {
-                  "passed": true,
-                  "rows": 2,
-                  "missing": [],
-                  "failures": []
-                },
-                "contig_metrics.tsv": {
-                  "passed": true,
-                  "rows": 4,
-                  "missing": [],
-                  "failures": []
-                },
-                "alignments.tsv": {
-                  "passed": true,
-                  "rows": 2,
-                  "missing": [],
-                  "failures": []
-                },
-                "reference_coverage.tsv": {
-                  "passed": true,
-                  "rows": 5386,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contigs.fa": {
               "passed": true,
@@ -4184,14 +3455,6 @@
           "exception_info": null,
           "failed_summary_checks": null,
           "summary_check_status": "artifact rejected before summary checks",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "fasta_changed_residues",
-              "artifact": "contigs.fa"
-            }
-          },
           "artifact_checks": {
             "contigs.fa": {
               "passed": false,
@@ -4286,176 +3549,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "assembly",
-                  "field": "read_pairs",
-                  "passed": true,
-                  "expected": 12000,
-                  "actual": 12000
-                },
-                {
-                  "id": "assembly",
-                  "field": "input_bases",
-                  "passed": true,
-                  "expected": 2400000,
-                  "actual": 2400000
-                },
-                {
-                  "id": "assembly",
-                  "field": "contigs",
-                  "passed": true,
-                  "expected": 4,
-                  "actual": 4
-                },
-                {
-                  "id": "assembly",
-                  "field": "assembled_bases",
-                  "passed": true,
-                  "expected": 6364,
-                  "actual": 6364
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_length",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "n50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "l50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "ng50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "lg50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_contigs",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_covered_bases",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_uncovered_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "multiply_covered_reference_bases",
-                  "passed": true,
-                  "expected": 55,
-                  "actual": 55
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_query_bases",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "matches",
-                  "passed": true,
-                  "expected": 5436,
-                  "actual": 5436
-                },
-                {
-                  "id": "assembly",
-                  "field": "substitutions",
-                  "passed": true,
-                  "expected": 5,
-                  "actual": 5
-                },
-                {
-                  "id": "assembly",
-                  "field": "inserted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "deleted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                }
-              ],
-              "artifact_checks": {
-                "contigs.fa": {
-                  "passed": true,
-                  "records": 4,
-                  "residues": 6364
-                },
-                "read_qc.tsv": {
-                  "passed": true,
-                  "rows": 2,
-                  "missing": [],
-                  "failures": []
-                },
-                "contig_metrics.tsv": {
-                  "passed": true,
-                  "rows": 4,
-                  "missing": [],
-                  "failures": []
-                },
-                "alignments.tsv": {
-                  "passed": true,
-                  "rows": 2,
-                  "missing": [],
-                  "failures": []
-                },
-                "reference_coverage.tsv": {
-                  "passed": false,
-                  "rows": 5386,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "NC_001422.1:0",
-                      "field": "contig_depth"
-                    }
-                  ]
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contigs.fa": {
               "passed": true,
@@ -4580,173 +3673,6 @@
           "exception_info": null,
           "failed_summary_checks": [],
           "summary_check_status": "all passed",
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "assembly",
-                  "field": "read_pairs",
-                  "passed": true,
-                  "expected": 12000,
-                  "actual": 12000
-                },
-                {
-                  "id": "assembly",
-                  "field": "input_bases",
-                  "passed": true,
-                  "expected": 2400000,
-                  "actual": 2400000
-                },
-                {
-                  "id": "assembly",
-                  "field": "contigs",
-                  "passed": true,
-                  "expected": 4,
-                  "actual": 4
-                },
-                {
-                  "id": "assembly",
-                  "field": "assembled_bases",
-                  "passed": true,
-                  "expected": 6364,
-                  "actual": 6364
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_length",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "n50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "l50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "ng50",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "lg50",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_contigs",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_covered_bases",
-                  "passed": true,
-                  "expected": 5386,
-                  "actual": 5386
-                },
-                {
-                  "id": "assembly",
-                  "field": "reference_uncovered_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "multiply_covered_reference_bases",
-                  "passed": true,
-                  "expected": 55,
-                  "actual": 55
-                },
-                {
-                  "id": "assembly",
-                  "field": "aligned_query_bases",
-                  "passed": true,
-                  "expected": 5441,
-                  "actual": 5441
-                },
-                {
-                  "id": "assembly",
-                  "field": "matches",
-                  "passed": true,
-                  "expected": 5436,
-                  "actual": 5436
-                },
-                {
-                  "id": "assembly",
-                  "field": "substitutions",
-                  "passed": true,
-                  "expected": 5,
-                  "actual": 5
-                },
-                {
-                  "id": "assembly",
-                  "field": "inserted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                },
-                {
-                  "id": "assembly",
-                  "field": "deleted_bases",
-                  "passed": true,
-                  "expected": 0,
-                  "actual": 0
-                }
-              ],
-              "artifact_checks": {
-                "contigs.fa": {
-                  "passed": true,
-                  "records": 4,
-                  "residues": 6364
-                },
-                "read_qc.tsv": {
-                  "passed": true,
-                  "rows": 2,
-                  "missing": [],
-                  "failures": []
-                },
-                "contig_metrics.tsv": {
-                  "passed": true,
-                  "rows": 4,
-                  "missing": [],
-                  "failures": []
-                },
-                "alignments.tsv": {
-                  "passed": false,
-                  "rows": 1,
-                  "missing": [
-                    "NODE_1_length_5441_cov_184.598032:-:1911:5441:1856:5386"
-                  ],
-                  "failures": []
-                },
-                "reference_coverage.tsv": {
-                  "passed": true,
-                  "rows": 5386,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contigs.fa": {
               "passed": true,
@@ -4913,108 +3839,6 @@
           "reward": 1.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "audit",
-                  "field": "genes_fitted",
-                  "passed": true,
-                  "expected": 16659,
-                  "actual": 16659
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_significant",
-                  "passed": true,
-                  "expected": 9298,
-                  "actual": 9298
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_significant",
-                  "passed": true,
-                  "expected": 8615,
-                  "actual": 8615
-                },
-                {
-                  "id": "audit",
-                  "field": "large_shrunken_effects",
-                  "passed": true,
-                  "expected": 5037,
-                  "actual": 5037
-                },
-                {
-                  "id": "audit",
-                  "field": "changed_effect_threshold",
-                  "passed": true,
-                  "expected": 1586,
-                  "actual": 1586
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_tested_significant_terms",
-                  "passed": true,
-                  "expected": 406,
-                  "actual": 406
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_genome_significant_terms",
-                  "passed": true,
-                  "expected": 3786,
-                  "actual": 3786
-                },
-                {
-                  "id": "audit",
-                  "field": "shared_significant_terms",
-                  "passed": true,
-                  "expected": 381,
-                  "actual": 381
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 6,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_results.tsv": {
-                  "passed": true,
-                  "rows": 16659,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_decisions.tsv": {
-                  "passed": true,
-                  "rows": 27179,
-                  "missing": [],
-                  "failures": []
-                },
-                "annotation_membership.tsv": {
-                  "passed": true,
-                  "rows": 25730,
-                  "missing": [],
-                  "failures": []
-                },
-                "adjusted_tested_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 5898,
-                  "missing": [],
-                  "failures": []
-                },
-                "raw_genome_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 6437,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -5110,189 +3934,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "audit",
-                  "field": "genes_fitted",
-                  "passed": true,
-                  "expected": 16659,
-                  "actual": 16659
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_significant",
-                  "passed": true,
-                  "expected": 9298,
-                  "actual": 9298
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_significant",
-                  "passed": true,
-                  "expected": 8615,
-                  "actual": 8615
-                },
-                {
-                  "id": "audit",
-                  "field": "large_shrunken_effects",
-                  "passed": true,
-                  "expected": 5037,
-                  "actual": 5037
-                },
-                {
-                  "id": "audit",
-                  "field": "changed_effect_threshold",
-                  "passed": true,
-                  "expected": 1586,
-                  "actual": 1586
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_tested_significant_terms",
-                  "passed": true,
-                  "expected": 406,
-                  "actual": 406
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_genome_significant_terms",
-                  "passed": true,
-                  "expected": 3786,
-                  "actual": 3786
-                },
-                {
-                  "id": "audit",
-                  "field": "shared_significant_terms",
-                  "passed": true,
-                  "expected": 381,
-                  "actual": 381
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 6,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_results.tsv": {
-                  "passed": false,
-                  "rows": 16659,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "19888",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "20671",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "27395",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "18777",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "21399",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "58175",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "108664",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "12421",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "319263",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "59014",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "76187",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "72481",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "76982",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "17864",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "70675",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "170755",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "620986",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "73824",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "266793",
-                      "field": "shrunken_log2_fold_change"
-                    },
-                    {
-                      "id": "100038398",
-                      "field": "shrunken_log2_fold_change"
-                    }
-                  ]
-                },
-                "gene_decisions.tsv": {
-                  "passed": true,
-                  "rows": 27179,
-                  "missing": [],
-                  "failures": []
-                },
-                "annotation_membership.tsv": {
-                  "passed": true,
-                  "rows": 25730,
-                  "missing": [],
-                  "failures": []
-                },
-                "adjusted_tested_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 5898,
-                  "missing": [],
-                  "failures": []
-                },
-                "raw_genome_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 6437,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -5476,189 +4117,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "audit",
-                  "field": "genes_fitted",
-                  "passed": true,
-                  "expected": 16659,
-                  "actual": 16659
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_significant",
-                  "passed": true,
-                  "expected": 9298,
-                  "actual": 9298
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_significant",
-                  "passed": true,
-                  "expected": 8615,
-                  "actual": 8615
-                },
-                {
-                  "id": "audit",
-                  "field": "large_shrunken_effects",
-                  "passed": true,
-                  "expected": 5037,
-                  "actual": 5037
-                },
-                {
-                  "id": "audit",
-                  "field": "changed_effect_threshold",
-                  "passed": true,
-                  "expected": 1586,
-                  "actual": 1586
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_tested_significant_terms",
-                  "passed": true,
-                  "expected": 406,
-                  "actual": 406
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_genome_significant_terms",
-                  "passed": true,
-                  "expected": 3786,
-                  "actual": 3786
-                },
-                {
-                  "id": "audit",
-                  "field": "shared_significant_terms",
-                  "passed": true,
-                  "expected": 381,
-                  "actual": 381
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 6,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_results.tsv": {
-                  "passed": true,
-                  "rows": 16659,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_decisions.tsv": {
-                  "passed": true,
-                  "rows": 27179,
-                  "missing": [],
-                  "failures": []
-                },
-                "annotation_membership.tsv": {
-                  "passed": false,
-                  "rows": 25730,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "100009609",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100009614",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100009664",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100012",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100015211",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100033459",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100034661",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100034675",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100034729",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100036518",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100036520",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100036539",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100036573",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100037260",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038349",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038353",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038355",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038394",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038395",
-                      "field": "adjusted_tested_background"
-                    },
-                    {
-                      "id": "100038397",
-                      "field": "adjusted_tested_background"
-                    }
-                  ]
-                },
-                "adjusted_tested_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 5898,
-                  "missing": [],
-                  "failures": []
-                },
-                "raw_genome_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 6437,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -5842,189 +4300,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "audit",
-                  "field": "genes_fitted",
-                  "passed": true,
-                  "expected": 16659,
-                  "actual": 16659
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_significant",
-                  "passed": true,
-                  "expected": 9298,
-                  "actual": 9298
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_significant",
-                  "passed": true,
-                  "expected": 8615,
-                  "actual": 8615
-                },
-                {
-                  "id": "audit",
-                  "field": "large_shrunken_effects",
-                  "passed": true,
-                  "expected": 5037,
-                  "actual": 5037
-                },
-                {
-                  "id": "audit",
-                  "field": "changed_effect_threshold",
-                  "passed": true,
-                  "expected": 1586,
-                  "actual": 1586
-                },
-                {
-                  "id": "audit",
-                  "field": "adjusted_tested_significant_terms",
-                  "passed": true,
-                  "expected": 406,
-                  "actual": 406
-                },
-                {
-                  "id": "audit",
-                  "field": "raw_genome_significant_terms",
-                  "passed": true,
-                  "expected": 3786,
-                  "actual": 3786
-                },
-                {
-                  "id": "audit",
-                  "field": "shared_significant_terms",
-                  "passed": true,
-                  "expected": 381,
-                  "actual": 381
-                }
-              ],
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": true,
-                  "rows": 6,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_results.tsv": {
-                  "passed": true,
-                  "rows": 16659,
-                  "missing": [],
-                  "failures": []
-                },
-                "gene_decisions.tsv": {
-                  "passed": true,
-                  "rows": 27179,
-                  "missing": [],
-                  "failures": []
-                },
-                "annotation_membership.tsv": {
-                  "passed": false,
-                  "rows": 25730,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "100009609",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100009614",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100009664",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100012",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100015211",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100033459",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100034661",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100034675",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100034729",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100036518",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100036520",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100036539",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100036573",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100037260",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038349",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038353",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038355",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038394",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038395",
-                      "field": "raw_genome_background"
-                    },
-                    {
-                      "id": "100038397",
-                      "field": "raw_genome_background"
-                    }
-                  ]
-                },
-                "adjusted_tested_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 5898,
-                  "missing": [],
-                  "failures": []
-                },
-                "raw_genome_enrichment.tsv": {
-                  "passed": true,
-                  "rows": 6437,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": true,
@@ -6213,39 +4488,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "missing_or_nonregular_answer",
-              "artifact_checks": {
-                "sample_qc.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "gene_results.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "gene_decisions.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "annotation_membership.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "adjusted_tested_enrichment.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "raw_genome_enrichment.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "sample_qc.tsv": {
               "passed": false,
@@ -6385,316 +4627,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": false,
-                  "rows": 2295,
-                  "missing": [
-                    "HEM:A:142:.:HEM|protein:A:100:.:LEU"
-                  ],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -6771,314 +4703,6 @@
           "reward": 1.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -7151,319 +4775,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": false,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
-                      "field": "distance"
-                    }
-                  ]
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": false,
@@ -7545,319 +4856,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": false,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "HEM:A:142:.:HEM:C1A",
-                      "field": "sasa_complex"
-                    }
-                  ]
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -7942,27 +4940,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "missing_or_nonregular_answer",
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "residues.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "heme_atoms.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": false,
@@ -8095,314 +5072,6 @@
           "reward": 1.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 1.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -8475,316 +5144,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": false,
-                  "rows": 2295,
-                  "missing": [
-                    "HEM:A:142:.:HEM|protein:A:100:.:LEU"
-                  ],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -8863,319 +5222,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": true,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": []
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": false,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "HEM:A:142:.:HEM:C1A",
-                      "field": "sasa_complex"
-                    }
-                  ]
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": true,
@@ -9257,319 +5303,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "checks": [
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 16,
-                  "actual": 16
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 545.1325645699329,
-                  "actual": 545.132564569933
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 669.5343623214154,
-                  "actual": 669.5343623214154
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1214.6669268913483,
-                  "actual": 1214.6669268913483
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:A:87:.:HIS:NE2",
-                  "actual": "protein:A:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:A:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.1433144892898954,
-                  "actual": 2.1433144892898954
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 72,
-                  "actual": 72
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 503.58012833060405,
-                  "actual": 503.5801283306041
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 609.6157133532811,
-                  "actual": 609.6157133532812
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1113.1958416838852,
-                  "actual": 1113.1958416838852
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:B:92:.:HIS:NE2",
-                  "actual": "protein:B:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:B:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.2219072887949216,
-                  "actual": 2.221907288794921
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 15,
-                  "actual": 15
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 71,
-                  "actual": 71
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 534.8463867744912,
-                  "actual": 534.8463867744912
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 657.2230877215308,
-                  "actual": 657.2230877215309
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1192.069474496022,
-                  "actual": 1192.069474496022
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:C:87:.:HIS:NE2",
-                  "actual": "protein:C:87:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:C:142:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 2.258099422080435,
-                  "actual": 2.258099422080435
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_residues",
-                  "passed": true,
-                  "expected": 574,
-                  "actual": 574
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "pocket_residues",
-                  "passed": true,
-                  "expected": 14,
-                  "actual": 14
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contact_pairs",
-                  "passed": true,
-                  "expected": 76,
-                  "actual": 76
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "contacting_chains",
-                  "passed": true,
-                  "expected": 1,
-                  "actual": 1
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_heavy_atoms",
-                  "passed": true,
-                  "expected": 43,
-                  "actual": 43
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "protein_buried_area",
-                  "passed": true,
-                  "expected": 522.9123088055567,
-                  "actual": 522.9123088055568
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "heme_buried_area",
-                  "passed": true,
-                  "expected": 629.5157262283946,
-                  "actual": 629.5157262283947
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "total_buried_area",
-                  "passed": true,
-                  "expected": 1152.4280350339513,
-                  "actual": 1152.4280350339513
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "nearest_iron_protein_atom",
-                  "passed": true,
-                  "expected": "protein:D:92:.:HIS:NE2",
-                  "actual": "protein:D:92:.:HIS:NE2"
-                },
-                {
-                  "id": "HEM:D:148:.:HEM",
-                  "field": "iron_minimum_distance",
-                  "passed": true,
-                  "expected": 1.9817111293021494,
-                  "actual": 1.9817111293021492
-                }
-              ],
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": false,
-                  "rows": 290,
-                  "missing": [],
-                  "failures": [
-                    {
-                      "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
-                      "field": "distance"
-                    }
-                  ]
-                },
-                "residues.tsv": {
-                  "passed": true,
-                  "rows": 2296,
-                  "missing": [],
-                  "failures": []
-                },
-                "heme_atoms.tsv": {
-                  "passed": true,
-                  "rows": 172,
-                  "missing": [],
-                  "failures": []
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": false,
@@ -9654,27 +5387,6 @@
           "reward": 0.0,
           "passed": true,
           "exception_info": null,
-          "verdict": {
-            "reward": 0.0,
-            "status": "scored",
-            "detail": {
-              "reason": "missing_or_nonregular_answer",
-              "artifact_checks": {
-                "contacts.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "residues.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                },
-                "heme_atoms.tsv": {
-                  "passed": false,
-                  "reason": "missing_or_nonregular_table"
-                }
-              }
-            }
-          },
           "artifact_checks": {
             "contacts.tsv": {
               "passed": false,
@@ -9730,6 +5442,600 @@
         "generation": "1790299618330682",
         "retention": "durable regional authoring"
       }
+    },
+    {
+      "job_id": "/exedev/bio-phix-bam-harbor-20260925-110144",
+      "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009",
+      "source_state": "explicit-hashed-working-tree-overlay",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "validation_role": "canonical-registered-task",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "named oracle with Terminus terminal setup check",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "47fa4c845655a2a2defaa395b8870008383fef2bc6ec0977d0aad0c0d2e02264",
+      "canonical_task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+      "archive": {
+        "state": "temporary Iris archive; durable copy pending explicit approval",
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-phix-bam-harbor-20260925-110144/0/6e687bd8fe8bb322/outputs.tar.zst",
+        "bytes": 19095469,
+        "sha256": "434354194ff02717c76e6ecc9f3acfe85f0df3b16ab90f6483225c3e4021115d",
+        "intended_durable_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/47fa4c845655a2a2defaa395b8870008383fef2bc6ec0977d0aad0c0d2e02264/outputs.tar.zst"
+      },
+      "source_bundle": {
+        "state": "local verified packet; durable copy pending explicit approval",
+        "local_path": "/tmp/bio-bam-harbor-20260925-v4/source.tar.gz",
+        "bytes": 5118272,
+        "sha256": "47fa4c845655a2a2defaa395b8870008383fef2bc6ec0977d0aad0c0d2e02264",
+        "intended_durable_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/47fa4c845655a2a2defaa395b8870008383fef2bc6ec0977d0aad0c0d2e02264/source.tar.gz"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-50c80a11",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a-worker-21",
+        "accelerators_requested": 0,
+        "resources": {
+          "cpu": 1,
+          "memory_gib": 16,
+          "disk_gib": 32,
+          "timeout_seconds": 4800,
+          "automatic_retries": 0,
+          "accelerators": 0
+        }
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-25T11:06:04.498784+00:00",
+        "trials": [
+          "real-phix-bam-read-structure-v1__6sXshQc",
+          "real-phix-bam-read-structure-v1__CaghJGr",
+          "real-phix-bam-read-structure-v1__FwsMVHH",
+          "real-phix-bam-read-structure-v1__ioUeXZ4",
+          "real-phix-bam-read-structure-v1__kWbUUjd"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-25T11:06:05.558551+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-25T11:06:05.601919+00:00"
+      },
+      "summary_identity_check": "All three artifact corruptions retain byte-identical answer.json and pass all 12 summary fields; wrong MAPQ fails its primary-read row, changed BAM with rebuilt index fails BAM content, and corrupt BAI fails BAM index retrieval. Empty output fails all six artifacts.",
+      "source_ledger_validation": {
+        "missing_artifact:primary_reads.tsv": 0.0,
+        "missing_table_row:primary_reads.tsv": 0.0,
+        "duplicate_table_row:primary_reads.tsv": 0.0,
+        "changed_table_value:primary_reads.tsv": 0.0,
+        "missing_artifact:read_lengths.tsv": 0.0,
+        "missing_table_row:read_lengths.tsv": 0.0,
+        "duplicate_table_row:read_lengths.tsv": 0.0,
+        "changed_table_value:read_lengths.tsv": 0.0,
+        "missing_artifact:flag_counts.tsv": 0.0,
+        "missing_table_row:flag_counts.tsv": 0.0,
+        "duplicate_table_row:flag_counts.tsv": 0.0,
+        "changed_table_value:flag_counts.tsv": 0.0,
+        "missing_artifact:eligible_reads.tsv": 0.0,
+        "missing_table_row:eligible_reads.tsv": 0.0,
+        "duplicate_table_row:eligible_reads.tsv": 0.0,
+        "changed_table_value:eligible_reads.tsv": 0.0,
+        "missing_artifact:reads.bam": 0.0,
+        "truncated_artifact:reads.bam": 0.0,
+        "missing_artifact:reads.bam.bai": 0.0,
+        "truncated_artifact:reads.bam.bai": 0.0,
+        "oracle": 1.0,
+        "row_permutation": 1.0,
+        "empty": 0.0,
+        "missing_id": 0.0,
+        "duplicate_id": 0.0,
+        "changed_eligible_count": 0.0,
+        "malformed": 0.0
+      },
+      "cases": [
+        {
+          "task_id": "real-phix-bam-read-structure-v1-20260925-00000",
+          "control": "fresh-native-oracle",
+          "expected_reward": 1,
+          "expected_artifact_failures": [],
+          "task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+          "trial_name": "real-phix-bam-read-structure-v1__6sXshQc",
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "summary_check_count": 12,
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n/opt/bio/bin/bwa\n/opt/bio/bin/samtools\nsamtools 1.24\n0.24.1\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "validated": true,
+            "model_calls": 0
+          },
+          "artifact_sha256": {
+            "answer.json": "8dd5e6c858515cdacf5d9b96f72a90bf35198f6163065c7778778198079dad99",
+            "eligible_reads.tsv": "ccd0219f73feadb20f105ee352c65181e6437a4f337aca8ca068c2cd1758f544",
+            "flag_counts.tsv": "44f326aa181f64053df4fabb8dc3ba3b4dedb6ff3a14ff74977487b0aa1a9642",
+            "manifest.json": "d1a0e83288f824cf3495a9b36851c90733e7781189c7cbf03f9cf72d8a009029",
+            "primary_reads.tsv": "9104dbf15b05fa14ae24c126e333d31b0c333fb5a7e0678cccb33b61705adb19",
+            "read_lengths.tsv": "b584720d0f27e433063f8eabab61287bb826c06fe1953e192aed4d0e667095ea",
+            "reads.bam": "e0870e60e21dcce549a4ab320b425591477622429b2dbecd4104e3b7b5bd6908",
+            "reads.bam.bai": "b334140f51b32719f2487d8a77f7494dc5ee3e4a103356b5f61e809e6633e43e"
+          },
+          "verdict_status": "scored",
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "primary_reads.tsv": {
+              "passed": true,
+              "rows": 24000,
+              "missing": [],
+              "failures": []
+            },
+            "read_lengths.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "flag_counts.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "eligible_reads.tsv": {
+              "passed": true,
+              "rows": 22685,
+              "missing": [],
+              "failures": []
+            },
+            "reads.bam": {
+              "passed": true,
+              "index_passed": true,
+              "records": 24185,
+              "references": 1,
+              "different_record_types": 24185
+            },
+            "reads.bam.bai": {
+              "passed": true
+            }
+          }
+        },
+        {
+          "task_id": "real-phix-bam-read-structure-v1-20260925-00000-wrong-mapq-table",
+          "control": "wrong-mapq-table",
+          "expected_reward": 0,
+          "expected_artifact_failures": [
+            "primary_reads.tsv"
+          ],
+          "task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+          "trial_name": "real-phix-bam-read-structure-v1__ioUeXZ4",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "summary_check_count": 12,
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n/opt/bio/bin/bwa\n/opt/bio/bin/samtools\nsamtools 1.24\n0.24.1\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "validated": true,
+            "model_calls": 0
+          },
+          "artifact_sha256": {
+            "answer.json": "8dd5e6c858515cdacf5d9b96f72a90bf35198f6163065c7778778198079dad99",
+            "eligible_reads.tsv": "ccd0219f73feadb20f105ee352c65181e6437a4f337aca8ca068c2cd1758f544",
+            "flag_counts.tsv": "44f326aa181f64053df4fabb8dc3ba3b4dedb6ff3a14ff74977487b0aa1a9642",
+            "manifest.json": "d1a0e83288f824cf3495a9b36851c90733e7781189c7cbf03f9cf72d8a009029",
+            "primary_reads.tsv": "966e4401e48f810f1d4687a3db8e1a7e702ee1cd9b63825c0ac991dcdb616527",
+            "read_lengths.tsv": "b584720d0f27e433063f8eabab61287bb826c06fe1953e192aed4d0e667095ea",
+            "reads.bam": "1c560114ac4dfa5ea94ab325b239d113fbc4524fd43bac356e736fccd576e17b",
+            "reads.bam.bai": "9114f4c5495515a77ae6a65af39e3b3f301b479f931580984123ca91dcf517bc"
+          },
+          "verdict_status": "scored",
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "primary_reads.tsv": {
+              "passed": false,
+              "rows": 24000,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "ERR266411.100059:1",
+                  "field": "mapq"
+                }
+              ]
+            },
+            "read_lengths.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "flag_counts.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "eligible_reads.tsv": {
+              "passed": true,
+              "rows": 22685,
+              "missing": [],
+              "failures": []
+            },
+            "reads.bam": {
+              "passed": true,
+              "index_passed": true,
+              "records": 24185,
+              "references": 1,
+              "different_record_types": 24185
+            },
+            "reads.bam.bai": {
+              "passed": true
+            }
+          }
+        },
+        {
+          "task_id": "real-phix-bam-read-structure-v1-20260925-00000-changed-bam-rebuilt-index",
+          "control": "changed-bam-rebuilt-index",
+          "expected_reward": 0,
+          "expected_artifact_failures": [
+            "reads.bam"
+          ],
+          "task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+          "trial_name": "real-phix-bam-read-structure-v1__FwsMVHH",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "summary_check_count": 12,
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n/opt/bio/bin/bwa\n/opt/bio/bin/samtools\nsamtools 1.24\n0.24.1\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "validated": true,
+            "model_calls": 0
+          },
+          "artifact_sha256": {
+            "answer.json": "8dd5e6c858515cdacf5d9b96f72a90bf35198f6163065c7778778198079dad99",
+            "eligible_reads.tsv": "ccd0219f73feadb20f105ee352c65181e6437a4f337aca8ca068c2cd1758f544",
+            "flag_counts.tsv": "44f326aa181f64053df4fabb8dc3ba3b4dedb6ff3a14ff74977487b0aa1a9642",
+            "manifest.json": "d1a0e83288f824cf3495a9b36851c90733e7781189c7cbf03f9cf72d8a009029",
+            "primary_reads.tsv": "9104dbf15b05fa14ae24c126e333d31b0c333fb5a7e0678cccb33b61705adb19",
+            "read_lengths.tsv": "b584720d0f27e433063f8eabab61287bb826c06fe1953e192aed4d0e667095ea",
+            "reads.bam": "268bbcfab435e240de186af08099a887e8f0faf42397dcfb3ed483e04d9be461",
+            "reads.bam.bai": "3ca160e6b06336cf70d844415d3e8b8fcf5c0bf6c5fc44826e332515d8f1d242"
+          },
+          "verdict_status": "scored",
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "primary_reads.tsv": {
+              "passed": true,
+              "rows": 24000,
+              "missing": [],
+              "failures": []
+            },
+            "read_lengths.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "flag_counts.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "eligible_reads.tsv": {
+              "passed": true,
+              "rows": 22685,
+              "missing": [],
+              "failures": []
+            },
+            "reads.bam": {
+              "passed": false,
+              "index_passed": true,
+              "records": 24185,
+              "references": 1,
+              "different_record_types": 24185
+            },
+            "reads.bam.bai": {
+              "passed": true
+            }
+          }
+        },
+        {
+          "task_id": "real-phix-bam-read-structure-v1-20260925-00000-corrupt-index",
+          "control": "corrupt-index",
+          "expected_reward": 0,
+          "expected_artifact_failures": [
+            "reads.bam",
+            "reads.bam.bai"
+          ],
+          "task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+          "trial_name": "real-phix-bam-read-structure-v1__kWbUUjd",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "summary_check_count": 12,
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n/opt/bio/bin/bwa\n/opt/bio/bin/samtools\nsamtools 1.24\n0.24.1\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "validated": true,
+            "model_calls": 0
+          },
+          "artifact_sha256": {
+            "answer.json": "8dd5e6c858515cdacf5d9b96f72a90bf35198f6163065c7778778198079dad99",
+            "eligible_reads.tsv": "ccd0219f73feadb20f105ee352c65181e6437a4f337aca8ca068c2cd1758f544",
+            "flag_counts.tsv": "44f326aa181f64053df4fabb8dc3ba3b4dedb6ff3a14ff74977487b0aa1a9642",
+            "manifest.json": "d1a0e83288f824cf3495a9b36851c90733e7781189c7cbf03f9cf72d8a009029",
+            "primary_reads.tsv": "9104dbf15b05fa14ae24c126e333d31b0c333fb5a7e0678cccb33b61705adb19",
+            "read_lengths.tsv": "b584720d0f27e433063f8eabab61287bb826c06fe1953e192aed4d0e667095ea",
+            "reads.bam": "1c560114ac4dfa5ea94ab325b239d113fbc4524fd43bac356e736fccd576e17b",
+            "reads.bam.bai": "5f4c0594110c2d2c4fd9d3d0d15050c08b722e678b2cbf4cb5f76ba919050160"
+          },
+          "verdict_status": "scored",
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "primary_reads.tsv": {
+              "passed": true,
+              "rows": 24000,
+              "missing": [],
+              "failures": []
+            },
+            "read_lengths.tsv": {
+              "passed": true,
+              "rows": 2,
+              "missing": [],
+              "failures": []
+            },
+            "flag_counts.tsv": {
+              "passed": true,
+              "rows": 12,
+              "missing": [],
+              "failures": []
+            },
+            "eligible_reads.tsv": {
+              "passed": true,
+              "rows": 22685,
+              "missing": [],
+              "failures": []
+            },
+            "reads.bam": {
+              "passed": false,
+              "index_passed": false,
+              "reason": "bam_index_unreadable"
+            },
+            "reads.bam.bai": {
+              "passed": false
+            }
+          }
+        },
+        {
+          "task_id": "real-phix-bam-read-structure-v1-20260925-00000-empty-output",
+          "control": "empty-output",
+          "expected_reward": 0,
+          "expected_artifact_failures": [
+            "eligible_reads.tsv",
+            "flag_counts.tsv",
+            "primary_reads.tsv",
+            "read_lengths.tsv",
+            "reads.bam",
+            "reads.bam.bai"
+          ],
+          "expected_summary_reason": "missing_or_nonregular_answer",
+          "task_sha256": "97d5a8eba98aa8992104cda5b10da990c74098e33e9004eae27333644283c0f4",
+          "trial_name": "real-phix-bam-read-structure-v1__CaghJGr",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "summary_check_count": 0,
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n/opt/bio/bin/bwa\n/opt/bio/bin/samtools\nsamtools 1.24\n0.24.1\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "validated": true,
+            "model_calls": 0
+          },
+          "artifact_sha256": {
+            "manifest.json": "352cb98ead120d93c7ade5e798dc39d48b710b6f1db4abb3d13d3ee78d6638f4"
+          },
+          "verdict_status": "scored",
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "primary_reads.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "read_lengths.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "flag_counts.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "eligible_reads.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "reads.bam": {
+              "passed": false,
+              "index_passed": false,
+              "reason": "bam_or_index_missing_or_nonregular"
+            },
+            "reads.bam.bai": {
+              "passed": false
+            }
+          }
+        }
+      ],
+      "limitations": "One unchanged observed PhiX technical subset shares a biological lineage with the assembly task; it is not biological replication. Native linear-reference alignment does not rescue circular-origin pairs. Benchmark endpoint mapping and competency credit remain pending review. Durable source and Harbor evidence copies await explicit approval."
+    },
+    {
+      "job_id": "/exedev/bio-singlecell-harbor-20260925-110038",
+      "source_revision": "2fd5ba234b269d73a79cb8b2901340fcd9dd3277",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "passed",
+      "validation_role": "canonical-registered-task",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "fresh private native oracle with terminal setup check",
+      "agent_and_verifier_backend": "Daytona",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 2,
+      "negative_cases": 5,
+      "discriminating_negative_cases": 4,
+      "source_bundle_sha256": "b987ed1dca7f3133557c6d4c02ea3334801b3a6ed6ffc21ffdde03b7e6f86334",
+      "supplemental_public_source_sha256": {
+        "experiments/post_training/bio_tasks/repository_coverage.json": "acd56b5650808665dda771132969d3f156e1768836521fd8a5b1854fd4c2b0e7"
+      },
+      "reference_contract_sha256": "4d325e4792056d714addb6a9cde09ddd309eb885f28eccdc302cdfde2f91469d",
+      "reference_oracle_archive_sha256": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+      "canonical_task_id": "real-singlecell-representation-audit-v1-20260925-00000",
+      "canonical_task_sha256": "6d923f20eadabb4459510ed56887a32fdbf36a4669e64df609e0989db0169a29",
+      "instruction_sha256": "d65d17dfe87db160795c59f188ae073b59a52722993d828a317ac7049648ad70",
+      "task_toml_sha256": "9bbcd07d67df068dd7cd15b23cbaecf58b375c130b00f4400ab3a7533087526d",
+      "canonical_task_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/6d923f20eadabb4459510ed56887a32fdbf36a4669e64df609e0989db0169a29/harbor/train/real-singlecell-representation-audit-v1-20260925-00000",
+      "private_oracle_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/6d923f20eadabb4459510ed56887a32fdbf36a4669e64df609e0989db0169a29/oracles/real-singlecell-representation-audit-v1-20260925-00000",
+      "canonical_corpus_files": 13,
+      "canonical_corpus_bytes": 127014707,
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-singlecell-harbor-20260925-110038/0/8ab9959fa4871097/outputs.tar.zst",
+        "bytes": 612784732,
+        "md5_base64": "HOLhkoQMgbhM8dzKgTJkyg==",
+        "retention": "temporary 7-day Iris output; canonical task and oracle are durable"
+      },
+      "evidence": {
+        "job_id": "/exedev/bio-singlecell-harbor-evidence-20260925-111809",
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-singlecell-harbor-evidence-20260925-111809/0/ad7b26e910d33a9e/outputs.tar.zst",
+        "bytes": 23950,
+        "evidence_json_sha256": "02d3053f2d9eff61aa265a796d156c77483adbe0270ad1c36899a79089278748"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-f2cbfd93",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff",
+        "worker_preflight": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-0"
+      },
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 24,
+        "timeout_seconds": 7200,
+        "harbor_timeout_seconds": 5400,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "cleanup": {
+        "trials": 7,
+        "actions": 0,
+        "remaining": 0
+      },
+      "summary_identity_check": "Every artifact-only control preserved the passing five-field summary; empty output omitted it. Paired PCA sign changes were accepted; a one-sided change failed the affected artifacts.",
+      "cases": [
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000",
+          "control": "fresh-native-oracle",
+          "expected_reward": 1,
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-original-depth-denominator",
+          "control": "original_depth_denominator",
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "normalized.h5ad"
+          ],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-double-log",
+          "control": "double_log",
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "normalized.h5ad"
+          ],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-hvg-boundary",
+          "control": "hvg_boundary",
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "gene_hvg.tsv"
+          ],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-one-sided-pca-sign",
+          "control": "one_sided_pca_sign",
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "diagnostics.tsv",
+            "pca_scores.tsv"
+          ],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-paired-pca-sign",
+          "control": "paired_pca_sign",
+          "expected_reward": 1,
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 5,
+          "summary_checks_total": 5
+        },
+        {
+          "task_id": "real-singlecell-representation-audit-v1-20260925-00000-empty-output",
+          "control": "empty-output",
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "cell_depth.tsv",
+            "diagnostics.tsv",
+            "gene_hvg.tsv",
+            "normalized.h5ad",
+            "pca_loadings.tsv",
+            "pca_scores.tsv",
+            "pca_variance.tsv"
+          ],
+          "summary_checks_passed": 0,
+          "summary_checks_total": 0
+        }
+      ],
+      "limitations": "One observed GSE81682 lineage and one frozen instance. This validates the declared read-count representation workflow, not all single-cell benchmark endpoints or human performance."
     }
   ]
 }

@@ -58,7 +58,8 @@ def solve_bam(inputs: Path, output: Path) -> list[dict]:
     if mate_names[0] != mate_names[1] or len(mate_names[0]) != query["expected_pairs"]:
         raise ValueError("FASTQ mates or declared pair count differ")
     reference = output / "reference.fa"
-    shutil.copyfile(inputs / "reference.fa", reference)
+    if inputs != output:
+        shutil.copyfile(inputs / "reference.fa", reference)
     execute(["bwa", "index", str(reference)], output, "bwa-index.stdout")
     sam = execute(
         [

@@ -99,14 +99,14 @@ Downloads, stars, and citations remain available in the unchanged
 | # | Repository | Implemented scientific operations | Actual CLI/API execution |
 |---:|---|---|---|
 | 1 | [BLAST+](https://github.com/ncbi/ncbi-cxx-toolkit-public/blob/cf49184dc38476b1c9f605c38f47758a96e72d6b/src/algo/blast/unit_tests/api/bl2seq_unit_test.cpp) | `dna-unique-mapping`, `protein-local-search` | 3 reference checks passed (`dna-unique-mapping`) |
-| 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
-| 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping`, `real-phix-bam-read-structure` | 3 reference checks passed (`dna-unique-mapping`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
+| 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle, seven corruption controls, and registered Harbor package passed |
+| 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping`, `real-phix-bam-read-structure` | 3 reference checks passed (`dna-unique-mapping`); observed BAM native oracle, seven corruption controls, and registered Harbor package passed |
 | 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast`, `real-rnaseq-differential-expression`, `real-rnaseq-go-enrichment`, `real-rnaseq-population-interaction`, `real-rnaseq-shrinkage-enrichment-audit` | 3 size-factor, 6 fitted-model/enrichment and 1 population-interaction checks passed; 1 fresh shrinkage/enrichment task oracle passed; Harbor passed |
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | 3 reference checks passed (`dna-unique-mapping`) |
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
-| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle and seven corruption controls passed; Harbor pending |
+| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion`, `real-phix-bam-read-structure` | 3 reference checks passed (`sam-cigar-coverage`); observed BAM native oracle, seven corruption controls, and registered Harbor package passed |
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment`, `real-cox1-tree-comparison` | 3 reference checks passed (`real-protein-alignment`) |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction`, `real-proteome-domain-search` | 1 observed proteome reference and artifact check passed |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
@@ -564,8 +564,10 @@ are solver-check runtimes, not teacher latency measurements.
 The 34 real-data candidates use unchanged biological observations or declared observed subsets:
 
 The observed BAM read-structure candidate grades every record and its coordinate
-index; seven corrupted-output controls fail native checks, and Harbor validation
-is pending. The 4HHB heme-pocket workflow grades 290 atom contacts, 2,296
+index; seven corrupted-output controls fail native checks. Its registered Harbor
+task passed one fresh oracle and four negative controls with a separate verifier;
+durable evidence preservation awaits approval. The 4HHB heme-pocket workflow
+grades 290 atom contacts, 2,296
 residue/HEM rows and 172 HEM atoms, including solvent exposure. Its native
 reference passed two positive and nineteen negative controls. The registered
 Harbor package passed one fresh oracle and four failing controls with a separate
