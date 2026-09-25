@@ -19,7 +19,12 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
-from taskcompendium.lowering import RENDERING_FILE, SPECIFICATION_FILE, read_rendering, read_specification
+from taskcompendium.lowering import (
+    SPECIFICATION_FILE,
+    SUBMISSION_CONVENTION_FILE,
+    read_specification,
+    read_submission_convention,
+)
 
 RESPONSE_FILE = "response.txt"
 AGENT_LOGS_PATH = "/logs/agent"
@@ -157,10 +162,10 @@ class SemanticVerifier(BaseVerifier):
         try:
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
-            rendering = read_rendering(root / RENDERING_FILE)
+            convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_answer(specification, rendering, response)
+            result = grade_answer(specification, convention, response)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)

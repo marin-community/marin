@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from taskcompendium.models import ExactAnswer, TaskSpec
-from taskcompendium.rendering import Rendering, extract_answer
+from taskcompendium.submission import SubmissionConvention, extract_answer
 
 
 class Outcome(StrEnum):
@@ -28,10 +28,10 @@ def _normalize_answer(value: str, contract: ExactAnswer) -> str:
     return normalized.casefold() if contract.ignore_case else normalized
 
 
-def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
+def grade_answer(specification: TaskSpec, convention: SubmissionConvention, response: str | None) -> GradeResult:
     """Extract and score a response while distinguishing invalid submissions from verifier failures."""
     try:
-        candidate = extract_answer(response, rendering)
+        candidate = extract_answer(response, convention)
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
     matches = _normalize_answer(candidate, specification.verifier) == _normalize_answer(

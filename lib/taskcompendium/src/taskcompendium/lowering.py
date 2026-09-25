@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export a direct-chat TaskSpec rendering as a Harbor task package."""
+"""Export a direct-chat TaskSpec submission as a Harbor task package."""
 
 import hashlib
 from collections.abc import Sequence
@@ -12,11 +12,11 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import TaskSpec
-from taskcompendium.rendering import Rendering, render_instruction
+from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
-RENDERING_FILE = "rendering.json"
+SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 BINDING_FILE = "binding.json"
 
 
@@ -37,9 +37,9 @@ class HarborTaskBinding(BaseModel):
 
 @dataclass(frozen=True)
 class LoweringCandidate:
-    """A compatible rendering and Harbor environment binding."""
+    """A compatible submission convention and Harbor environment binding."""
 
-    rendering: Rendering
+    convention: SubmissionConvention
     binding: HarborTaskBinding
 
 
@@ -53,16 +53,16 @@ class SelectionPolicy(StrEnum):
 
 def compatible_lowerings(
     specification: TaskSpec,
-    rendering_library: Sequence[Rendering],
+    convention_library: Sequence[SubmissionConvention],
     bindings: Sequence[HarborTaskBinding],
 ) -> tuple[LoweringCandidate, ...]:
-    """Enumerate renderings and bindings that preserve this task's contract."""
+    """Enumerate conventions and bindings that preserve this task's contract."""
     if specification.requirements.capabilities or specification.requirements.action_interfaces:
         return ()
     return tuple(
-        LoweringCandidate(rendering, binding)
-        for rendering in rendering_library
-        if rendering.answer_format in specification.permitted_answer_formats
+        LoweringCandidate(convention, binding)
+        for convention in convention_library
+        if submission_compatible(specification, convention)
         for binding in bindings
     )
 
@@ -106,24 +106,24 @@ def read_binding(path: Path) -> HarborTaskBinding:
     return HarborTaskBinding.model_validate_json(path.read_text())
 
 
-def read_rendering(path: Path) -> Rendering:
-    return Rendering.model_validate_json(path.read_text())
+def read_submission_convention(path: Path) -> SubmissionConvention:
+    return SubmissionConvention.model_validate_json(path.read_text())
 
 
 def lower_to_harbor(
     specification: TaskSpec,
-    rendering: Rendering,
+    convention: SubmissionConvention,
     binding: HarborTaskBinding,
     destination: Path,
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_binding(specification, binding)
-    instruction = render_instruction(specification, rendering)
+    instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
     (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")
     (destination / BINDING_FILE).write_text(binding.model_dump_json(indent=2) + "\n")
-    (destination / RENDERING_FILE).write_text(rendering.model_dump_json(indent=2) + "\n")
+    (destination / SUBMISSION_CONVENTION_FILE).write_text(convention.model_dump_json(indent=2) + "\n")
     return destination
