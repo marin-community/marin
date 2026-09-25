@@ -174,6 +174,7 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     job = workflow["jobs"]["review"]
 
     assert set(trigger) == {"pull_request_target"}
+    assert trigger["pull_request_target"]["types"] == ["opened", "ready_for_review", "reopened"]
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
     checkout, author, launch = job["steps"]
     assert checkout["uses"].startswith("actions/checkout@")
