@@ -117,7 +117,7 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
 
 
 def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
-    """Generate conversations on the relay's east-region Iris cluster."""
+    """Build generation steps for submission on the relay's east-region cluster."""
     return curriculum_generation_steps(CURRICULUM_IDS, version=version, generation=GENERATION)
 
 
