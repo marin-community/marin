@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded synthetic hero pipeline trial; no checkpoints or production state."""
+"""Bounded synthetic Hero pipeline trial with optional checkpoint save and resume."""
 
 import argparse
 import dataclasses
@@ -33,6 +33,7 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import _compute_flops
 from experiments.grug.moe_hero_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
+    _HOST_MEMORY_KIND,
     BATCH_AXES,
     TRAIN_LOSS_KEY,
     AutomaticPipelineSchedule,
@@ -48,6 +49,7 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 )
 
 _MULTIHOST_TIMEOUT = 600
+_MP_POLICY = "params=bfloat16,compute=bfloat16,output=bfloat16"
 
 
 def _log(event: str, **fields) -> None:
@@ -287,7 +289,7 @@ def main() -> None:
     batch_size = args.batch_size if args.batch_size is not None else batch_multiple
     if batch_size < 1 or batch_size % batch_multiple:
         raise ValueError(f"batch-size must be a positive multiple of {batch_multiple}")
-    policy = jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16")
+    policy = jmp.get_policy(_MP_POLICY)
     flops_per_example, _ = _compute_flops(model_config=model_config)
     peak_flops = device_flops("h100")
     assert peak_flops is not None
@@ -309,7 +311,7 @@ def main() -> None:
         }
     checkpoint_contract = {
         "model": dataclasses.asdict(model_config),
-        "mp_policy": "params=bfloat16,compute=bfloat16,output=bfloat16",
+        "mp_policy": _MP_POLICY,
         "optimizer": optimizer_contract,
         "training_steps": args.steps,
     }
@@ -343,8 +345,8 @@ def main() -> None:
     )
     _log("pipeline_initialized", elapsed_seconds=time.monotonic() - started)
     if args.offload_opt_state:
-        assert all(value.sharding.memory_kind == "pinned_host" for value in jax.tree.leaves(state.opt_state))
-        _log("optimizer_state_offloaded", memory_kind="pinned_host")
+        assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
+        _log("optimizer_state_offloaded", memory_kind=_HOST_MEMORY_KIND)
     tokens = np.random.default_rng(args.seed).integers(
         model_config.vocab_size, size=(batch_size, model_config.max_seq_len), dtype=np.int32
     )
@@ -380,7 +382,7 @@ def main() -> None:
             args.checkpoint_root, state, compiled_step.in_shardings[0][0], contract=checkpoint_contract
         )
         if args.offload_opt_state:
-            assert all(value.sharding.memory_kind == "pinned_host" for value in jax.tree.leaves(state.opt_state))
+            assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
         _log("pipeline_checkpoint_restored", step=start_step, checkpoint_root=args.checkpoint_root)
     # The compiled function takes state as an argument; no real arrays are
     # donated to disposable warmup. Delete old aliases before parking buffers.
@@ -408,7 +410,7 @@ def main() -> None:
         if args.synchronize_devices_after_step:
             _synchronize_local_cuda_devices(completed_steps)
         if args.offload_opt_state:
-            assert all(value.sharding.memory_kind == "pinned_host" for value in jax.tree.leaves(state.opt_state))
+            assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
         elapsed = time.monotonic() - started
         loss = _global_loss(metrics[TRAIN_LOSS_KEY])
         mfu_percent = 100 * batch_size * flops_per_example / (elapsed * jax.device_count() * peak_flops)

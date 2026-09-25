@@ -7,17 +7,18 @@ import json
 from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
 import optax
-from jax.sharding import NamedSharding
-from jax.sharding import PartitionSpec as P
 from jaxtyping import PyTree
 from levanter import mpmd_checkpoint
 from levanter.checkpoint import discover_checkpoint_candidates
 from levanter.checkpoint import save_checkpoint as save_levanter_checkpoint
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_pipeline.pipeline import GrugMoeAutomaticPipelineState, GrugMoePipelineStage
+from experiments.grug.moe_hero_pipeline.pipeline import (
+    GrugMoeAutomaticPipelineState,
+    GrugMoePipelineStage,
+    split_pipeline_stage,
+)
 
 
 @jax.tree_util.register_dataclass
@@ -46,57 +47,6 @@ def _merge_stages(stages: tuple[GrugMoePipelineStage, ...]) -> GrugMoePipelineSt
     )
 
 
-def _split_stage(stage: GrugMoePipelineStage, layer_counts: tuple[int, ...]) -> tuple[GrugMoePipelineStage, ...]:
-    result = []
-    start = 0
-    for index, count in enumerate(layer_counts):
-        end = start + count
-        result.append(
-            GrugMoePipelineStage(
-                token_embed=stage.token_embed if index == 0 else None,
-                embed_norm=stage.embed_norm if index == 0 else None,
-                embed_gated_norm=stage.embed_gated_norm if index == 0 else None,
-                output_proj=stage.output_proj if index == len(layer_counts) - 1 else None,
-                blocks=stage.blocks[start:end],
-                final_norm=stage.final_norm if index == len(layer_counts) - 1 else None,
-                final_gated_norm=stage.final_gated_norm if index == len(layer_counts) - 1 else None,
-                config=stage.config,
-                start_layer=start,
-                end_layer=end,
-            )
-        )
-        start = end
-    if start != len(stage.blocks):
-        raise ValueError(f"destination stages cover {start} of {len(stage.blocks)} Hero layers")
-    return tuple(result)
-
-
-def _unstack_pending(value: jax.Array) -> tuple[jax.Array, ...]:
-    spec = (*value.sharding.spec, None, None)
-    assert spec[0] is None
-    sharding = NamedSharding(value.sharding.mesh, P(spec[1]))
-    return tuple(
-        jax.make_array_from_single_device_arrays(
-            value.shape[1:], sharding, [shard.data[index] for shard in value.addressable_shards], dtype=value.dtype
-        )
-        for index in range(value.shape[0])
-    )
-
-
-def _stack_pending(values: tuple[jax.Array, ...], sharding: NamedSharding) -> jax.Array:
-    buffers = [{shard.device: shard.data for shard in value.addressable_shards} for value in values]
-    return jax.make_array_from_single_device_arrays(
-        (len(values), *values[0].shape),
-        sharding,
-        [
-            jnp.stack([buffer[device] for buffer in buffers])
-            for device in sharding.mesh.devices.flat
-            if device in buffers[0]
-        ],
-        dtype=values[0].dtype,
-    )
-
-
 def checkpoint_state(state: GrugMoeAutomaticPipelineState) -> HeroPipelineCheckpointState:
     """Expose stage-local parameters, optimizer state, and router updates by layer."""
     arrays = mpmd_checkpoint.checkpoint_arrays(state)
@@ -108,7 +58,9 @@ def checkpoint_state(state: GrugMoeAutomaticPipelineState) -> HeroPipelineCheckp
     return HeroPipelineCheckpointState(
         params=_merge_stages(arrays.trainable_params),
         opt_state=optimizer,
-        pending_qb_betas=tuple(beta for stage in arrays.pending_qb_betas for beta in _unstack_pending(stage)),
+        pending_qb_betas=tuple(
+            beta for stage in arrays.pending_qb_betas for beta in mpmd_checkpoint.unstack_checkpoint_layers(stage)
+        ),
     )
 
 
@@ -116,11 +68,13 @@ def _pipeline_state(
     canonical: HeroPipelineCheckpointState, exemplar: GrugMoeAutomaticPipelineState
 ) -> GrugMoeAutomaticPipelineState:
     layer_counts = tuple(len(stage.blocks) for stage in exemplar.trainable_params)
-    params = _split_stage(canonical.params, layer_counts)
+    params = split_pipeline_stage(canonical.params, len(layer_counts), layer_counts=layer_counts)
     optimizer = tuple(
         jax.tree.map(
             lambda value, index=index: (
-                _split_stage(value, layer_counts)[index] if isinstance(value, GrugMoePipelineStage) else value
+                split_pipeline_stage(value, len(layer_counts), layer_counts=layer_counts)[index]
+                if isinstance(value, GrugMoePipelineStage)
+                else value
             ),
             canonical.opt_state,
             is_leaf=lambda value: isinstance(value, GrugMoePipelineStage),
@@ -128,7 +82,9 @@ def _pipeline_state(
         for index in range(len(layer_counts))
     )
     pending = tuple(
-        _stack_pending(canonical.pending_qb_betas[stage.start_layer : stage.end_layer], target.sharding)
+        mpmd_checkpoint.stack_checkpoint_layers(
+            canonical.pending_qb_betas[stage.start_layer : stage.end_layer], target.sharding
+        )
         for stage, target in zip(params, exemplar.pending_qb_betas, strict=True)
     )
     return GrugMoeAutomaticPipelineState(params, optimizer, pending)
