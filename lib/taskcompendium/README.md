@@ -12,7 +12,7 @@ The current implementation is a small direct-chat slice. It accepts a final text
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer or a JSON object.
 - **Environment bindings** describe the capabilities and tools exposed during execution. The only binding in this slice is direct chat with no tools.
 - **Lowering tools** find compatible convention and binding pairs, select a pair, and export a runnable Harbor task package.
-- **A Harbor adapter** runs the exported task with a replay agent or an OpenAI-compatible chat endpoint and records a grading result.
+- **A Harbor adapter** runs the exported task with a replay agent or an OpenAI-compatible chat endpoint and records a grading result. Harbor acts as the harness: it orchestrates the model and environment after lowering.
 
 ```mermaid
 flowchart LR
@@ -22,7 +22,7 @@ flowchart LR
     C --> P[Select a lowering]
     P --> H[Export Harbor task package]
     H --> T[Harbor trial]
-    L[Launch: agent and model] --> T
+    L[Harbor harness: agent and model] --> T
     T --> G[Private verifier and result]
 ```
 
@@ -37,17 +37,16 @@ flowchart LR
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
-| `permitted_submission_conventions` | Optional list of convention IDs allowed by source-specific output rules. Omit it when any compatible convention is valid. |
 | `verifier` | Private grading data. In this slice, `ExactAnswer` holds the expected answer and text-normalization rules. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
-For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. A task whose original instructions require an exact output shape can restrict the allowed conventions. The verifier and expected answer are never added to the model-visible instruction.
+For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
 
 ## What is a lowering?
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with an environment binding, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the binding says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` also applies any source-specific convention restriction and checks the environment requirements. The direct-chat binding accepts only tasks with no required capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and binding sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat binding accepts only tasks with no required capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and binding sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 ```python
 from pathlib import Path
@@ -83,7 +82,7 @@ lower_to_harbor(spec, chosen.convention, chosen.binding, Path("/tmp/arithmetic-t
 
 `lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `binding.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. The agent receives the instruction but has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
 
-`run_trial` takes the exported directory, its binding, and a launch choice. A replay launch supplies a fixed response without calling a model. It exercises Harbor's agent and verifier path:
+`run_trial` takes the exported directory, its binding, and a launch choice. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. A replay launch supplies a fixed response without calling a model. It exercises Harbor's agent and verifier path:
 
 ```python
 import asyncio

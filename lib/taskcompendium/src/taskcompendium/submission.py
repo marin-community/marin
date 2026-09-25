@@ -47,19 +47,10 @@ def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, obj
     return result
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
-    return convention.supports(specification.answer_type) and (
-        specification.permitted_submission_conventions is None
-        or convention.id in specification.permitted_submission_conventions
-    )
-
-
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return the public request with its submission instructions attached."""
-    if not submission_compatible(specification, convention):
-        if not convention.supports(specification.answer_type):
-            raise ValueError(f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r}")
-        raise ValueError(f"Task {specification.id!r} does not permit submission convention {convention.id!r}")
+    if not convention.supports(specification.answer_type):
+        raise ValueError(f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r}")
     if convention.answer_format == AnswerFormat.PLAIN:
         suffix = "Give your answer as plain text."
     elif convention.answer_format == AnswerFormat.JSON:

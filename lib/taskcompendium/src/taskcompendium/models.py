@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-SCHEMA_VERSION = "0.3"
+SCHEMA_VERSION = "0.4"
 
 
 class AnswerType(StrEnum):
@@ -78,7 +78,6 @@ class TaskSpec(BaseModel):
     source: Source
     requirements: TaskRequirements
     answer_type: AnswerType
-    permitted_submission_conventions: tuple[str, ...] | None = None
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -87,9 +86,4 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
             raise ValueError("A task id and instructions are required")
-        if self.permitted_submission_conventions is not None:
-            if not self.permitted_submission_conventions:
-                raise ValueError("At least one submission convention must be permitted")
-            if len(set(self.permitted_submission_conventions)) != len(self.permitted_submission_conventions):
-                raise ValueError("Permitted submission conventions must be unique")
         return self
