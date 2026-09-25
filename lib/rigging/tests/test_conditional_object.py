@@ -70,6 +70,18 @@ def test_s3_conditional_object_sends_the_etag_precondition(monkeypatch):
     client.put_object.assert_called_once_with(Bucket="bucket", Key="HEAD", Body=b"two", IfMatch='"v1"')
 
 
+def test_s3_conditional_object_uses_virtual_host_addressing_without_endpoint(monkeypatch):
+    session = MagicMock()
+    monkeypatch.setattr("rigging.filesystem.conditional_object.botocore.session.get_session", lambda: session)
+    S3ConditionalObject._client.cache_clear()
+
+    S3ConditionalObject._client(None)
+
+    config = session.create_client.call_args.kwargs["config"]
+    assert config.s3 == {"addressing_style": "virtual"}
+    S3ConditionalObject._client.cache_clear()
+
+
 def test_s3_conditional_object_requires_absence_for_creation(monkeypatch):
     client = MagicMock()
     client.put_object.return_value = {"ETag": '"v1"'}
