@@ -72,7 +72,11 @@ def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
 
 
 def task_item_count(metrics: Mapping[str, float]) -> int | None:
-    """The graded-item count a task's metric dict reports, or None when it reports none."""
+    """The graded-item count a task's metric dict reports, or None when it reports none.
+
+    A reported count that is not a whole number is not an item count, so a fractional
+    value also reads as None rather than being truncated.
+    """
     for key in (SAMPLE_COUNT_METRIC, *TOTAL_METRICS):
         value = metrics.get(key)
         if value is not None:

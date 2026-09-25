@@ -881,7 +881,7 @@ def _add_lm_eval_rows(
     task_name: str | None = None,
     coverage: _TaskCoverageAccumulator | None = None,
 ) -> int:
-    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the samples added.
+    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the sample count added.
 
     Physical LF bytes delimit records, so the payload is parsed one line at a time and never fully
     decoded into a row list. Literal U+2028/U+2029 characters remain inside JSON strings.
