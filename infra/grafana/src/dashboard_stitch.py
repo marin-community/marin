@@ -8,17 +8,19 @@ body: ``{"id": N, "gridPos": {...}, "panelRef": "<fragment-name>"}``. Every othe
 field of the rendered panel — type, title, description, datasource, fieldConfig,
 options, targets — comes from ``panels/<fragment-name>.json``, the single source of
 truth for a panel shared across dashboards. ``id`` and ``gridPos`` stay
-dashboard-local: they are the only two things that legitimately vary by placement. A marker
-may also carry ``"vars": {"name": "value"}``, which replaces ``${name}`` throughout the mounted
-copy, so a fragment written for another board's variables can read this board's.
+dashboard-local. A marker may also carry ``"vars": {"name": "value"}``, which replaces
+``${name}`` in the mounted copy, so a fragment written for another board's variables reads
+this board's.
 
 This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end —
 no Grafana library-panel API, no runtime sync, no new credential — while killing
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
-``SHARED_LINKS`` for the same reason. A bridge dataset target written as
-``{"refId", "targetRef", "url", "view", "format", "columns"}`` gets the Infinity
-boilerplate and the query parameters that ``targetRef`` names, then ``view``.
+``SHARED_LINKS`` for the same reason.
+
+A bridge target can be written as ``{"refId", "targetRef", "url", "view", "format",
+"columns"}``. The stitcher adds the Infinity fields and the query parameters of the
+``targetRef`` set, ending with ``view``.
 """
 
 import argparse

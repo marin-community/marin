@@ -329,18 +329,12 @@ the telemetry environment, what a run id should look like, and which training lo
 its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
 `docs/grafana-rl-runs.md`.
 
-RL Post-training (sync) and its two drill-downs read datasets built in `src/rl_observability.py`.
-`/v1/rl/overview` holds `core`, `engine`, `gpu` and `spans`. The generation board reads
-`/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its vLLM
-panels, the run's `/v1/vllm/overview` result, which carries vLLM detail only for windows of 7
-hours or less. The train-step board reads `/v1/rl/train-step` (`spans`, `counters` and `gpu`).
-The overview's `spans` source keeps one row per bucket and phase, so a long window on a fast run
-does not grow it. The drill-downs' span and counter sources keep one row per step and phase.
-Finelog reduces each step's worker spans to its slowest rank, the rank with the longest
-`policy_ppo_train`, and to a per-bucket spread across ranks, so no source grows with the rank
-count. Each is capped at 50,000 rows, and one source past its cap fails its whole dataset with a
-400. At 500 steps across 64 ranks the largest, `driver`, holds 11,000 and the overview's `spans`
-holds 1,405.
+RL Post-training (sync) and its drill-downs read datasets built in `src/rl_observability.py`:
+`/v1/rl/overview` (`core`, `engine`, `gpu`, `spans`), `/v1/rl/generation` (`driver`) and
+`/v1/rl/train-step` (`spans`, `counters`, `gpu`). Finelog reduces worker spans to each step's
+slowest rank and a per-bucket spread across ranks, so no source grows with the rank count, and the
+overview's `spans` source keeps one row per bucket. The generation board's vLLM row mounts
+Inference diagnostics panels with their `identity` variable set to the run.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
@@ -941,6 +935,15 @@ body:
 ```json
 { "id": 4, "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 }, "panelRef": "control_plane_components" }
 ```
+
+A stitch marker can also carry `"vars"`, which replaces each `${name}` in its copy of
+the fragment. The sync RL generation board mounts Inference diagnostics fragments with
+`"vars": {"identity_kind": "run_id", "identity": "${run}", "identity_override": ""}`.
+
+A bridge target can name a shared set of query parameters, which the stitch step
+expands into the full Infinity query: `{"refId": "A", "targetRef": "rl_run",
+"url": "/v1/rl/overview", "view": "spans", "format": "table", "columns": [...]}`.
+The sets are `_SHARED_TARGET_PARAMS` in `src/dashboard_stitch.py`.
 
 `src/dashboard_stitch.py` resolves every `panelRef` marker into its fragment body
 at image build time (Dockerfile), the same way the `marin-infra-panel` build above

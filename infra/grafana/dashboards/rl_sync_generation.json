@@ -1,7 +1,7 @@
 {
   "uid": "marin-rl-sync-generation",
   "title": "RL Post-training (sync): generation",
-  "description": "Drill-down of RL Post-training (sync) into `generate`. The top rows read the driver's `generate` spans and rollout wait counters. The vLLM panels read the run's vLLM engines and need a time range of 7 hours or less.",
+  "description": "Drill-down of RL Post-training (sync) into `generate`. The top rows read the driver's `generate` spans and rollout wait counters. The vLLM row mounts Inference diagnostics panels for this run. Those panels need a time range of 7 hours or less.",
   "tags": [
     "marin",
     "rl",
@@ -202,7 +202,7 @@
       "id": 303,
       "type": "timeseries",
       "title": "Per-trajectory wait: rollout_engine_await and rollout_env_await",
-      "description": "`_seconds_sum` ÷ `rollout_trajectory_count` for `rollout_engine_await` and `rollout_env_await`, and `rollout_engine_await_seconds_max`. The sums overlap across coroutines, so never stack them. `rollout_engine_await` is the caller's wait on the inference client. For callers that pass text, it includes chat templating on the driver thread.",
+      "description": "`_seconds_sum` ÷ `rollout_trajectory_count` for `rollout_engine_await` and `rollout_env_await`, and `rollout_engine_await_seconds_max`. The sums overlap across coroutines, so the series do not stack. `rollout_engine_await` is the caller's wait on the inference client. For callers that pass text, it includes chat templating on the driver thread.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

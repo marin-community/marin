@@ -1,18 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sync RL boards' panels, read through the bridge from the rows MarinSkyRL actually publishes.
+"""The sync RL boards' panels, driven through the bridge over the rows MarinSkyRL publishes.
 
-The fixture is built from the emitting code rather than from the panels: driver spans carry
-``clock_domain='inclusive_wall'`` and no rank, worker spans carry a rank and one of two clock
-domains, and the two ranks are constructed so that a per-phase maximum across them would exceed
-the parent it is supposed to decompose. That is the mistake these panels exist to avoid, so it is
-the one the fixture makes available.
-
-``WorkerTimingSink._clock_domain`` composes the worker domain from the containment and the
-synchronise mode: ``exclusive_wall`` with ``trainer.policy_train_spans_synchronize``, and
-``exclusive_launch`` without it. Both are fixtured, because a panel that names only one renders
-empty on every run made the other way and reads exactly like a producer that stopped publishing.
+Driver spans carry ``clock_domain='inclusive_wall'`` and no rank. Worker spans carry a rank and a
+clock domain ending in ``_wall`` with ``trainer.policy_train_spans_synchronize`` and ``_launch``
+without it; both are fixtured. The two ranks are built so that a per-phase maximum across them
+exceeds the parent it decomposes.
 """
 
 import json
@@ -58,19 +52,16 @@ DRIVER_PHASES = {
     "policy_train": 3805.6,
     "sync_weights": 12.6,
 }
-# train_critic_and_policy contains policy_train, so its own band is the Ray dispatch around it and
-# never the 3806 s it wraps.
+# train_critic_and_policy contains policy_train, so its own band is the Ray dispatch around it.
 CONTAINER_SECONDS = 3806.0
 
-# The generate subtree, in the proportions the pr488 run measured: the fan-out is essentially the
-# whole phase and generate's own exclusive time is the published residual. Two levels deep, because
-# one level would not catch a query that bands a child beside the parent that contains it.
+# The generate subtree, two levels deep so that a child banded beside its parent is caught.
+# generate's own exclusive time is the residual the driver publishes.
 GENERATE_CHILDREN = {"rollout_collect": 156.4, "rollout_assemble": 0.1, "rollout_finalize": 4.6}
 GENERATE_GRANDCHILDREN = {"rollout_tokenize": ("rollout_collect", 0.2), "rollout_retain": ("rollout_finalize", 4.5)}
 GENERATE_RESIDUAL = DRIVER_PHASES["generate"] - sum(GENERATE_CHILDREN.values())
 
-# step's own exclusive time. The old panel lumped this together with train_critic_and_policy's, and
-# the two are different costs: one is the driver's step loop, the other is the Ray round trip.
+# step's own exclusive time: the driver loop outside every phase.
 UNATTRIBUTED = (
     STEP_SECONDS
     - DRIVER_PHASES["generate"]
@@ -79,9 +70,9 @@ UNATTRIBUTED = (
 )
 DISPATCH_SECONDS = CONTAINER_SECONDS - DRIVER_PHASES["policy_train"]
 
-# Two ranks whose barrier and compute time are anti-correlated. Rank 1 is r*: it arrives last, so
-# it waits ~0 at the entry barrier and then does the full compute. Taking a per-phase maximum over
-# the pair would report 2705 s inside a 2000 s parent. Rank 1's spans overlap, so they sum past its
+# Two ranks whose barrier and compute times are anti-correlated. Rank 1 is the slowest: it arrives
+# last, waits ~0 at the entry barrier, and does the full compute. A per-phase maximum over the pair
+# would report 2705 s inside a 2000 s parent. Rank 1's spans overlap, so they sum past its
 # policy_ppo_train and the residual it publishes is negative.
 WORKER_SPANS = {
     "0": {
@@ -108,16 +99,14 @@ CRITICAL_RANK = "1"
 BARRIER_SPANS = ("policy_entry_barrier", "policy_final_barrier", "policy_metric_allreduce", "policy_entropy_allreduce")
 
 EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
-# The run restarts from a checkpoint and repeats RETRIED_STEP inside the same bucket, with the two
-# ranks' roles swapped so that rank 0 is the slowest, and every worker span RETRY_SCALE times longer.
-# Each attempt's step is its own, so that bucket's worker panels average the two attempts'
-# decompositions. Keying a step by its number alone picks one slowest rank and one parent for both
-# attempts, and decomposes one of them on its fast rank.
+# The run restarts from a checkpoint and repeats RETRIED_STEP in the same bucket, with the ranks'
+# roles swapped and every worker span RETRY_SCALE times longer. A step keyed by number alone would
+# give both attempts one slowest rank and one parent.
 RETRY_EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:1"
 RETRIED_STEP = 2
 RETRY_SCALE = 1.1
-# Each process publishes one terminal event: the trainer, and a worker per rank. Both attempts' workers
-# fail the same way, so a table keyed by role, status and reason would merge the two attempts.
+# One terminal event per process: the trainer, and a worker per rank. Both attempts' workers fail
+# the same way.
 TERMINAL_EVENTS = (
     (EXECUTION, "trainer", "failed", "ActorDiedError", (0,)),
     (EXECUTION, "worker", "failed", "ActorDiedError", (12, 5)),
@@ -131,9 +120,8 @@ QUEUED_AT_EXIT = 3
 CONTAINED_SPANS = ("policy_forward", "policy_backward", "policy_optimizer_step", "policy_entropy_allreduce")
 PUBLISHED_RESIDUAL = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
 
-# policy_span_publish is the cost of shipping the PREVIOUS step's rows. It is measured after
-# policy_ppo_train's wall is taken and declares a parent outside it, so it is a worker span that
-# does not belong in this decomposition however exclusive its clock domain looks.
+# policy_span_publish ships the previous step's rows. Its parent is train_critic_and_policy, so it
+# stays out of the decomposition although its clock domain is exclusive.
 SPAN_PUBLISH_SECONDS = 3.0
 
 WORKER_COUNTERS = {
@@ -151,15 +139,13 @@ WORKER_COUNTERS = {
     },
 }
 
-# The critical-path twins the driver publishes beside the tree, carrying an outcome and no place in
-# it: train_step == train_critic_and_policy and rollout_or_inference_wait == generate. One step ends
-# in a failure, because a failed step renders exactly like a fast one.
+# The driver also publishes train_step and rollout_or_inference_wait on the critical_path clock, with
+# an outcome. One step fails, because a failed step renders like a fast one.
 CRITICAL_PATH = {"train_step": CONTAINER_SECONDS, "rollout_or_inference_wait": DRIVER_PHASES["generate"]}
 FAILED_BUCKET = 4
 
-# The driver's rollout counters, at the magnitudes the pr488 run measured. The engine-await total is
-# a CONCURRENT SUM over 512 coroutines and is five times the whole step; a panel that plots it raw is
-# the failure the per-trajectory division exists to prevent.
+# The driver's rollout counters at measured magnitudes. The engine-await sum is over 512 concurrent
+# coroutines and is five times the step.
 TRAJECTORIES = 512.0
 ENGINE_AWAIT_SUM = 23655.9
 ENGINE_AWAIT_MAX = 126.6
@@ -177,8 +163,7 @@ ROLLOUT_COUNTERS = {
     "rollout_env_resume_seconds_sum": ENV_SPLIT["resume"],
 }
 
-# Torch's own memory, per rank. Rank 1 holds most and is the one that binds the micro-batch, and it
-# is the only rank whose allocator had to retry.
+# Torch allocator counters per rank. Rank 1 holds the most memory and is the only rank that retried.
 WORKER_MEMORY = {
     "0": {"peak_allocated_bytes": 61.0 * 1024**3, "peak_reserved_bytes": 71.0 * 1024**3},
     "1": {"peak_allocated_bytes": 63.0 * 1024**3, "peak_reserved_bytes": 74.0 * 1024**3},
@@ -424,9 +409,8 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
             gauges["gpu_pcie_replay_errors"] = 3.0
             identity = {"gpu_uuid": f"GPU-{node}-{gpu}", "gpu_index": gpu}
             series = [(name, value, identity) for name, value in gauges.items()]
-            # One cumulative NVLink series per error kind, as the node agent publishes them. Every
-            # GPU holds one flat at a nonzero count and one flat at zero, which is no new fault.
-            # One GPU is degraded and keeps counting, and another's counter was reset.
+            # One cumulative NVLink series per error kind. A flat series, zero or not, is no new fault.
+            # One GPU keeps counting, and another's counter resets.
             nvlink = {"crc_flit": 100.0, "crc_data": 0.0, "replay": 0.0, "recovery": 0.0}
             if (node, gpu) == DEGRADED_GPU:
                 nvlink["replay"] = NVLINK_ERRORS_PER_BUCKET * seq
@@ -624,10 +608,6 @@ _TEMPLATE = {
 }
 
 
-def _dataset(url: str):
-    return _DATASETS[url]((CLUSTER,), RUN_ID, _millis(WINDOW_START), _millis(NOW), BUCKET_MS)
-
-
 def _params(target: dict) -> dict[str, str]:
     """The target's query parameters, with Grafana's macros resolved to this window."""
     params = {}
@@ -697,25 +677,20 @@ def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
     rows = _panel_rows(store, "Step composition: exclusive seconds per span")
 
     bands = {series: seconds for _, series, seconds in rows}
-    # Every phase gets a band, and it is the wall it did not spend inside a child. A parent banded
-    # at its own wall would double-count: train_critic_and_policy would put 3806 s beside the
-    # 3805.6 s of policy_train it contains, in a 4210 s step.
+    # A phase's band is its wall minus its children's. Banded at its own wall, train_critic_and_policy
+    # would put 3806 s beside the 3805.6 s of policy_train it contains.
     assert bands["train_critic_and_policy"] == pytest.approx(DISPATCH_SECONDS)
     assert bands["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
     assert bands["step"] == pytest.approx(UNATTRIBUTED)
     assert sum(bands.values()) == pytest.approx(STEP_SECONDS)
 
 
-def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside_it(store) -> None:
-    """The tree grew a level under generate after this panel shipped, and a hardcoded exclusion
-    list could not see it: rollout_collect alone is 97% of generate, so banding both put 162% of
-    the phase on the stack with nothing to say so."""
+def test_the_generate_subtree_is_subtracted_from_generate(store) -> None:
     bands = {
         series: seconds for _, series, seconds in _panel_rows(store, "Step composition: exclusive seconds per span")
     }
 
-    # generate's own band is the orchestration it does outside its children, which is what the
-    # producer publishes as generate_span_residual.
+    # generate's own band equals the residual the driver publishes.
     assert bands["generate"] == pytest.approx(GENERATE_RESIDUAL)
     assert bands["rollout_collect"] == pytest.approx(
         GENERATE_CHILDREN["rollout_collect"] - GENERATE_GRANDCHILDREN["rollout_tokenize"][1]
@@ -727,7 +702,7 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
 
 
 @BOTH_CLOCKS
-def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
+def test_the_decomposition_reads_the_slowest_rank(store) -> None:
     # A NULL policy_ppo_train on the fast rank. Finelog sorts NULLs first under DESC, so without
     # NULLS LAST this row would make rank 0 the slowest.
     store.execute(
@@ -752,7 +727,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     # A per-phase maximum over the two ranks would sum to 2705 s inside a 2000 s span, because the
     # barrier and the compute come from different ranks.
     per_phase_max = sum(max(WORKER_SPANS["0"][phase], WORKER_SPANS["1"][phase]) for phase in WORKER_SPANS["0"])
-    assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "the fixture no longer separates r* from a per-phase maximum"
+    assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "per-phase maximum no longer exceeds the parent"
 
 
 @BOTH_CLOCKS
@@ -784,13 +759,8 @@ def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
     assert waiting == [(t, pytest.approx(barriers / PPO_TRAIN[CRITICAL_RANK])) for t in BUCKET_TIMES]
 
 
-def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(store) -> None:
-    """A rank that published no barrier span waited for an unknown time, never for none.
-
-    This is the half-landed state the board has to survive: the worker sink ships, and the barrier
-    spans arrive later or not at all. Coalescing the missing sum to zero renders 0% on a percentunit
-    axis, which a reader takes as a measurement of the collectives rather than as their absence.
-    """
+def test_the_waiting_share_is_null_without_barrier_spans(store) -> None:
+    """A step without barrier spans has an unknown wait. Coalescing it to 0 would plot 0%."""
     store.execute(
         f"""DELETE FROM "telemetry_v1.marinskyrl"
             WHERE json_get(attributes_json, 'phase') IN ({", ".join("?" for _ in BARRIER_SPANS)})""",
@@ -803,11 +773,11 @@ def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(
     assert {value for _, value in waiting} == {None}, f"a missing barrier span read as a share: {waiting}"
 
 
-def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store) -> None:
+def test_padding_averages_the_per_rank_fractions(store) -> None:
     rows = _panel_rows(store, "Padding fraction and attention_work_ratio")
 
-    # Averaging the per-rank fractions (0.25 and 0.20) is unaffected by how the batch is sharded;
-    # a ratio of summed tokens would not be.
+    # The mean of 0.25 and 0.20, which does not depend on how the batch is sharded the way a ratio of
+    # summed tokens would.
     expected_padding = sum(
         1.0 - counters["rank_tokens_real"] / counters["rank_tokens_padded"] for counters in WORKER_COUNTERS.values()
     ) / len(WORKER_COUNTERS)
@@ -831,8 +801,7 @@ def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) ->
 
 
 def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panels(store) -> None:
-    # The DCGM rows carry no run identity, so an identity regression in the producer reads as an
-    # idle fleet rather than as a broken join.
+    # DCGM rows carry no run identity, so without node_name on the run's rows the join finds nothing.
     store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
 
     assert _panel_rows(store, "SM and tensor-pipe activity on this run's nodes") == []
@@ -888,9 +857,7 @@ def test_the_generation_board_shows_the_inference_panels_for_the_run(store) -> N
 
 
 def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
-    """An empty panel and a broken producer render identically, and half of these panels are empty
-    on a run made by a build that predates their series. That distinction belongs on the panel face,
-    not behind a description hover."""
+    """An empty panel and a broken producer look the same, so each panel says what empty means."""
     boards = _rl_dashboards()
     span_panels_on_rl_runs = [panel for panel in boards["rl_runs.json"]["panels"] if panel["id"] in (12, 20, 21, 23)]
     for panel in [
@@ -902,8 +869,6 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
 
 
 def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
-    """Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone
-    misleads. The ratio has to divide the max by the per-trajectory mean, not by the raw sum."""
     rows = _panel_rows(store, "rollout_engine_await: slowest trajectory ÷ mean")
 
     expected = ENGINE_AWAIT_MAX / (ENGINE_AWAIT_SUM / TRAJECTORIES)
@@ -956,17 +921,16 @@ def test_the_residual_panel_reports_both_trees_signed(store) -> None:
 
     assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
 
-    assert PUBLISHED_RESIDUAL < 0, "the fixture no longer reproduces the double-count"
-    # Signed, and read from r*. Clamping it at zero would retire the one series that can report a
-    # child being counted inside its parent.
+    assert PUBLISHED_RESIDUAL < 0, "the fixture no longer has overlapping spans"
+    # Signed, from the slowest rank. A negative residual is the only sign of overlapping spans.
     assert worker == [(t, pytest.approx(PUBLISHED_RESIDUAL * BUCKET_SCALE[t])) for t in BUCKET_TIMES]
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
     rows = _panel_rows(store, "generate: share of each child span")
 
-    # The grandchildren belong to their own parents' walls, not to generate's, and the shares sum
-    # to one in the retried step's bucket too.
+    # Grandchildren count against their own parents. The shares sum to one in the retried step's
+    # bucket too.
     expected = {child: seconds / DRIVER_PHASES["generate"] for child, seconds in GENERATE_CHILDREN.items()}
     expected["generate_span_residual"] = GENERATE_RESIDUAL / DRIVER_PHASES["generate"]
     assert sum(expected.values()) == pytest.approx(1.0)
@@ -974,9 +938,9 @@ def test_the_generate_shares_partition_the_phase(store) -> None:
     assert shares == pytest.approx({(t, band): share for t in BUCKET_TIMES for band, share in expected.items()})
 
 
-def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_the_subtree(store) -> None:
-    """156 of the 167 runs in finelog measure generate as one wall. Reporting 100% generate_span_residual
-    for those would read as a defect in generate rather than as an absent instrument."""
+def test_the_generate_shares_are_empty_without_the_subtree(store) -> None:
+    """Most runs measure generate as one span. A 100% generate_span_residual band would look like a
+    defect in generate."""
     store.execute(
         """DELETE FROM "telemetry_v1.marinskyrl"
            WHERE json_extract_string(attributes_json, '$.parent') = 'generate'"""
@@ -1008,7 +972,7 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
     rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
 
-    # The binding constraint on the micro-batch is the rank that used most, never the mean.
+    # The peaks are the largest rank's. Retries and OOMs sum over ranks.
     retries = sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values())
     expected = [
         (

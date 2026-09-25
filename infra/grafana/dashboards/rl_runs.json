@@ -940,7 +940,7 @@
       "id": 23,
       "type": "timeseries",
       "title": "Signed span residuals: generate and policy_ppo_train",
-      "description": "`generate_span_residual` from the driver and `policy_span_residual` on the slowest rank. Positive is ordinary. Negative means a child is counted twice. Never clamped.",
+      "description": "`generate_span_residual` from the driver and `policy_span_residual` on the slowest rank, unclamped. Negative means child spans overlap.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

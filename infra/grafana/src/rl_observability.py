@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded datasets behind the synchronous RL post-training dashboard and its two drill-downs.
+"""Bounded datasets for the sync RL board and its generation and train-step drill-downs.
 
-The overview's span source holds one row per bucket and phase; the drill-downs' span sources hold
-one row per step and phase. Finelog reduces each step's worker spans to the step's slowest rank,
-the rank with the longest ``policy_ppo_train``, and to a per-bucket spread across ranks.
-
-A step is keyed by ``(execution_uid, step)``: a run restarted from a checkpoint repeats step
-numbers, and each attempt's repeat is its own step. A bucket averages or sums over every step in
-it, whichever attempt ran it.
+A step is keyed by ``(execution_uid, step)`` because a run restarted from a checkpoint repeats step
+numbers.
 """
 
 from dashboard_dataset import (
@@ -51,8 +46,6 @@ _BARRIER_PHASES = (
     "('policy_entry_barrier', 'policy_final_barrier', 'policy_metric_allreduce', 'policy_entropy_allreduce')"
 )
 _ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
-# DCGM gauges plotted per bucket, and a per-device gauge and cumulative fault counters summarised
-# over the window.
 _DCGM_SERIES = (
     "gpu_sm_active_ratio",
     "gpu_tensor_active_ratio",
@@ -137,11 +130,9 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
 )"""
 
 
-# Worker spans tagged with their step's slowest rank r*: the rank whose policy_ppo_train ran
-# longest, with ties going to the rank id that sorts first. parent_seconds is the step's longest
-# policy_ppo_train. covered_seconds sums the exclusive spans each rank published under
-# policy_ppo_train, except the producer's own residual. NULLS LAST because Finelog's DataFusion sorts
-# NULLs first under DESC, where DuckDB sorts them last.
+# Tags each worker span with its step's slowest rank: the longest policy_ppo_train, with ties going
+# to the rank id that sorts first as a string. NULLS LAST because DataFusion sorts NULLs first under
+# DESC.
 def _critical_rank_cte(phases: tuple[str, ...] = ()) -> str:
     only = f" AND phase IN ({sql_values(phases)})" if phases else ""
     return f"""tagged AS (
@@ -440,8 +431,8 @@ GROUP BY 1, 2 ORDER BY 1
             "SELECT execution_uid, role, status, reason, lost_records, queued_records "
             "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2, 3"
         ),
-        # A phase's band is its wall minus its children's walls in the same bucket, so the bands
-        # close on the step at any depth; the step's own band is what no phase accounts for.
+        # Each band is a phase's wall minus its children's walls, so the bands sum to the step. The
+        # step's own band is the time no phase covers.
         "step_composition": (
             """
 WITH driver AS (
@@ -516,8 +507,8 @@ GROUP BY t, execution_uid, step, name, phase, parent, counter
 ORDER BY t, execution_uid, step, name
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
-    # The rollout counters are sums over concurrent coroutines and exceed the step itself, so
-    # every view divides them before plotting.
+    # The rollout wait counters sum over concurrent coroutines and can exceed the step, so every
+    # view divides them.
     setup_sql = (
         f"""
 CREATE VIEW rollout_steps AS
@@ -625,9 +616,6 @@ GROUP BY t, execution_uid, step, phase, clock_domain
 ORDER BY statistic, t, execution_uid, step
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
-    # Each counter is first reduced to its per-rank maximum within a step, as the worker publishes
-    # one value per rank. Padding averages the per-rank fractions; the worker branch keeps the
-    # rank sum and rank maximum of every counter.
     counters_sql = f"""
 WITH samples AS (
     SELECT {bucket} AS t,
@@ -675,9 +663,8 @@ LIMIT {RL_MAX_COUNTER_ROWS + 1}
 """.strip()
     dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
-    # The node agent publishes one cumulative series per error_kind of a GPU's NVLink errors, so a
-    # counter is differenced within its own series before a GPU's series are summed. A counter
-    # that fell was reset, and everything it holds since then is new.
+    # NVLink errors are one cumulative series per error_kind. Difference each series, then sum per
+    # GPU. A drop is a reset, so the new value counts in full.
     gpu_sql = f"""
 WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
@@ -739,8 +726,8 @@ GROUP BY 1, 2, 3
 """.strip(),
     )
     views = {
-        # Every band is read from r*'s own rows. A per-phase maximum across ranks takes barrier and
-        # compute from different ranks, which are anti-correlated, and sums past the parent.
+        # Every band comes from the slowest rank's own rows. A per-phase maximum across ranks mixes
+        # ranks and sums past the parent.
         "ppo_decomposition": (
             f"""
 WITH banded AS (
@@ -783,8 +770,8 @@ GROUP BY 1 ORDER BY 1
             "SELECT t, AVG(backward_seconds / NULLIF(forward_seconds, 0)) AS backward_over_forward "
             "FROM critical_steps GROUP BY 1 ORDER BY 1"
         ),
-        # A rank that published no barrier span waited for an unknown time, so the share stays
-        # NULL. Zero would read as a measurement that it never waited.
+        # A step without barrier spans has an unknown wait, so its share is NULL. Coalescing to 0
+        # would plot a wait of zero.
         "waiting_share": (
             "SELECT t, AVG(waiting_seconds / NULLIF(total_seconds, 0)) AS waiting_share "
             "FROM critical_steps GROUP BY 1 ORDER BY 1"
@@ -821,7 +808,6 @@ FROM counters WHERE statistic = 'worker' GROUP BY 1 ORDER BY 1
             "ELSE 'PCIe receive' END AS series, total_value AS value FROM gpu WHERE statistic = 'series' "
             "AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') ORDER BY 1"
         ),
-        # Only a GPU whose fault counters rose appears; an empty table is the healthy result.
         "link_faults": (
             f"""
 SELECT node, gpu,
