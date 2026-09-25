@@ -37,6 +37,7 @@ from rl_observability import (
 )
 from server import create_app
 from starlette.testclient import TestClient
+from vllm_observability import VLLM_SCRAPE_INTERVAL_MS
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -194,16 +195,14 @@ WORKER_MEMORY = {
 }
 WORKER_ALLOCATOR = {"0": {"alloc_retries": 0.0, "alloc_ooms": 0.0}, "1": {"alloc_retries": 5.0, "alloc_ooms": 0.0}}
 
-# A cumulative Prometheus histogram: counts are cumulative in `le`, so +Inf carries the total.
-GENERATION_TOKEN_BUCKETS = {"64": 10.0, "256": 50.0, "1024": 90.0, "4096": 99.0, "+Inf": 100.0}
-LATENCY_BUCKETS = {"0.5": 20.0, "2": 60.0, "8": 95.0, "32": 99.0, "+Inf": 100.0}
-# Each histogram's mean observation, so its `_sum` grows in step with its `_count`.
-TOKEN_MEAN = 700.0
-LATENCY_MEAN = 1.5
+# vLLM, per engine and per bucket. Two engines, one publishing under each namespace.
 ENGINES = ("0", "1")
-# Per engine. The reasons partition the queue, as inference_observability computes it.
+GENERATED_TOKENS = 30_000.0
+PROMPT_TOKENS = 12_000.0
+FINISHED_REQUESTS = 100.0
+TIME_PER_OUTPUT_TOKEN = 0.02
+RUNNING = 48.0
 QUEUE_DEPTH = 6.0
-WAITING_BY_REASON = {"capacity": 4.0, "deferred": 2.0}
 KV_CACHE_USAGE = 0.42
 
 GPU_UTILIZATION = 97.0
@@ -464,53 +463,39 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
 
 
 def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
-    """The engine registry as inference_observability publishes it, split across the two
-    namespaces a run's metrics can land in: histograms with their count and sum, gauges as
-    current snapshots stamped with the step."""
+    """The engine registry as inference_observability publishes it: cumulative counters and
+    histograms, and gauges as current snapshots."""
     rows = []
-    histograms = {
-        "request_generation_tokens": (GENERATION_TOKEN_BUCKETS, TOKEN_MEAN),
-        "iteration_tokens_total": (GENERATION_TOKEN_BUCKETS, TOKEN_MEAN),
-        "time_to_first_token_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-        "inter_token_latency_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-        "request_queue_time_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-        "request_prefill_time_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-        "request_decode_time_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-        "e2e_request_latency_seconds": (LATENCY_BUCKETS, LATENCY_MEAN),
-    }
     for engine in ENGINES:
-        # Engine 0 is forwarded by the MarinSkyRL process under its own service name, as the
-        # first instrumented run's engine rows actually were; engine 1 publishes its own
-        # registry as service='vllm'. The panels have to read both.
-        engine_service = "marinskyrl" if engine == "0" else "vllm"
+        # Engine 0 is forwarded by the MarinSkyRL process under its own service name; engine 1
+        # publishes its own registry as service='vllm'.
         identity = {"metric_source": "vllm", "engine": engine, "engine_index": engine}
         cumulative = {**identity, "source_temporality": "cumulative_snapshot"}
-        current = {**identity, "source_temporality": "current_snapshot", "step": str(seq)}
-
-        def add(name: str, value: float, attributes: dict[str, str], service: str = engine_service) -> None:
-            rows.append(
-                _row(
-                    service=service,
-                    name=name,
-                    value=value,
-                    moment=moment,
-                    seq=seq,
-                    node_name=NODES[1],
-                    role="inference",
-                    attributes=attributes,
-                )
+        current = {**identity, "source_temporality": "current_snapshot"}
+        finished = FINISHED_REQUESTS * seq
+        samples = [
+            ("generation_tokens_total", GENERATED_TOKENS * seq, cumulative),
+            ("prompt_tokens_total", PROMPT_TOKENS * seq, cumulative),
+            ("request_time_per_output_token_seconds_count", finished, cumulative),
+            ("request_time_per_output_token_seconds_sum", finished * TIME_PER_OUTPUT_TOKEN, cumulative),
+            ("request_time_per_output_token_seconds_bucket", finished, {**cumulative, "le": "+Inf"}),
+            ("num_requests_running", RUNNING, current),
+            ("num_requests_waiting", QUEUE_DEPTH, current),
+            ("kv_cache_usage_perc", KV_CACHE_USAGE, current),
+        ]
+        rows += [
+            _row(
+                service="marinskyrl" if engine == "0" else "vllm",
+                name=name,
+                value=value,
+                moment=moment,
+                seq=seq,
+                node_name=NODES[1],
+                role="inference",
+                attributes=attributes,
             )
-
-        for family, (buckets, mean) in histograms.items():
-            for upper_bound, count in buckets.items():
-                add(f"{family}_bucket", count * (seq + 1), {**cumulative, "le": upper_bound})
-            requests = buckets["+Inf"] * (seq + 1)
-            add(f"{family}_count", requests, cumulative)
-            add(f"{family}_sum", requests * mean, cumulative)
-        add("num_requests_waiting", QUEUE_DEPTH, current)
-        add("kv_cache_usage_perc", KV_CACHE_USAGE, current)
-        for reason, value in WAITING_BY_REASON.items():
-            add("num_requests_waiting_by_reason", value, {**current, "reason": reason})
+            for name, value, attributes in samples
+        ]
     return rows
 
 
@@ -948,50 +933,42 @@ def test_the_fault_table_differences_the_counters_and_hides_healthy_gpus(store) 
     ]
 
 
-def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(store) -> None:
-    rows = _panel_rows(store, "vLLM generated tokens per request")
+def test_the_generation_board_shows_the_inference_panels_for_the_run(store) -> None:
+    """The vLLM row mounts the Inference diagnostics fragments with their identity bound to the run."""
+    panels = [panel for panel in _dashboard("rl_sync_generation.json")["panels"] if panel["id"] in range(231, 236)]
+    status, requests, tokens, tpot, kv = (_target_rows(store, target) for panel in panels for target in panel["targets"])
+    engines = len(ENGINES)
+    # Each engine's counter increase is divided by its bin: the dashboard's 15 s for the engine the
+    # MarinSkyRL process forwards, the scrape interval for the standalone one.
+    per_second = 1000 / 15_000 + 1000 / VLLM_SCRAPE_INTERVAL_MS
 
-    # Counts are cumulative in `le`: 50 of 100 requests are at or below 256 tokens, 90 at or
-    # below 1024, 99 at or below 4096.
-    assert {stat: value for stat, value, _ in rows} == {"p50": 256.0, "p90": 1024.0, "p99": 4096.0}
-    # The first sample of a cumulative series has nothing to difference against and drops out, so
-    # each engine contributes BUCKETS - 1 increments of 100 requests.
-    assert {samples for _, _, samples in rows} == {(BUCKETS - 1) * 100 * len(ENGINES)}
-
-    stages = _panel_rows(store, "vLLM request latency by stage")
-    assert {(stage, quantile): value for stage, quantile, value, _ in stages} == {
-        (stage, quantile): value
-        for stage in ("queue", "decode", "e2e")
-        for quantile, value in (("p50", 2.0), ("p99", 32.0))
-    }
-
-    tokens = _panel_rows(store, "vLLM time to first token and inter-token latency")
-    assert {series for _, series, _, _, _ in tokens} == {"ttft", "inter_token_latency"}
-    assert all(value == pytest.approx(LATENCY_MEAN) for _, _, value, _, _ in tokens)
-    assert len({t for t, *_ in tokens}) == BUCKETS - 1
-
-    iteration = _panel_rows(store, "vLLM tokens per iteration")
-    assert {series for _, series, _, _ in iteration} == {"iteration tokens per engine step"}
-    assert all(value == pytest.approx(TOKEN_MEAN) for _, _, value, _ in iteration)
-
-
-def test_the_engine_gauges_are_summed_across_engines_and_never_differenced(store) -> None:
-    queue = _panel_rows(store, "vLLM waiting requests by reason")
-
-    # One engine in each namespace, each averaged over its own samples and then summed. The
-    # reasons partition the queue, so they add up to its depth.
-    assert len({t for t, *_ in queue}) == BUCKETS
-    assert {series: value for _, series, value, _ in queue} == {
-        "num_requests_waiting": pytest.approx(len(ENGINES) * QUEUE_DEPTH),
-        **{f"waiting · {reason}": pytest.approx(len(ENGINES) * v) for reason, v in WAITING_BY_REASON.items()},
-    }
-
-    cache = _panel_rows(store, "vLLM KV-cache usage")
-    assert len(cache) == 2 * BUCKETS
-    assert {series: value for _, series, value, _ in cache} == {
-        "kv_cache_usage": pytest.approx(KV_CACHE_USAGE),
-        "kv_cache_usage_peak": pytest.approx(KV_CACHE_USAGE),
-    }
+    assert [(metric, state) for metric, state, _ in status] == [
+        ("query", "detail"),
+        ("run attention", "no_conclusion"),
+    ]
+    assert requests == [
+        (t, series, value, series)
+        for t in BUCKET_TIMES
+        for series, value in (
+            ("num_requests_in_flight", engines * (RUNNING + QUEUE_DEPTH)),
+            ("num_requests_running", engines * RUNNING),
+            ("num_requests_waiting", engines * QUEUE_DEPTH),
+        )
+    ]
+    assert tokens == [
+        (t, series, pytest.approx(count * per_second))
+        for t in BUCKET_TIMES[1:]
+        for series, count in (("generated tokens/s", GENERATED_TOKENS), ("prompt tokens/s", PROMPT_TOKENS))
+    ]
+    assert tpot == [
+        (t, "time per output token", pytest.approx(TIME_PER_OUTPUT_TOKEN), "tpot", "mean_over_time")
+        for t in BUCKET_TIMES[1:]
+    ]
+    assert kv == [
+        (t, series, pytest.approx(KV_CACHE_USAGE), series)
+        for t in BUCKET_TIMES
+        for series in ("kv_cache_usage", "kv_cache_usage_peak")
+    ]
 
 
 def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:

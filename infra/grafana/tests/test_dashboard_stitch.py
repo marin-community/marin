@@ -12,13 +12,26 @@ FRAGMENT = {"type": "table", "title": "Shared panel", "targets": [{"refId": "A"}
 
 
 def test_stitch_dashboard_merges_fragment_with_local_id_and_grid_pos():
+    grid = {"h": 8, "w": 12, "x": 0, "y": 0}
+    params = [{"key": "identity", "value": "${identity}"}, {"key": "to", "value": "${__to}"}]
+    fragment = {**FRAGMENT, "targets": [{"refId": "A", "url_options": {"params": params}}]}
     source = {
         "panels": [
-            {"id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "panelRef": "shared"},
+            {"id": 7, "gridPos": grid, "panelRef": "shared"},
+            {"id": 8, "gridPos": grid, "panelRef": "shared", "vars": {"identity": "${run}"}},
         ]
     }
-    (panel,) = stitch_dashboard(source, {"shared": FRAGMENT})["panels"]
-    assert panel == {**FRAGMENT, "id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}}
+
+    plain, mapped = stitch_dashboard(source, {"shared": fragment})["panels"]
+
+    assert plain == {**fragment, "id": 7, "gridPos": grid}
+    mapped_params = [{"key": "identity", "value": "${run}"}, {"key": "to", "value": "${__to}"}]
+    assert mapped == {
+        **fragment,
+        "targets": [{"refId": "A", "url_options": {"params": mapped_params}}],
+        "id": 8,
+        "gridPos": grid,
+    }
 
 
 def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows():

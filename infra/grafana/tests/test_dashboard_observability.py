@@ -240,7 +240,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "rl_runs.json": {"/v1/rl/overview": (19, sections["rl"])},
         "rl_sync_generation.json": {
             "/v1/rl/generation": (5, sections["rl_sync_generation"]),
-            "/v1/vllm/overview": (6, sections["vllm"]),
+            "/v1/vllm/overview": (5, sections["vllm"]),
         },
         "rl_sync_train_step.json": {"/v1/rl/train-step": (11, sections["rl_sync_train_step"])},
         "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},

@@ -8,7 +8,9 @@ body: ``{"id": N, "gridPos": {...}, "panelRef": "<fragment-name>"}``. Every othe
 field of the rendered panel — type, title, description, datasource, fieldConfig,
 options, targets — comes from ``panels/<fragment-name>.json``, the single source of
 truth for a panel shared across dashboards. ``id`` and ``gridPos`` stay
-dashboard-local: they are the only two things that legitimately vary by placement.
+dashboard-local: they are the only two things that legitimately vary by placement. A marker
+may also carry ``"vars": {"name": "value"}``, which replaces ``${name}`` throughout the mounted
+copy, so a fragment written for another board's variables can read this board's.
 
 This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end —
 no Grafana library-panel API, no runtime sync, no new credential — while killing
@@ -24,13 +26,13 @@ import json
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
+PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
 
 _RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
 _SHARED_TARGET_PARAMS = {
     "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS),
-    "vllm_run": (("identity_kind", "run_id"), ("identity", "${run}"), *_RANGE_PARAMS),
 }
 
 _ASYNC_RL_LINK = {
@@ -122,6 +124,19 @@ def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
 
 
+def _substitute(value, variables: dict[str, str]):
+    """Replace every ``${name}`` in the strings of a JSON value."""
+    if isinstance(value, str):
+        for name, replacement in variables.items():
+            value = value.replace("${" + name + "}", replacement)
+        return value
+    if isinstance(value, list):
+        return [_substitute(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, variables) for key, item in value.items()}
+    return value
+
+
 def _stitch_target(target: dict) -> dict:
     ref = target.get(TARGET_REF_KEY)
     if ref is None:
@@ -155,7 +170,8 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
         if ref is not None:
             if ref not in fragments:
                 raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-            panel = {**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]}
+            body = _substitute(fragments[ref], panel.get(PANEL_VARS_KEY, {}))
+            panel = {**body, "id": panel["id"], "gridPos": panel["gridPos"]}
         if panel.get("panels"):
             panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
         if "targets" in panel:

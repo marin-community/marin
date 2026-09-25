@@ -26,12 +26,12 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": true,
+      "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
       "title": "Inference",
       "type": "link",
-      "url": "/d/marin-inference"
+      "url": "/d/marin-inference?var-identity_kind=run_id&var-identity=${run}"
     }
   ],
   "templating": {
@@ -237,7 +237,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 10
       },
@@ -296,67 +296,11 @@
       "id": 304,
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 10
       },
       "panelRef": "rl_environment_wait_split"
-    },
-    {
-      "id": 231,
-      "type": "table",
-      "title": "vLLM generated tokens per request",
-      "description": "p50, p90 and p99 of vLLM `request_generation_tokens` over the whole time range. `generate` waits for its longest requests, so compare p99 with p50.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 10
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No request_generation_tokens histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
-          "custom": {
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "workload",
-          "format": "table",
-          "columns": [
-            {
-              "selector": "stat",
-              "text": "quantile",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "tokens/request",
-              "type": "number"
-            },
-            {
-              "selector": "samples",
-              "text": "requests",
-              "type": "number"
-            }
-          ],
-          "filterExpression": "stat == 'p50' || stat == 'p90' || stat == 'p99'"
-        }
-      ],
-      "interval": "1m"
     },
     {
       "type": "row",
@@ -372,396 +316,79 @@
       "panels": []
     },
     {
-      "id": 232,
-      "type": "timeseries",
-      "title": "vLLM time to first token and inter-token latency",
-      "description": "Per-bucket means of vLLM `time_to_first_token_seconds` and `inter_token_latency_seconds`. `FinelogInferenceMetricsSink` forwards no `inter_token_latency_seconds`, so a run whose vLLM metrics reach Finelog only through the trainer has no inter-token latency line.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
+      "id": 231,
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 4,
+        "w": 24,
         "x": 0,
         "y": 19
       },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "seconds"
-          },
-          "unit": "s",
-          "min": 0,
-          "noValue": "No time-to-first-token or inter-token latency histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "latency",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "stat",
-              "text": "stat",
-              "type": "string"
-            }
-          ],
-          "filterExpression": "stat == 'mean_over_time' && (metric == 'ttft' || metric == 'inter_token_latency')"
-        }
-      ],
-      "interval": "1m"
+      "panelRef": "inference_status",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
     },
     {
-      "id": 233,
-      "type": "table",
-      "title": "vLLM request latency by stage",
-      "description": "p50 and p99 of vLLM queue, decode and end-to-end request time over the whole time range. A queue time close to the decode time means requests wait to be scheduled. Means over time are on RL Post-training (sync).",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No queue, decode or end-to-end latency histograms from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
-          "custom": {
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "seconds"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "latency",
-          "format": "table",
-          "columns": [
-            {
-              "selector": "metric",
-              "text": "stage",
-              "type": "string"
-            },
-            {
-              "selector": "stat",
-              "text": "quantile",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "seconds",
-              "type": "number"
-            },
-            {
-              "selector": "samples",
-              "text": "requests",
-              "type": "number"
-            }
-          ],
-          "filterExpression": "(metric == 'queue' || metric == 'decode' || metric == 'e2e') && (stat == 'p50' || stat == 'p99')"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 234,
-      "type": "timeseries",
-      "title": "vLLM waiting requests by reason",
-      "description": "vLLM `num_requests_waiting`, and the same count split by `reason`, summed across the run's vLLM engines. `capacity` counts requests waiting for scheduling capacity. `deferred` counts requests held by a transient constraint such as a KV transfer. An empty queue while `generate` runs long means vLLM is under-filled.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "requests"
-          },
-          "unit": "none",
-          "min": 0,
-          "noValue": "No waiting-request gauges from this run's vLLM engines. An empty queue reports 0, so blank means no gauge arrived. vLLM detail needs a time range of 7 hours or less.",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "saturation",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            }
-          ],
-          "filterExpression": "metric == 'num_requests_waiting' || metric == 'num_requests_waiting_by_reason'"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 235,
-      "type": "timeseries",
-      "title": "vLLM tokens per iteration",
-      "description": "Per-bucket mean of vLLM `iteration_tokens_total`, the tokens scheduled in one vLLM iteration. A mean far below `max_num_batched_tokens` means mostly empty iterations. Raise concurrency or fix routing.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
+      "id": 232,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 27
+        "y": 23
       },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "tokens per iteration"
-          },
-          "unit": "none",
-          "min": 0,
-          "noValue": "No iteration_tokens_total histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "saturation",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            }
-          ],
-          "filterExpression": "metric == 'iteration_tokens'"
-        }
-      ],
-      "interval": "1m"
+      "panelRef": "inference_requests",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
     },
     {
-      "id": 236,
-      "type": "timeseries",
-      "title": "vLLM KV-cache usage",
-      "description": "Mean and peak vLLM `kv_cache_usage_perc` across the run's vLLM engines. Near full with waiting requests: the cache limits concurrency. Near empty: vLLM had unused room.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
+      "id": 233,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 23
       },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "KV-cache in use"
-          },
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "noValue": "No kv_cache_usage_perc gauge from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
+      "panelRef": "inference_tokens",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 234,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
       },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+      "panelRef": "inference_tpot",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 235,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
       },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "vllm_run",
-          "url": "/v1/vllm/overview",
-          "view": "saturation",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            }
-          ],
-          "filterExpression": "metric == 'kv_cache_usage' || metric == 'kv_cache_usage_peak'"
-        }
-      ],
-      "interval": "1m"
+      "panelRef": "inference_kv",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
     }
   ]
 }

@@ -802,14 +802,22 @@ def test_every_queried_panel_says_what_it_measures():
 
 
 def test_dashboard_links_point_at_provisioned_dashboards():
-    # Deleting a dashboard silently strands every nav link that named it.
-    uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}
-    for name, dashboard in _stitched_dashboards().items():
+    # Deleting a dashboard silently strands every nav link that named it, and a link that sets a
+    # variable its target does not define opens the target's default instead.
+    dashboards = _stitched_dashboards()
+    by_uid = {dashboard["uid"]: dashboard for dashboard in dashboards.values()}
+    for name, dashboard in dashboards.items():
+        own_variables = {variable["name"] for variable in dashboard.get("templating", {}).get("list", [])}
         for link in dashboard.get("links", []):
-            url = link["url"]
-            if not url.startswith("/d/"):
+            url = urlsplit(link["url"])
+            if not url.path.startswith("/d/"):
                 continue
-            assert url.removeprefix("/d/").split("/")[0] in uids, f"{name}: dead link {url}"
+            target = by_uid.get(url.path.removeprefix("/d/").split("/")[0])
+            assert target, f"{name}: dead link {link['url']}"
+            variables = {variable["name"] for variable in target.get("templating", {}).get("list", [])}
+            for key, value in (pair.split("=", 1) for pair in url.query.split("&") if pair):
+                assert key.removeprefix("var-") in variables, f"{name}: {link['url']} sets {key}"
+                assert set(re.findall(r"\$\{(\w+)}", value)) <= own_variables, f"{name}: {link['url']}"
 
 
 def test_cluster_variable_lists_every_configured_cluster():
