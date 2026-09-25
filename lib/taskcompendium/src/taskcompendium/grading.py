@@ -103,7 +103,7 @@ class ExactAnswerPayload(BaseModel):
 def exact_answer(expected: str, ignore_case: bool = True, ignore_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
     payload = ExactAnswerPayload(expected=expected, ignore_case=ignore_case, ignore_whitespace=ignore_whitespace)
-    return VerifierSpec(EXACT_ANSWER_KIND, payload.model_dump())
+    return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters=payload.model_dump())
 
 
 def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:

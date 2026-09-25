@@ -19,9 +19,11 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
-from taskcompendium.lowering import read_rendering, read_specification
+from taskcompendium.lowering import RENDERING_FILE, SPECIFICATION_FILE, read_rendering, read_specification
 
 RESPONSE_FILE = "response.txt"
+AGENT_LOGS_PATH = "/logs/agent"
+ARTIFACTS_LOGS_PATH = "/logs/artifacts"
 
 
 def _record_response(logs_dir: Path, instruction: str, response: str, context: AgentContext) -> None:
@@ -66,7 +68,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no shell")
 
     async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset({"/logs/agent", "/logs/verifier", "/logs/artifacts", "/tests"}):
+        if not set(map(str, dirs)).issubset({AGENT_LOGS_PATH, "/logs/verifier", ARTIFACTS_LOGS_PATH, "/tests"}):
             raise ValueError("Direct chat has no filesystem")
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -79,7 +81,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no filesystem")
 
     async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in {"/logs/agent", "/logs/artifacts"}:
+        if source_dir not in {AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH}:
             raise ValueError("Direct chat has no filesystem")
 
 
@@ -149,13 +151,13 @@ class DirectChatAgent(BaseAgent):
 
 
 class SemanticVerifier(BaseVerifier):
-    """Grade private task metadata after Harbor runs the agent."""
+    """Grade private task metadata with access to Harbor's verifier environment."""
 
     async def verify(self) -> VerifierResult:
         try:
             root = self.task.paths.task_dir
-            specification = read_specification(root / "specification.json")
-            rendering = read_rendering(root / "rendering.json")
+            specification = read_specification(root / SPECIFICATION_FILE)
+            rendering = read_rendering(root / RENDERING_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
             result = grade_answer(specification, rendering, response, self.environment)

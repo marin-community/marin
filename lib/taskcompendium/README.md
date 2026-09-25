@@ -1,8 +1,10 @@
 # TaskCompendium direct-chat slice
 
-`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private verifier descriptor with an explicit `kind`. The core package provides an `exact_answer` handler; other packages can provide further kinds without changing the task schema or grading dispatch. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string, independently of the private verifier kind. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. Lowering rejects renderings outside the specification's allowlist. `HarborTaskBinding` selects the direct-chat environment with no tools and must satisfy the task requirements. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
+`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private verifier descriptor. The task, rendering, binding, and verifier records are frozen Pydantic models, validated again when read from a Harbor export. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. `compatible_lowerings` enumerates allowed rendering and environment pairs. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
 The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
+
+The custom verifier has Harbor's verifier-side environment available for tasks that need workspace state. The registry dispatches by private verifier kind and passes the environment to each handler. The exact-answer handler reads the saved final response, extracts the answer according to the rendering, and compares it directly with the private reference. It does not create an answer file or use a TaskTrove grading runtime.
 
 For an authenticated model run, pass the environment variable name as `HarborLaunch("chat", model="...", agent_kwargs={"api_base": "...", "api_key_env": "MODEL_API_KEY"})`. The agent reads its value at request time; Harbor trial configuration retains only the variable name. The variable must be set in the trial process environment.
 
@@ -10,7 +12,7 @@ For an authenticated model run, pass the environment variable name as `HarborLau
 from pathlib import Path
 
 from taskcompendium.grading import exact_answer
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
+from taskcompendium.lowering import HarborTaskBinding, SelectionPolicy, compatible_lowerings, lower_to_harbor, select_lowerings
 from taskcompendium.models import AnswerFormat, Source, TaskRequirements, TaskSpec
 from taskcompendium.rendering import Rendering
 
@@ -18,14 +20,20 @@ spec = TaskSpec(
     id="arithmetic-7-plus-5",
     instructions="What is 7 + 5?",
     verifier=exact_answer("12"),
-    source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
+    source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     requirements=TaskRequirements(),
     permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
 )
-binding = HarborTaskBinding()
-lower_to_harbor(spec, Rendering("plain", AnswerFormat.PLAIN), binding, Path("/tmp/arithmetic-plain"))
-lower_to_harbor(spec, Rendering("json", AnswerFormat.JSON), binding, Path("/tmp/arithmetic-json"))
+renderings = (Rendering(id="plain", answer_format=AnswerFormat.PLAIN), Rendering(id="json", answer_format=AnswerFormat.JSON))
+candidates = compatible_lowerings(spec, renderings, (HarborTaskBinding(),))
+for candidate in select_lowerings(candidates, SelectionPolicy.ALL):
+    lower_to_harbor(spec, candidate.rendering, candidate.binding, Path(f"/tmp/arithmetic-{candidate.rendering.id}"))
+
+# A training caller can choose one variant reproducibly instead:
+sampled = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)
 ```
+
+The caller records the selection policy, RNG key, and library revision in its dataset or rollout manifest. Each exported Harbor package records the chosen rendering and binding. An arbitrary source prompt does not become format-agnostic automatically: the importer must allow only rewrites that preserve its instructions.
 
 `VerifierSpec(kind, parameters)` is the private serialized form. Each `taskcompendium.verifiers` entry point names a kind and resolves to a zero-argument factory returning a `VerifierHandler(payload_type, grade)`. The payload type is a frozen Pydantic model that validates its parameters. The grade function receives that typed payload plus a `GradingAttempt` containing the response, rendering, transcript, and Harbor's verifier-side environment. Validation loads the factory by kind before export or launch. An unknown kind or invalid parameters fail preflight; `Rendering` determines answer extraction but does not select the verifier. The exact-answer handler compares extracted text directly; other handlers may inspect the verifier-side environment.
 
