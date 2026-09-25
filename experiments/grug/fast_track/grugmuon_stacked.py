@@ -22,6 +22,7 @@ The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``o
 """
 
 import math
+import re
 from importlib import import_module
 
 import jax
@@ -31,6 +32,7 @@ from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec, reshard
 from levanter.optim.muon import ScaleByMuonState
 from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS, CoefficientType
+from levanter.utils.jax_utils import leaf_key_paths
 from optax import tree_utils as otu
 
 
@@ -54,14 +56,62 @@ def _target_named_sharding(array) -> NamedSharding | None:
     return sharding if isinstance(sharding, NamedSharding) else None
 
 
+# Stacked attention projections whose last (``_HEAD_OUT_LEAVES``) or second-to-last (``_HEAD_IN_LEAVES``)
+# axis is ``num_heads * head_dim``, for per-head orthogonalization.
+_HEAD_OUT_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.(w_q|w_k|w_v|w_g|w_uk|w_uv)")
+_HEAD_IN_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o")
+
+
+def _head_axis(path: str) -> int | None:
+    """Axis of a stacked ``[L, a, b]`` leaf that holds ``num_heads * head_dim``, or None."""
+    if _HEAD_OUT_LEAVES.fullmatch(path):
+        return 2
+    if _HEAD_IN_LEAVES.fullmatch(path):
+        return 1
+    return None
+
+
+def _split_heads(x: jax.Array, axis: int, head_dim: int) -> jax.Array:
+    """``[L, a, b]`` -> ``[L * num_heads, ...]``: one matrix per (layer, head)."""
+    layers, rows, cols = x.shape
+    if not jax.sharding.get_abstract_mesh().empty:
+        # Head-sharded layouts do not survive the reshape; the per-head stack is replicated anyway.
+        x = reshard(x, PartitionSpec(None, None, None))
+    if axis == 2:
+        heads = cols // head_dim
+        x = jnp.reshape(x, (layers, rows, heads, head_dim))
+        return jnp.reshape(jnp.moveaxis(x, 2, 1), (layers * heads, rows, head_dim))
+    heads = rows // head_dim
+    return jnp.reshape(x, (layers * heads, head_dim, cols))
+
+
+def _merge_heads(x: jax.Array, like: jax.Array, axis: int) -> jax.Array:
+    layers, rows, cols = like.shape
+    if not jax.sharding.get_abstract_mesh().empty:
+        x = reshard(x, PartitionSpec(None, None, None))
+    if axis == 2:
+        heads = x.shape[0] // layers
+        x = jnp.reshape(x, (layers, heads, rows, cols // heads))
+        merged = jnp.reshape(jnp.moveaxis(x, 1, 2), like.shape)
+    else:
+        merged = jnp.reshape(x, like.shape)
+    target = _target_named_sharding(like)
+    return reshard(merged, target) if target is not None else merged
+
+
 def _grug_scale_with_muon(
     momentum=0.95,
     nesterov=True,
     steps=5,
     muon_eps=1e-8,
     coefficient_type="quintic",
+    head_dim: int | None = None,
 ):
-    """Muon gradient transformation for the stacked model (2D/3D/4D leaves)."""
+    """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
+
+    With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
+    each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
+    """
     steps = int(steps)
 
     def init_fn(params):
@@ -104,6 +154,27 @@ def _grug_scale_with_muon(
             scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
             return updated * scale
 
+        head_axes = None
+        if head_dim is not None:
+            if params is None:
+                raise ValueError("per-head Muon needs params to identify the attention projections")
+            paths = jax.tree.map(
+                lambda p: ".".join(p) if isinstance(p, (list, tuple)) else str(p), leaf_key_paths(params)
+            )
+            head_axes = jax.tree.map(_head_axis, paths)
+            original = updates
+            split = jax.tree.map(
+                lambda u, a: u if u is None or a is None else _split_heads(u, a, head_dim),
+                updates,
+                head_axes,
+                is_leaf=lambda x: x is None,
+            )
+            # Split leaves have no parameter sharding to restore; their own layout stands in.
+            params = jax.tree.map(
+                lambda p, u, a: p if a is None else u, params, split, head_axes, is_leaf=lambda x: x is None
+            )
+            updates = split
+
         mesh = jax.sharding.get_abstract_mesh()
         if mesh.empty or not _intra_rack_axes(mesh):
             updates = jax.tree_util.tree_map_with_path(
@@ -114,6 +185,14 @@ def _grug_scale_with_muon(
             )
         else:
             updates = _bucketed_newton_schulz(updates, params, mesh, steps, muon_eps, coefficient_type)
+        if head_axes is not None:
+            updates = jax.tree.map(
+                lambda u, o, a: u if u is None or a is None else _merge_heads(u, o, a),
+                updates,
+                original,
+                head_axes,
+                is_leaf=lambda x: x is None,
+            )
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
     return optax.GradientTransformation(init_fn, update_fn)

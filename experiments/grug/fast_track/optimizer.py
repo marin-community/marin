@@ -153,6 +153,7 @@ def scale_with_grug_muonh(
     muon_eps: float = 1e-8,
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
+    head_dim: int | None = None,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step."""
     muon_transform = _grug_scale_with_muon(
@@ -161,6 +162,7 @@ def scale_with_grug_muonh(
         steps=steps,
         muon_eps=muon_eps,
         coefficient_type=coefficient_type,
+        head_dim=head_dim,
     )
 
     def init_fn(params):
@@ -206,6 +208,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     gate_router_weight_decay: float = 0.02
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
+    muon_head_dim: int | None = None
+    """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -224,6 +228,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         muon_eps=self.muon_epsilon,
                         learning_rate=lr,
                         coefficient_type=self.coefficient_type,
+                        head_dim=self.muon_head_dim,
                     )
                 )
                 components.append(_match_named_update_sharding())
