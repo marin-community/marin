@@ -284,9 +284,9 @@ def assign_queued(
     backend that supplies no metric is matched on shape alone, and ranks behind every
     backend whose capacity the parent can see. Among measured backends, prefer no
     preemption, then the tightest fit for the job's numeric capacity gate. For
-    ``--reserve`` markers, prefer more effective variant capacity. Break further
-    ties by a per-job hash of the peer id, then peer id and backend id. A candidate
-    that fits nowhere is skipped.
+    ``--reserve`` markers, prefer more effective variant capacity. Each job has a
+    stable peer order for otherwise equal placements. A candidate that fits
+    nowhere is skipped.
 
     Returns the promotions; the caller applies each as a conditional CAS and charges
     the ledger only for confirmed ones. Does not mutate ``ledger``.
@@ -324,7 +324,7 @@ def assign_queued(
                 placement.shape_only,
                 placement.preempts,
                 placement.remaining,
-                placement.headroom,
+                placement.marker_capacity_key,
                 _spread_key(candidate.job_id, peer.peer_id),
                 peer.peer_id,
                 placement.backend_id,
@@ -364,13 +364,12 @@ class _Placement(NamedTuple):
     shape_only: bool  # True for a backend matched on shape alone: no capacity metric
     preempts: bool  # True when the job fits only by reclaiming held work
     remaining: float  # capacity left across the gated tokens after placement
-    headroom: float  # negated capacity of the --reserve variants: more free sorts first
+    marker_capacity_key: float  # negated capacity of availability marker variants
     backend_id: str  # "" for a force-routed candidate (shapeless or pinned)
 
 
 def _shape_only_placement(backend_id: str) -> _Placement:
-    """Placement for a shape match without a readable capacity metric."""
-    return _Placement(shape_only=True, preempts=False, remaining=0.0, headroom=0.0, backend_id=backend_id)
+    return _Placement(shape_only=True, preempts=False, remaining=0.0, marker_capacity_key=0.0, backend_id=backend_id)
 
 
 def _place_on_peer(
@@ -398,7 +397,7 @@ def _place_on_peer(
                 shape_only=False,
                 preempts=_preempts(capacity, candidate.availability_gate),
                 remaining=_remaining_after(capacity, candidate.availability_gate, candidate.priority_band),
-                headroom=_headroom(capacity, candidate.shape_constraints, candidate.priority_band),
+                marker_capacity_key=_marker_capacity_key(capacity, candidate.shape_constraints, candidate.priority_band),
                 backend_id=backend.backend_id,
             )
         else:  # metric backend that cannot fit the job even by preemption
@@ -435,7 +434,7 @@ def _remaining_after(capacity: _WorkingCapacity, gate: list[Constraint], band: i
     return float(total)
 
 
-def _headroom(capacity: _WorkingCapacity, shape: list[Constraint], band: int) -> float:
+def _marker_capacity_key(capacity: _WorkingCapacity, shape: list[Constraint], band: int) -> float:
     """Negated effective capacity of variants in ``availability:*`` markers."""
     variants = [c.key.removeprefix(AVAILABILITY_PREFIX) for c in shape if is_availability_key(c.key)]
     return -float(sum(capacity.available(variant, band) for variant in variants))
