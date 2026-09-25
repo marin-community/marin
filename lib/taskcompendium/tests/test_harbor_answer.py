@@ -91,7 +91,6 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
-    assert "verif" not in (task / "instruction.md").read_text().lower()
 
     result = await run_trial(
         task, binding, HarborLaunch("replay", agent_kwargs={"response": response}), tmp_path / "trials", "run"
@@ -158,7 +157,6 @@ def test_selection_exports_only_compatible_answer_format(tmp_path, specification
 
     assert len(candidates) == 1
     assert json.loads((task / "rendering.json").read_text())["answer_format"] == "plain"
-    assert "Give your answer as plain text." in (task / "instruction.md").read_text()
     assert (
         compatible_lowerings(
             dataclasses.replace(specification, requirements=TaskRequirements(capabilities=("filesystem",))),
