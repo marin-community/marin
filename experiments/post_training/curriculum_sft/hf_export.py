@@ -6,6 +6,7 @@
 import dataclasses
 import tempfile
 from dataclasses import dataclass
+from typing import Any
 
 import draccus
 import equinox as eqx
@@ -35,7 +36,7 @@ _EXPORT_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 class GrugHfExportConfig:
     checkpoint_path: str
     tokenizer: str
-    model_config: dict
+    model_config: dict[str, Any]
     output_path: str
     resources: ResourceConfig
 

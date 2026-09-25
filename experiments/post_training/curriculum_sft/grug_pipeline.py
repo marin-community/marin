@@ -28,21 +28,6 @@ from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 from experiments.post_training.curriculum_sft.generation import generate_curriculum_sft
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM, TaskCurriculumCatalogArtifact
 
-SEPTEMBER_GRUG_CHECKPOINT = ArtifactStep.adopt(
-    name="models/grug-67b-sft-20260920-native",
-    version="2026.09.20",
-    source=(
-        "gs://marin-us-central2/users/held/grug_sft/"
-        "grug-67b-sft-20260920-special-token-lr-frozen-bias-1000-cpfix/checkpoints/step-158000"
-    ),
-    kind=LevanterCheckpoint,
-)
-SEPTEMBER_GRUG_TOKENIZER = ArtifactStep.adopt(
-    name="tokenizers/grug-sft-20260918",
-    version="2026.09.18",
-    source="gs://marin-us-central2/grug_sft/tokenizer/2026.09.18",
-    kind=Artifact,
-)
 GRUG_CHECKPOINTS_DIR = "checkpoints"
 
 

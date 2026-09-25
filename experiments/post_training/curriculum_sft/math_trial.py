@@ -126,10 +126,11 @@ def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     for capability_id in CURRICULUM_IDS:
         name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-chat")
         generated_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
+        generated_path = prefix_join(prefix_join(S3_TRIAL_PREFIX, generated_name), version)
         sources[capability_id] = ArtifactStep.adopt(
             name=name,
             version=version,
-            source=prefix_join(S3_TRIAL_PREFIX, f"{generated_name}/{version}"),
+            source=generated_path,
             kind=Artifact,
         )
     return sources
