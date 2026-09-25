@@ -4,7 +4,6 @@
 """Resolve a launch separately from a task-owned Harbor binding."""
 
 import dataclasses
-import json
 from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
@@ -14,7 +13,16 @@ from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 
 from taskcompendium.harbor.adapter import DEFAULT_REQUEST_TIMEOUT
-from taskcompendium.lowering import HarborTaskBinding, read_binding, read_rendering, read_specification, validate_binding
+from taskcompendium.lowering import (
+    BINDING_FILE,
+    RENDERING_FILE,
+    SPECIFICATION_FILE,
+    HarborTaskBinding,
+    read_binding,
+    read_rendering,
+    read_specification,
+    validate_binding,
+)
 from taskcompendium.rendering import AnswerFormat
 
 
@@ -62,12 +70,12 @@ def _validate_launch(launch: HarborLaunch, answer_format: AnswerFormat | None) -
 
 async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLaunch, trials_dir: Path, trial_name: str):
     """Run a lowered task through Harbor's agent, environment, and custom verifier."""
-    if binding != read_binding(task_dir / "binding.json"):
+    if binding != read_binding(task_dir / BINDING_FILE):
         raise ValueError("Launch binding differs from the exported task binding")
-    validate_binding(read_specification(task_dir / "specification.json"), binding)
+    validate_binding(read_specification(task_dir / SPECIFICATION_FILE), binding)
     try:
-        rendering = read_rendering(task_dir / "rendering.json")
-    except json.JSONDecodeError:
+        rendering = read_rendering(task_dir / RENDERING_FILE)
+    except ValueError:
         if launch.agent == "chat":
             raise
         rendering = None  # Replay still runs so the verifier can record invalid private metadata.

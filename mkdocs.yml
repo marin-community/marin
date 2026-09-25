@@ -90,7 +90,7 @@ nav:
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
-      - Internal Guidelines: dev-guide/guidelines-internal.md
+      - Internal Onboarding: dev-guide/guidelines-internal.md
       - Forking Policy: dev-guide/forking-policy.md
       - Building Docs: dev-guide/building-docs.md
       - Releasing to PyPI: dev-guide/releasing.md

@@ -1,8 +1,8 @@
 import { INTERVAL_KIND, type IntervalKind, type PanelCell, type PanelRow } from '@/types/api'
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
-// marker. Ranked by the interval's lower bound, like every other ordering in the app: a run that
-// lost items cannot take the crown on the strength of the items it kept.
+// marker. Ranked by the score, as the panel sorts; Compare is where an ordering claim is made and it
+// ranks on the interval instead.
 export interface BestCell {
   value: number
   model: string
@@ -16,22 +16,22 @@ export function cellsByModel(rows: PanelRow[]): Record<string, Record<string, Pa
   return out
 }
 
-// For each benchmark, the model with the highest interval lower bound across the given rows.
+// Orders two cells on one benchmark: the higher score first, and on a tie the higher lower bound. The
+// panel's column sort and the fleet-best marker both use this rule, so they cannot disagree.
+export function compareCells(a: PanelCell, b: PanelCell): number {
+  return b.value - a.value || b.low - a.low
+}
+
+// For each benchmark, the model whose cell leads under compareCells across the given rows.
 export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string, BestCell> {
   const out: Record<string, BestCell> = {}
   for (const benchmark of benchmarks) {
-    let bestBound = -Infinity
-    let bestModel = ''
-    let bestValue = 0
+    let best: { cell: PanelCell; model: string } | null = null
     for (const row of rows) {
       const cell = row.cells[benchmark]
-      if (cell && cell.low > bestBound) {
-        bestBound = cell.low
-        bestValue = cell.value
-        bestModel = row.model
-      }
+      if (cell && (best === null || compareCells(cell, best.cell) < 0)) best = { cell, model: row.model }
     }
-    if (bestModel) out[benchmark] = { value: bestValue, model: bestModel }
+    if (best) out[benchmark] = { value: best.cell.value, model: best.model }
   }
   return out
 }

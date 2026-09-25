@@ -94,9 +94,10 @@ datasets:
     ref: main
 ```
 
-Use `datasets[].name`, not `datasets[].path`, for `hf://org/repository`. The evaluator downloads the
-snapshot on the submitted worker and gives Harbor a local path. A Harbor registry source uses its
-native selector, such as `name: aime` plus `version: "1.0"`. A local source uses a relative path:
+Use `datasets[].name`, not `datasets[].path`, for `hf://org/repository`. Harbor loads the repository's
+task directories during preflight to count tasks and on the submitted worker to run them. The
+repository must already contain Harbor tasks; Parquet rows are not converted. A Harbor registry source
+uses its native selector, such as `name: aime` plus `version: "1.0"`. A local source uses a relative path:
 
 ```yaml
 environment:
@@ -110,9 +111,10 @@ datasets:
 Local paths resolve against the directory containing the policy. The resulting directory must remain
 inside the Marin workspace and must be included in the Iris workspace bundle. The launcher stores its
 workspace-relative path so the submitted worker resolves it under the unpacked workspace. Absolute,
-outside-workspace, and missing local directories fail before Iris submission. Hugging Face selector
-syntax is checked before submission; repository availability is checked when the worker downloads the
-snapshot.
+outside-workspace, and missing local directories fail before Iris submission. Harbor checks Hugging Face
+repository access during preflight and loads the snapshot again on the worker. Gated repositories need
+`HF_TOKEN` in the launch environment; Marin forwards it to the isolated worker. A moving ref such as
+`main` can resolve to different commits between preflight and execution.
 
 Every catalog policy lives under `experiments/evaluation/configs/harbor/` and shares its filename
 with its `EVALS` key. Keep suite membership, runtime task caps, model and hardware selection, and
@@ -125,14 +127,14 @@ root workspace lock contains none of those packages. `marin.external_dependencie
 the exact Git revision used by two isolated calls:
 
 1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
-   validates a placeholder model/endpoint overlay, and emits opaque deterministic policy JSON plus
-   Marin-owned metadata.
+   validates a placeholder model/endpoint overlay, loads the dataset through Harbor to count tasks,
+   and emits opaque deterministic policy JSON plus Marin-owned metadata.
 2. Execution reparses the opaque policy, applies the real endpoint, served model, output directory,
-   materialized dataset path, model kwargs, and task limit, then validates the complete typed job
-   before calling Harbor.
+   workspace-local dataset path when applicable, model kwargs, and task limit, then validates the
+   complete typed job before calling Harbor. Hugging Face and registry selectors stay intact.
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
-the served endpoint/model, output paths, materialized source, and explicit `--limit` override both.
+the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
 ### Trial error taxonomy
@@ -150,6 +152,9 @@ The agent's `model_info.max_input_tokens` comes from the model's resolved `serve
 `model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
 window the server actually offers. With `auto_overrides`, explicit context limits are clamped to the
 checkpoint's native window before Harbor preflight; the batch retains that resolved serving configuration.
+A Terminus-2 policy also receives the resolved output limit as `llm_call_kwargs.max_tokens`, which applies
+the budget to ordinary chat-completion requests. An explicit lower request limit in the policy wins; a
+request limit above `model_info.max_output_tokens` fails preflight.
 A policy may state a lower limit to keep headroom under that window, and the lower limit wins:
 `grug-opencode-id.yaml` asks for 64512 input tokens against a
 model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with
@@ -162,11 +167,15 @@ and `record.json` keeps it under `eval.harbor`.
 Each Harbor evaluation writes:
 
 - `{records_prefix}/{run_id}/record.json`
-- `{records_prefix}/{run_id}/results/samples_harbor.parquet`
-- durable Harbor trial directories and trajectory references
+- a FineStore archive under `{records_prefix}/{run_id}/results/`, including normalized `samples`
+  and `steps` tables plus the evaluator-neutral `rollouts_v1` conversation table
+- Harbor-native job metadata, trial results, and trajectories preserved as FineStore objects
 
-Every completed trial becomes an agentic `EvalSample`. The verifier reward is stored as
-`Grading(method="harbor:verifier")`, and the trajectory is referenced by `trajectory_uri`. Evaldash
-ingests the record and sample parquet in the same way as Evalchemy runs. `record.json` stores the
+Harbor writes each verifier-scored trial as it finishes, then adds surviving ungraded attempts and
+job metadata before sealing the archive. Every final trial becomes an agentic `EvalSample`. The
+verifier reward is stored as `Grading(method="harbor:verifier")`, and the trajectory is referenced
+by `trajectory_uri`. Marin derives the `rollouts_v1` table from `steps`, normalizing each trajectory's
+participants and ordered message, reasoning, tool-call, and observation parts. Evaldash reads the
+normalized sample table directly. `record.json` stores the
 deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
 remains part of the policy digest.

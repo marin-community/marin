@@ -18,18 +18,18 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, grade_attempt
-from taskcompendium.lowering import read_rendering, read_specification
+from taskcompendium.grading import GradeResult, Outcome, grade_answer
+from taskcompendium.lowering import RENDERING_FILE, SPECIFICATION_FILE, read_rendering, read_specification
 from taskcompendium.rendering import AnswerFormat
 
 RESPONSE_FILE = "response.txt"
 ACTION_FILE = "action.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 DEFAULT_REQUEST_TIMEOUT = 120
-AGENT_LOG_DIR = "/logs/agent"
-VERIFIER_LOG_DIR = "/logs/verifier"
-ARTIFACTS_LOG_DIR = "/logs/artifacts"
-TESTS_DIR = "/tests"
+AGENT_LOGS_PATH = "/logs/agent"
+VERIFIER_LOGS_PATH = "/logs/verifier"
+ARTIFACTS_LOGS_PATH = "/logs/artifacts"
+TESTS_PATH = "/tests"
 
 
 def _record_answer(logs_dir: Path, instruction: str, answer: str, context: AgentContext) -> None:
@@ -105,7 +105,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no shell")
 
     async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset({AGENT_LOG_DIR, VERIFIER_LOG_DIR, ARTIFACTS_LOG_DIR, TESTS_DIR}):
+        if not set(map(str, dirs)).issubset({AGENT_LOGS_PATH, VERIFIER_LOGS_PATH, ARTIFACTS_LOGS_PATH, TESTS_PATH}):
             raise ValueError("Direct chat has no filesystem")
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -118,7 +118,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no filesystem")
 
     async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in {AGENT_LOG_DIR, ARTIFACTS_LOG_DIR}:
+        if source_dir not in {AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH}:
             raise ValueError("Direct chat has no filesystem")
 
 
@@ -247,17 +247,17 @@ class NativeActionAgent(DirectChatAgent):
 
 
 class SemanticVerifier(BaseVerifier):
-    """Grade private task metadata after Harbor runs the agent."""
+    """Grade private task metadata with access to Harbor's verifier environment."""
 
     async def verify(self) -> VerifierResult:
         try:
             root = self.task.paths.task_dir
-            specification = read_specification(root / "specification.json")
-            rendering = read_rendering(root / "rendering.json")
+            specification = read_specification(root / SPECIFICATION_FILE)
+            rendering = read_rendering(root / RENDERING_FILE)
             action = rendering.answer_format == AnswerFormat.FINAL_ACTION
             response_path = self.trial_paths.agent_dir / (ACTION_FILE if action else RESPONSE_FILE)
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_attempt(specification, GradingAttempt(rendering, response))
+            result = grade_answer(specification, rendering, response, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
