@@ -133,11 +133,13 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["shellbox"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
         "iris",
         "python-libs",
+        "shellbox",
     ]
 
 
@@ -154,7 +156,7 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
         repo_root=Path.cwd(),
     )
 
-    assert plan.packages == ("dupekit", "finelog", "iris", "python-libs")
+    assert plan.packages == ("dupekit", "finelog", "iris", "python-libs", "shellbox")
     expected_builds = {
         ("dupekit", "ubuntu-latest", "linux"),
         ("dupekit", "macos-14", "macos"),
@@ -166,6 +168,7 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
         ("iris", "macos-14", "macos"),
         ("iris", "ubuntu-latest", "sdist"),
         ("python-libs", "ubuntu-latest", "python"),
+        ("shellbox", "ubuntu-latest", "python"),
     }
     actual_builds = {(entry["package"], entry["os"], entry["operation"]) for entry in plan.builds}
     assert actual_builds == expected_builds
@@ -211,6 +214,25 @@ def test_general_library_tag_selects_one_stable_family() -> None:
     assert plan.packages == ("python-libs",)
     assert plan.versions["python-libs"].version == "0.3.0"
     assert plan.builds == ({"package": "python-libs", "os": "ubuntu-latest", "operation": "python"},)
+    assert not plan.bump
+
+
+def test_shellbox_tag_selects_one_stable_family() -> None:
+    plan = release_plan(
+        event_name="push",
+        ref="refs/tags/shellbox-v0.1.0",
+        input_mode="manual",
+        input_package="all",
+        input_version="",
+        revision="abcdef123456",
+        serial=30220111744,
+        changed_paths=[],
+        repo_root=Path.cwd(),
+    )
+
+    assert plan.packages == ("shellbox",)
+    assert plan.versions["shellbox"].version == "0.1.0"
+    assert plan.builds == ({"package": "shellbox", "os": "ubuntu-latest", "operation": "python"},)
     assert not plan.bump
 
 
@@ -312,7 +334,7 @@ def test_native_release_expectations_track_the_build_legs(package: str) -> None:
     assert dict(family.artifacts) == expected
 
 
-@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog", "python-libs"])
+@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog", "python-libs", "shellbox"])
 def test_artifact_manifest_requires_complete_release_pair(tmp_path: Path, package: str) -> None:
     version = "0.3.0.dev30194118926"
     paths = _write_artifacts(tmp_path, package, version)
@@ -421,6 +443,8 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
     assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "shellbox-v*" in push["tags"]
+    assert "lib/shellbox/src/**" in push["paths"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}

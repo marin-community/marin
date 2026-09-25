@@ -25,6 +25,7 @@ on:
       - "finelog-v*"
       - "iris-native-v*"
       - "marin-libs-v*"
+      - "shellbox-v*"
     # GitHub requires static path filters. Keep this list aligned with
     # package-owned source_patterns; orchestration-only changes do not publish.
     paths:
@@ -34,6 +35,7 @@ on:
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/hatch_build.py"
+      - "lib/shellbox/src/**"
       - "lib/iris/rust/**"
       - "lib/finestore/src/**"
       - "rust/**"
@@ -47,6 +49,9 @@ on:
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/hatch_build.py"
+      - "lib/shellbox/src/**"
+      - "lib/shellbox/pyproject.toml"
+      - "lib/shellbox/README.md"
       - "lib/iris/rust/**"
       - "lib/finestore/src/**"
       - "rust/**"

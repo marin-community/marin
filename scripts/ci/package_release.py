@@ -51,6 +51,11 @@ class PythonBundle:
 
 
 @dataclass(frozen=True)
+class PurePythonBuild:
+    path: Path
+
+
+@dataclass(frozen=True)
 class NativeBuild:
     import_name: str
     native_path: Path
@@ -68,7 +73,7 @@ class PackageFamily:
     tag_prefix: str
     source_patterns: tuple[str, ...]
     build_legs: tuple[tuple[str, str], ...]
-    build: PythonBundle | NativeBuild
+    build: PythonBundle | PurePythonBuild | NativeBuild
 
 
 @dataclass(frozen=True)
@@ -141,6 +146,14 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
+        ),
+        "shellbox": PackageFamily(
+            declared_version_paths=(Path("lib/shellbox/pyproject.toml"),),
+            artifacts=MappingProxyType({"marin-shellbox": ArtifactExpectation(wheels=1, sdists=1, pure_python=True)}),
+            tag_prefix="shellbox-v",
+            source_patterns=("lib/shellbox/src/**", "lib/shellbox/pyproject.toml", "lib/shellbox/README.md"),
+            build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
+            build=PurePythonBuild(path=Path("lib/shellbox")),
         ),
         "iris": PackageFamily(
             declared_version_paths=(Path("lib/iris/rust/pyproject.toml"),),
@@ -757,6 +770,30 @@ def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo
     (repo_root / "dist" / ".gitignore").unlink(missing_ok=True)
 
 
+def _build_pure_python_package(build: PurePythonBuild, version: str, operation: str, repo_root: Path) -> None:
+    if operation != BuildOperation.PYTHON:
+        raise ValueError(f"Pure Python package does not support build operation {operation!r}")
+    pyproject = repo_root / build.path / "pyproject.toml"
+    original = pyproject.read_text()
+    stamped, count = re.subn(
+        r'^(version\s*=\s*)"[^"]+"',
+        rf'\g<1>"{python_compatible_version(version)}"',
+        original,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise ValueError(f"Could not stamp release version in {pyproject}")
+    dist_dir = repo_root / "dist"
+    dist_dir.mkdir(exist_ok=True)
+    try:
+        pyproject.write_text(stamped)
+        _uv_build(repo_root, build.path, dist_dir, "wheel")
+        _uv_build(repo_root, build.path, dist_dir, "sdist")
+    finally:
+        pyproject.write_text(original)
+
+
 def _build_native_package(build: NativeBuild, version: str, operation: str, repo_root: Path) -> None:
     build_version = cargo_compatible_version(version)
     _stamp_versions(repo_root, build, build_version)
@@ -796,6 +833,9 @@ def build_package(package_name: str, version: str, operation: str, repo_root: Pa
     build = PACKAGES[package_name].build
     if isinstance(build, PythonBundle):
         _build_python_bundle(build, version, operation, repo_root)
+        return
+    if isinstance(build, PurePythonBuild):
+        _build_pure_python_package(build, version, operation, repo_root)
         return
     _build_native_package(build, version, operation, repo_root)
 
