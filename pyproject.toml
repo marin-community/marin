@@ -453,6 +453,7 @@ project-excludes = [
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
     "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
+    "lib/levanter/src/levanter/grug/attention/_fa4_cute_flash_bwd_sm90.py",  # Vendored flash-attn-4 CuTe kernel
     # Keep key excludes that pyrefly normally adds heuristically.
     "**/node_modules",
     "**/__pycache__",

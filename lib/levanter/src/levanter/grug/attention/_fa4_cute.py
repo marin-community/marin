@@ -225,6 +225,7 @@ def _fa4_cute_attention_forward_sharded(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array | None,
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -240,6 +241,7 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
+            rel_bias,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
             q_offset=jnp.zeros((1,), dtype=jnp.int32),
@@ -266,12 +268,16 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
+            rel_bias,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
             q_offset=jnp.zeros((1,), dtype=jnp.int32),
         )
 
     sequence_axes = q_dims[1]
+    if sequence_axes and rel_bias is not None:
+        # The banded bias is laid out per local query block; the query offset would shift its bands.
+        raise NotImplementedError("The Inkling rel_bias does not support sequence-sharded (context-parallel) q.")
     # Return Q's own spec, including length-1 axes: explicit sharding compares axis names, so an
     # output that drops them cannot be combined with the caller's activations.
     q_spec = tuple(partition_spec_of(q))
@@ -280,13 +286,15 @@ def _fa4_cute_attention_forward_sharded(
     metadata_spec = P(*output_spec[:2])
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
+    # rel_bias is [B, Hq, S, W]: batch and heads sharded like q's, sequence and band columns unsharded.
+    rel_bias_args = () if rel_bias is None else (reshard(rel_bias, P(output_spec[0], output_spec[2], None, None)),)
 
     @shard_map(
         mesh=mesh,
         out_specs=output_spec,
         check_vma=False,
     )
-    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local, *rel_bias_local):
         q_offset = jnp.zeros((1,), dtype=jnp.int32)
         if sequence_axes:
             # shard_map's transpose sums partial dK/dV for replicated K/V. Local fp32
@@ -300,12 +308,13 @@ def _fa4_cute_attention_forward_sharded(
             v_local,
             lower_bounds_local,
             valid_local,
+            *rel_bias_local,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
             q_offset=q_offset,
         )
 
-    return _local_fa4_attention(q, k, v, lower_bounds, valid)
+    return _local_fa4_attention(q, k, v, lower_bounds, valid, *rel_bias_args)
 
 
 def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
@@ -329,6 +338,7 @@ def _gpu_fa4_cute_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     kernel_config: Flash4CuteKernelConfig,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
@@ -349,6 +359,7 @@ def _gpu_fa4_cute_attention(
         v,
         lower_bounds,
         valid,
+        rel_bias,
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
     )
@@ -359,11 +370,16 @@ def gpu_fa4_cute_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run causal self-attention through the segmented FA4/CuTe kernel."""
+    """Run causal self-attention through the segmented FA4/CuTe kernel, with the optional Inkling
+    relative-position bias ``rel_bias`` (banded, [B, Hq, Q, W]; see ``_inkling_relpos``)."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
+    return _gpu_fa4_cute_attention(
+        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), rel_bias=rel_bias
+    )
 
 
 def gpu_fa4_cute_sm100_attention(

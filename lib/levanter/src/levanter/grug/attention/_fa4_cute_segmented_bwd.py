@@ -465,6 +465,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
         mQOffset: cute.Tensor,
+        mRelBias: cute.Tensor,
         softmax_scale: cutlass.Float32,
         mCuSeqlensQ: Optional[cute.Tensor] = None,
         mCuSeqlensK: Optional[cute.Tensor] = None,
@@ -566,6 +567,7 @@ class SegmentedFlashAttentionBackwardSm80:
             mLowerBounds,
             mValid,
             mQOffset,
+            mRelBias,
             mCuSeqlensQ,
             mCuSeqlensK,
             mSeqUsedQ,
@@ -613,6 +615,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
         mQOffset: cute.Tensor,
+        mRelBias: cute.Tensor,
         mCuSeqlensQ: Optional[cute.Tensor],
         mCuSeqlensK: Optional[cute.Tensor],
         mSeqUsedQ: Optional[cute.Tensor],
@@ -1005,7 +1008,10 @@ class SegmentedFlashAttentionBackwardSm80:
                     acc_S,
                     mLowerBounds,
                     mValid,
+                    mRelBias,
                     batch_idx,
+                    head_idx,
+                    softmax_scale,
                     m_block,
                     n_block,
                     thr_mma_sdp,
@@ -1086,7 +1092,10 @@ class SegmentedFlashAttentionBackwardSm80:
         acc_S: cute.Tensor,
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
+        mRelBias: cute.Tensor,
         batch_idx: cutlass.Int32,
+        head_idx: cutlass.Int32,
+        softmax_scale: cutlass.Float32,
         m_block: cutlass.Int32,
         n_block: cutlass.Int32,
         thr_mma: cute.TiledMma,
@@ -1118,10 +1127,21 @@ class SegmentedFlashAttentionBackwardSm80:
                 key_in_bounds = cute.elem_less(key_idx, seqlen_k)
                 key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                 key_before_query = cute.elem_less(key_idx, query_idx + q_offset + 1)
-                if not (
-                    query_in_bounds and query_valid and key_in_bounds and key_after_lower_bound and key_before_query
-                ):
+                keep = query_in_bounds and query_valid and key_in_bounds and key_after_lower_bound and key_before_query
+                if not keep:
                     acc_S_mn[r, c] = -cutlass.Float32.inf
+                # Inkling relative-position bias in the bwd S-recompute (mirrors the forward): add
+                # A[query, delta=query-key]/softmax_scale to the raw qk logit for kept in-band positions,
+                # so the recomputed P includes the bias and dq/dk/dv are correct. mRelBias is [S,L,Hq,B];
+                # non-Inkling callers pass a zero [.,1] bias.
+                rel_extent = mRelBias.shape[1]
+                # Distance in global positions: local query i sits at i + q_offset.
+                delta = query_idx + q_offset - key_idx
+                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
+                bias_val = mRelBias[query_meta_idx, delta_safe, head_idx, batch_idx]
+                in_band = keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
+                if in_band:
+                    acc_S_mn[r, c] = acc_S_mn[r, c] + bias_val.to(cutlass.Float32) / softmax_scale
 
     @cute.jit
     def compute_one_m_block(

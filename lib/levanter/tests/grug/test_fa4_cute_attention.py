@@ -21,6 +21,7 @@ from levanter.grug.attention import (
 )
 from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
 from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
+from levanter.grug.attention._inkling_relpos import compact_to_band
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -415,7 +416,7 @@ def test_real_gpu_fa4_cute_sm100_attention_matches_reference():
     )
 
 
-@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128), (4, 4, 128)])
 def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
@@ -437,6 +438,48 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
+
+
+@pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (4, 4)])
+@pytest.mark.parametrize("sliding_window", [None, 192])
+def test_real_gpu_fa4_cute_inkling_bias_matches_reference(q_heads, kv_heads, sliding_window):
+    """Fused forward + sm90 backward with the banded Inkling bias (incl. in-kernel bias grad) vs reference.
+
+    Covers GQA and MHA (the MLA layout), packed segments, and a band (rel_extent) shorter than both the
+    window and the sequence so in-band, out-of-band, and masked tiles all occur. Gradients are taken
+    w.r.t. the compact distance-indexed bias, which is how the model parameterizes the band.
+    """
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    batch, seq_len, head_dim, rel_extent = 2, 512, 128, 128
+    key = jax.random.PRNGKey(11)
+    q_key, k_key, v_key, a_key, cotangent_key = jax.random.split(key, 5)
+    q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    compact_bias = (jax.random.normal(a_key, (batch, q_heads, seq_len, rel_extent)) * 0.5).astype(jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    segment_ids = jnp.concatenate(
+        [jnp.zeros((batch, 300), jnp.int32), jnp.ones((batch, seq_len - 300), jnp.int32)], axis=1
+    )
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(segment_ids)
+
+    def loss(implementation, q_arg, k_arg, v_arg, a_arg):
+        out = attention(q_arg, k_arg, v_arg, mask, implementation=implementation, rel_bias=compact_to_band(a_arg))
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    args = (q, k, v, compact_bias)
+    actual = jax.jit(jax.grad(lambda *a: loss("gpu_fa4_cute", *a), argnums=(0, 1, 2, 3)))(*args)
+    expected = jax.jit(jax.grad(lambda *a: loss("reference", *a), argnums=(0, 1, 2, 3)))(*args)
+
+    for name, actual_grad, expected_grad in zip(("dq", "dk", "dv", "dA"), actual, expected, strict=True):
+        actual_grad = np.asarray(actual_grad, dtype=np.float32)
+        expected_grad = np.asarray(expected_grad, dtype=np.float32)
+        rel_err = np.max(np.abs(actual_grad - expected_grad)) / np.max(np.abs(expected_grad))
+        assert rel_err < 3e-2, f"{name}: max-normalized error {rel_err:.3e}"
 
 
 @pytest.mark.parametrize("sliding_window", [None, 31])

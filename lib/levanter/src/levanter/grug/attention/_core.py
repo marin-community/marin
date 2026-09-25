@@ -16,6 +16,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_ke
 from jax.sharding import NamedSharding, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug.attention._inkling_relpos import dense_rel_bias
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
@@ -227,6 +228,7 @@ def _reference_attention_math(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    rel_bias_dense: Float[Array, "B Hq Q K"] | None = None,
     *,
     logits_dtype: jnp.dtype | None,
 ) -> Float[Array, "B Q Hq D"]:
@@ -237,6 +239,10 @@ def _reference_attention_math(
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+    if rel_bias_dense is not None:
+        # Inkling relative-position bias: added to the pre-softmax logits, per head (already gathered
+        # to dense [B,Hq,Q,K] by the caller).
+        scores = scores + rel_bias_dense.astype(scores.dtype)
 
     explicit = None
     if mask is None:
@@ -279,18 +285,22 @@ def reference_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     """Reference attention whose output sharding follows ``q``."""
+    # Expand the banded Inkling bias to dense [B,Hq,Q,K] out here (the gather primitive must run in
+    # the caller's explicit-sharding context, not inside the auto_axes region below).
+    rel_bias_dense = None if rel_bias is None else dense_rel_bias(rel_bias, q.shape[1], k.shape[1])
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+        return _reference_attention_math(q, k, v, mask, rel_bias_dense, logits_dtype=logits_dtype)
     # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
     # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
     # score contraction ambiguous), so run the math under Auto axes and pin only the
     # output to q's sharding.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
-    return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
+    return wrapped(q, k, v, mask, rel_bias_dense, logits_dtype=logits_dtype)
 
 
 def _tpu_splash_attention(
@@ -435,13 +445,16 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
-        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        return gpu_fa4_cute_attention(q, k, v, mask, rel_bias=rel_bias)
+    if rel_bias is not None and implementation in ("gpu_fa4_cute_sm100", "tpu_splash"):
+        raise NotImplementedError(f"rel_bias is not supported by the {implementation} attention implementation.")
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
@@ -454,10 +467,10 @@ def attention(
         raise ValueError(f"Unknown Grug attention implementation: {implementation}")
 
     if jax.default_backend() == "tpu":
-        if isinstance(mask, jax.Array):
-            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        if isinstance(mask, jax.Array) or rel_bias is not None:
+            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
         return _tpu_splash_attention(q, k, v, mask)
-    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
 
 
 __all__ = [

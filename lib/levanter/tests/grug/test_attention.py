@@ -11,9 +11,11 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import (
     AttentionMask,
     attention,
+    inkling_rel_bias,
     reference_attention,
     token_validity_from_attention_mask,
 )
+from levanter.grug.attention._inkling_relpos import band_to_compact, compact_to_band, dense_rel_bias
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -158,3 +160,40 @@ def test_attention_rejects_unknown_implementation():
 
     with pytest.raises(ValueError, match="Unknown Grug attention implementation"):
         attention(q, k, v, AttentionMask.causal(), implementation="nope")  # type: ignore[arg-type]
+
+
+def _distance_bias(relative_states, proj, seq_len):
+    """bias[b, h, i, j] = R[b, h, i] . proj[:, i - j] for 0 <= i - j < rel_extent, else 0."""
+    rel_extent = proj.shape[1]
+    per_distance = jnp.einsum("bhsr,rl->bhsl", relative_states, proj)
+    distance = jnp.arange(seq_len)[:, None] - jnp.arange(seq_len)[None, :]
+    in_band = (distance >= 0) & (distance < rel_extent)
+    index = jnp.broadcast_to(jnp.clip(distance, 0, rel_extent - 1), per_distance.shape[:3] + (seq_len,))
+    return jnp.where(in_band, jnp.take_along_axis(per_distance, index, axis=-1), 0.0)
+
+
+def test_inkling_rel_bias_band_matches_distance_bias_and_its_gradients():
+    batch, heads, seq_len, rel_dim, rel_extent = 2, 3, 512, 4, 256
+    relative_states = jax.random.normal(jax.random.PRNGKey(0), (batch, heads, seq_len, rel_dim))
+    proj = jax.random.normal(jax.random.PRNGKey(1), (rel_dim, rel_extent))
+    weights = jax.random.normal(jax.random.PRNGKey(3), (batch, heads, seq_len, seq_len))
+
+    def banded(r, p):
+        return dense_rel_bias(inkling_rel_bias(r, p), seq_len, seq_len)
+
+    np.testing.assert_allclose(
+        banded(relative_states, proj), _distance_bias(relative_states, proj, seq_len), rtol=1e-5, atol=1e-5
+    )
+    grads = jax.grad(lambda r, p: jnp.sum(banded(r, p) * weights), argnums=(0, 1))(relative_states, proj)
+    expected = jax.grad(lambda r, p: jnp.sum(_distance_bias(r, p, seq_len) * weights), argnums=(0, 1))(
+        relative_states, proj
+    )
+    for grad, expected_grad in zip(grads, expected, strict=True):
+        np.testing.assert_allclose(grad, expected_grad, rtol=1e-4, atol=1e-4)
+
+
+def test_inkling_rel_bias_compact_and_band_layouts_round_trip():
+    compact = jax.random.normal(jax.random.PRNGKey(2), (1, 2, 256, 128))
+    band = compact_to_band(compact)
+    np.testing.assert_array_equal(np.asarray(band_to_compact(band)), np.asarray(compact))
+    np.testing.assert_array_equal(np.asarray(compact_to_band(band_to_compact(band))), np.asarray(band))

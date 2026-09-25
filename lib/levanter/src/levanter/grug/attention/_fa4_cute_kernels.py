@@ -72,6 +72,7 @@ from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteSm100ForwardConfig,
     Flash4CuteSm90BackwardConfig,
 )
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK
 
 
 @dataclass(frozen=True)
@@ -169,8 +170,14 @@ def segmented_flash_attention_forward_launcher(
     tile_m: int = 128,
     tile_n: int = 64,
     num_threads: int = 128,
+    use_rel_bias: bool = False,
 ) -> Any:
     """Build a JAX/CUTLASS-callable segmented FlashAttention forward launcher.
+
+    The launcher always takes a ``rel_bias`` input. With ``use_rel_bias`` it is the banded Inkling
+    bias (see ``_inkling_relpos``; kernel layout ``[S, W, Hq, B]``) added to the pre-softmax logits:
+    ``bias[q, k] = rel_bias[q, k - q0 + W - REL_BIAS_BLOCK]`` on the key tiles inside the band, where
+    ``q0`` is the query's REL_BIAS_BLOCK start. Otherwise it is an ignored placeholder.
 
     Args:
         modules: Optional dependency bundle from ``_fa4_cute_backend``. It may
@@ -182,6 +189,7 @@ def segmented_flash_attention_forward_launcher(
         tile_m: Query tile size.
         tile_n: Key/value tile size.
         num_threads: CUDA threads per CTA.
+        use_rel_bias: Whether ``rel_bias`` carries a banded Inkling bias.
 
     Returns:
         A ``cute.jit`` launcher with the JAX ``cutlass_call`` signature:
@@ -195,6 +203,8 @@ def segmented_flash_attention_forward_launcher(
         tile_n=tile_n,
         num_threads=num_threads,
     )
+    if use_rel_bias and (REL_BIAS_BLOCK % tile_m != 0 or REL_BIAS_BLOCK % tile_n != 0):
+        raise ValueError(f"banded bias needs tile_m={tile_m} and tile_n={tile_n} to divide {REL_BIAS_BLOCK}")
     deps = _import_cute_dependencies(modules)
     cutlass = deps.cutlass
     cute = deps.cute
@@ -256,6 +266,7 @@ def segmented_flash_attention_forward_launcher(
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
             mQOffset: cute.Tensor,
+            mRelBias: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
@@ -363,6 +374,7 @@ def segmented_flash_attention_forward_launcher(
                 mLowerBounds,
                 mValid,
                 mQOffset,
+                mRelBias,
                 mO,
                 mLSE,
                 softmax_scale_log2,
@@ -385,6 +397,7 @@ def segmented_flash_attention_forward_launcher(
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
             mQOffset: cute.Tensor,
+            mRelBias: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
@@ -547,6 +560,7 @@ def segmented_flash_attention_forward_launcher(
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
                 q_offset=q_offset,
+                mRelBias=mRelBias,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -574,6 +588,17 @@ def segmented_flash_attention_forward_launcher(
             softmax_params = SimpleNamespace(row_max=row_max, row_sum=row_sum, softmax_scale_log2=softmax_scale_log2)
 
             if n_block_min < n_block_max:
+                # Per-tile bias gating: the banded bias covers keys [q0 - L, q0 + REL_BIAS_BLOCK) for the
+                # tile's query block q0, i.e. exactly the first n_inband (near-diagonal) key tiles. Those
+                # run the bias code (has_bias=True); the far tiles run the plain path (has_bias=False).
+                total_n_blocks = n_block_max - n_block_min
+                n_inband = 1
+                if cutlass.const_expr(use_rel_bias):
+                    rel_extent = basic_params.mRelBias.shape[1] - REL_BIAS_BLOCK
+                    q0 = basic_params.m_block * self._m_block_size // REL_BIAS_BLOCK * REL_BIAS_BLOCK
+                    n_bias_min = cutlass.max(n_block_min, (q0 - rel_extent) // self._n_block_size)
+                    n_inband = n_block_max - n_bias_min
+
                 basic_params.n_block = n_block_max - 1
                 self.compute_one_n_block(
                     basic_params,
@@ -582,8 +607,21 @@ def segmented_flash_attention_forward_launcher(
                     smem_copy_params,
                     softmax_params,
                     is_first_n_block=True,
+                    has_bias=use_rel_bias,
                 )
-                for n_tile in range(1, n_block_max - n_block_min, 1):
+                if cutlass.const_expr(use_rel_bias):
+                    for n_tile in range(1, n_inband, 1):
+                        basic_params.n_block = n_block_max - n_tile - 1
+                        self.compute_one_n_block(
+                            basic_params,
+                            mma_params,
+                            gmem_copy_params,
+                            smem_copy_params,
+                            softmax_params,
+                            is_first_n_block=False,
+                            has_bias=True,
+                        )
+                for n_tile in range(n_inband, total_n_blocks, 1):
                     basic_params.n_block = n_block_max - n_tile - 1
                     self.compute_one_n_block(
                         basic_params,
@@ -592,6 +630,7 @@ def segmented_flash_attention_forward_launcher(
                         smem_copy_params,
                         softmax_params,
                         is_first_n_block=False,
+                        has_bias=False,
                     )
             else:
                 # Q and O alias shared storage. Even an all-padding tile has
@@ -668,6 +707,7 @@ def segmented_flash_attention_forward_launcher(
             smem_copy_params: SimpleNamespace,
             softmax_params: SimpleNamespace,
             is_first_n_block: cutlass.Constexpr,
+            has_bias: cutlass.Constexpr = True,
         ):
             acc_S = cute.make_rmem_tensor(
                 mma_params.thr_mma.partition_shape_C((self._m_block_size, self._n_block_size)),
@@ -696,6 +736,16 @@ def segmented_flash_attention_forward_launcher(
                     pred=gmem_copy_params.tKVpKV,
                 )
             cute.arch.cp_async_commit_group()
+
+            # Issue the Inkling bias gmem loads for this tile BEFORE the QK MMA so their latency hides
+            # behind it; the values are first consumed in softmax_rescale_O.
+            rBias = None
+            if cutlass.const_expr(has_bias):
+                rBias = cute.make_rmem_tensor(
+                    mma_params.thr_mma.partition_shape_C((self._m_block_size, self._n_block_size)),
+                    self._dtype,
+                )
+                self.load_bias_tile(basic_params, mma_params, rBias)
 
             cute.copy(
                 smem_copy_params.smem_tiled_copy_Q,
@@ -738,7 +788,7 @@ def segmented_flash_attention_forward_launcher(
                 )
                 cute.arch.cp_async_commit_group()
 
-            self.softmax_rescale_O(basic_params, mma_params, softmax_params, acc_S, is_first_n_block)
+            self.softmax_rescale_O(basic_params, mma_params, softmax_params, acc_S, is_first_n_block, has_bias, rBias)
 
             rP = cute.make_fragment_like(acc_S, self._dtype)
             rP.store(acc_S.load().to(self._dtype))
@@ -784,6 +834,8 @@ def segmented_flash_attention_forward_launcher(
             softmax_params: SimpleNamespace,
             acc_S: cute.Tensor,
             is_first_n_block: cutlass.Constexpr,
+            has_bias: cutlass.Constexpr,
+            rBias: Any,
         ):
             acc_S_mn = self._make_acc_tensor_mn_view(acc_S)
             acc_O_mn = self._make_acc_tensor_mn_view(mma_params.acc_O)
@@ -791,21 +843,11 @@ def segmented_flash_attention_forward_launcher(
             if cutlass.const_expr(not is_first_n_block):
                 cute.basic_copy(softmax_params.row_max, row_max_prev)
 
-            mcS = cute.make_identity_tensor(
-                (
-                    basic_params.mQ.shape[3],
-                    basic_params.mQ.shape[0],
-                    basic_params.mQ.shape[2],
-                    basic_params.mK.shape[0],
-                )
-            )
-            cS = cute.local_tile(
-                mcS[basic_params.batch_idx, None, basic_params.q_head, None],
-                (self._m_block_size, self._n_block_size),
-                (basic_params.m_block, basic_params.n_block),
-            )
-            tScS = mma_params.thr_mma.partition_C(cS)
-            tScS_mn = self._make_acc_tensor_mn_view(tScS)
+            tScS_mn = self._score_coords_mn(basic_params, mma_params)
+            rBias_mn: Any = self._make_acc_tensor_mn_view(rBias) if cutlass.const_expr(has_bias) else None
+            # acc_S is in raw-qk units (the softmax multiplies by softmax_scale_log2 inside exp2), so the
+            # natural-unit bias is scaled by LOG2E / softmax_scale_log2 = 1 / softmax_scale.
+            bias_scale = cutlass.Float32(1.4426950408889634) / softmax_params.softmax_scale_log2
 
             for r in cutlass.range_constexpr(cute.size(softmax_params.row_max)):
                 query_idx = tScS_mn[r, 0][1]
@@ -822,13 +864,18 @@ def segmented_flash_attention_forward_launcher(
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                     key_before_query = cute.elem_less(key_idx, query_idx + basic_params.q_offset + 1)
-                    if not (
+                    keep = (
                         query_in_bounds
                         and query_valid
                         and key_in_bounds
                         and key_after_lower_bound
                         and key_before_query
-                    ):
+                    )
+                    # Inkling bias (prefetched by load_bias_tile; the band's zeros encode out-of-band
+                    # distances). `has_bias` is a per-tile Constexpr: far tiles run the plain path.
+                    if cutlass.const_expr(has_bias):
+                        acc_S_mn[r, c] = acc_S_mn[r, c] + rBias_mn[r, c].to(cutlass.Float32) * bias_scale
+                    if not keep:
                         acc_S_mn[r, c] = -cutlass.Float32.inf
 
                 acc_S_row = acc_S_mn[r, None].load()
@@ -897,6 +944,43 @@ def segmented_flash_attention_forward_launcher(
                     )
                     mLSE[batch_idx, q_head, query_idx] = lse
 
+        @cute.jit
+        def _score_coords_mn(self, basic_params: SimpleNamespace, mma_params: SimpleNamespace) -> cute.Tensor:
+            """Identity coordinates (batch, q, head, k) of this thread's score-tile elements, (m, n) view."""
+            mcS = cute.make_identity_tensor(
+                (
+                    basic_params.mQ.shape[3],
+                    basic_params.mQ.shape[0],
+                    basic_params.mQ.shape[2],
+                    basic_params.mK.shape[0],
+                )
+            )
+            cS = cute.local_tile(
+                mcS[basic_params.batch_idx, None, basic_params.q_head, None],
+                (self._m_block_size, self._n_block_size),
+                (basic_params.m_block, basic_params.n_block),
+            )
+            return self._make_acc_tensor_mn_view(mma_params.thr_mma.partition_C(cS))
+
+        @cute.jit
+        def load_bias_tile(self, basic_params: SimpleNamespace, mma_params: SimpleNamespace, rBias: cute.Tensor):
+            """Load this thread's elements of the in-band banded-bias tile into ``rBias``.
+
+            All rows of the tile share the query block start q0, so key k maps to band column
+            ``k - q0 + rel_extent`` (in [0, W) for every in-band tile): a dense sub-tile, no gather math.
+            """
+            tScS_mn = self._score_coords_mn(basic_params, mma_params)
+            rBias_mn = self._make_acc_tensor_mn_view(rBias)
+            rel_extent = basic_params.mRelBias.shape[1] - REL_BIAS_BLOCK
+            q0 = basic_params.m_block * self._m_block_size // REL_BIAS_BLOCK * REL_BIAS_BLOCK
+            column_offset = rel_extent - q0
+            for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
+                query_meta_idx = cutlass.min(tScS_mn[r, 0][1], basic_params.mQ.shape[0] - 1)
+                for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
+                    rBias_mn[r, c] = basic_params.mRelBias[
+                        query_meta_idx, tScS_mn[0, c][3] + column_offset, basic_params.q_head, basic_params.batch_idx
+                    ]
+
         def _make_acc_tensor_mn_view(self, acc: cute.Tensor) -> cute.Tensor:
             acc_layout_col_major = cute.make_layout(acc.layout.shape)
             acc_layout_mn = cute.make_layout(
@@ -941,12 +1025,13 @@ def segmented_flash_attention_forward_launcher(
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
         q_offset: cute.Tensor,
+        rel_bias: cute.Tensor,
         out: cute.Tensor,
         lse: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        kernel(q, k, v, lower_bounds, valid, q_offset, out, lse, softmax_scale, stream)
+        kernel(q, k, v, lower_bounds, valid, q_offset, rel_bias, out, lse, softmax_scale, stream)
 
     return _launch_segmented_flash_attention_forward
 
@@ -1096,6 +1181,7 @@ def segmented_flash_attention_backward_launcher(
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
         q_offset: cute.Tensor,
+        rel_bias: cute.Tensor,
         dq: cute.Tensor,
         dk: cute.Tensor,
         dv: cute.Tensor,
@@ -1108,17 +1194,17 @@ def segmented_flash_attention_backward_launcher(
         softmax_scale: cutlass.Float32,
     ):
         preprocess(
-            out,
-            dout,
-            dpsum,
-            lse,
-            lse_log2,
-            dq_accum,
-            None,
-            None,
-            None,
-            None,
-            None,
+            out,  # mO
+            dout,  # mdO
+            dpsum,  # mPdPsum
+            lse,  # mLSE
+            lse_log2,  # mLSElog2
+            dq_accum,  # mdQaccum
+            None,  # mCuSeqlensQ
+            None,  # mSeqUsedQ
+            None,  # mdLSE
+            None,  # mRowMax
+            None,  # mScaleP
             softmax_scale,
             None,
             stream,
@@ -1137,6 +1223,7 @@ def segmented_flash_attention_backward_launcher(
                 lower_bounds,
                 valid,
                 q_offset,
+                rel_bias,
                 softmax_scale,
                 None,
                 None,
@@ -1170,6 +1257,7 @@ def segmented_flash_attention_backward_launcher(
             lower_bounds,
             valid,
             q_offset,
+            rel_bias,
             softmax_scale,
             None,
             None,
@@ -1302,7 +1390,8 @@ def _native_segment_mask_mod(modules: Any) -> Any:
         batch_idx = utils_module.ssa_to_scalar(batch_idx)
         q_idx = utils_module.ssa_to_scalar(q_idx)
         kv_idx = utils_module.ssa_to_scalar(kv_idx)
-        lower_bounds, valid, q_offset = aux_tensors
+        # (lower_bounds, valid, q_offset), followed by the Inkling bias and its gradient when present.
+        lower_bounds, valid, q_offset = aux_tensors[0], aux_tensors[1], aux_tensors[2]
         query_in_bounds = cute.elem_less(q_idx, lower_bounds.shape[1])
         metadata_q_idx = q_idx if query_in_bounds else lower_bounds.shape[1] - 1
         query_valid = valid[batch_idx, metadata_q_idx] != 0
@@ -1344,6 +1433,42 @@ def _float32_zero_fill(modules: Any, *, num_threads: int) -> Any:
     return _Float32ZeroFill(num_threads)
 
 
+def _vectorized_zero_fill(modules: Any, *, num_threads: int) -> Any:
+    """Build a kernel that zeroes a contiguous gmem buffer of any dtype, 8 elements (>= 16 bytes) per thread."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+
+    class _VectorizedZeroFill:
+        _VEC = 8
+
+        def __init__(self, num_threads: int):
+            self._num_threads = num_threads
+
+        @cute.jit
+        def __call__(self, tensor: cute.Tensor, stream: cuda.CUstream):
+            if cutlass.const_expr(cute.size(tensor) % self._VEC != 0):
+                raise ValueError("zero-fill size must be a multiple of the vector width")
+            ptr = cute.make_ptr(tensor.element_type, tensor.iterator.toint(), cute.AddressSpace.gmem, assumed_align=16)
+            flat = cute.make_tensor(ptr, cute.make_layout(cute.size(tensor)))
+            self.kernel(flat).launch(
+                grid=[cute.ceil_div(cute.size(tensor) // self._VEC, self._num_threads), 1, 1],
+                block=[self._num_threads, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(self, flat: cute.Tensor):
+            tidx, _, _ = cute.arch.thread_idx()
+            bidx, _, _ = cute.arch.block_idx()
+            idx = bidx * self._num_threads + tidx
+            if idx < cute.size(flat) // self._VEC:
+                zeros = cute.make_rmem_tensor((self._VEC,), flat.element_type)
+                zeros.fill(0.0)
+                cute.autovec_copy(zeros, cute.local_tile(flat, (self._VEC,), (idx,)))
+
+    return _VectorizedZeroFill(num_threads)
+
+
 def _native_gmem_tensor_view(modules: Any) -> Any:
     """Build a view that marks a cutlass_call scratch buffer as 256-byte-aligned global memory."""
     cute = _import_cute_dependencies(modules).cute
@@ -1371,8 +1496,16 @@ def segmented_flash_attention_backward_sm90_launcher(
     qhead_per_kvhead: int,
     config: Flash4CuteSm90BackwardConfig,
     window_size_left: int | None = None,
+    use_rel_bias: bool = False,
 ) -> Any:
-    """Build the native Hopper segmented backward mainloop launcher."""
+    """Build the native Hopper segmented backward mainloop launcher.
+
+    When ``use_rel_bias`` is set, an Inkling relative-position bias A (passed as the fourth aux tensor after
+    lower_bounds, valid and q_offset,
+    kernel layout ``[S, L, Hq, B]``) is added to the recomputed scores via ``score_mod`` so dQ/dK/dV
+    match the biased forward. The bias is additive in the logits, so its backward chain rule is the
+    identity for dQ/dK/dV (``score_mod_bwd=None``); the bias gradient dA is computed separately.
+    """
     _validate_sm90_native_config(
         head_dim=head_dim,
         head_dim_v=head_dim_v,
@@ -1393,7 +1526,12 @@ def segmented_flash_attention_backward_sm90_launcher(
     else:
         raise TypeError(f"native SM90 segmented FA4/CuTe backward expects bf16/fp16, got {dtype}")
 
-    flash_bwd_sm90_module = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
+    # When adding the Inkling bias, use the grug-vendored sm90 backward (efficient inlined bias read
+    # in the S-recompute); otherwise use the stock external kernel unchanged.
+    if use_rel_bias:
+        flash_bwd_sm90_module = importlib.import_module("levanter.grug.attention._fa4_cute_flash_bwd_sm90")
+    else:
+        flash_bwd_sm90_module = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
     block_sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
     utils_module = importlib.import_module("flash_attn.cute.utils")
 
@@ -1403,8 +1541,14 @@ def segmented_flash_attention_backward_sm90_launcher(
     _patch_jax_array_list_tvm_ffi_converter()
 
     _grug_segment_mask_mod = _native_segment_mask_mod(modules)
-    zero_fill = _float32_zero_fill(modules, num_threads=config.num_threads)
+    # Dtype-generic: zeroes the fp32 dQ/dK/dV accumulators and the bf16 Inkling bias gradient.
+    zero_fill = _vectorized_zero_fill(modules, num_threads=config.num_threads)
     _as_gmem_tensor = _native_gmem_tensor_view(modules)
+
+    # GRUG: the Inkling relative-position bias is applied by an efficient inlined read in the vendored
+    # sm90 backward's apply_score_mod method (see _fa4_cute_flash_bwd_sm90.py). We only need a non-None
+    # sentinel here so the kernel takes the score_mod branch; the value itself is ignored by the method.
+    inkling_score_mod = "inkling_inline" if use_rel_bias else None
 
     tile_m, tile_n = config.tile
     backward = FlashAttentionBackwardSm90(
@@ -1428,10 +1572,12 @@ def segmented_flash_attention_backward_sm90_launcher(
         AtomLayoutMdQ=config.atom_layout_m_dq,
         num_threads=config.num_threads,
         V_in_regs=False,
-        score_mod=None,
-        score_mod_bwd=None,
+        score_mod=inkling_score_mod,
+        # Non-None sentinel triggers the vendored apply_score_mod_bwd, which scatters dS into the dA
+        # output (aux[4]); it leaves dQ/dK/dV grads unchanged (additive bias => identity).
+        score_mod_bwd=("inkling_inline" if use_rel_bias else None),
         mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
-        has_aux_tensors=not use_builtin_sliding_window,
+        has_aux_tensors=use_rel_bias or not use_builtin_sliding_window,
         q_subtile_factor=1,
         dQ_single_wg=config.dq_single_wg,
     )
@@ -1452,17 +1598,26 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_block_idx: cute.Tensor,
         full_block_cnt: cute.Tensor,
         full_block_idx: cute.Tensor,
+        rel_bias: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
+        rel_bias_grad: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
         blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx)
+        # dQ always accumulates (atomic fp32 adds across KV tiles); dK/dV accumulate only for GQA. MHA
+        # writes final dK/dV tiles directly (zeros for KV tiles with no Q blocks).
+        zero_fill(dq_accum, stream)
         if cutlass.const_expr(qhead_per_kvhead > 1):
-            zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
+        # dA output: zeroed so out-of-band / skipped-block entries stay 0 (the kernel only writes the
+        # in-band dS via apply_score_mod_bwd). For the RoPE path it is returned as zeros and ignored.
+        if cutlass.const_expr(use_rel_bias):
+            zero_fill(rel_bias_grad, stream)
+        rel_bias_grad_gmem = _as_gmem_tensor(rel_bias_grad)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)
         dpsum_gmem = _as_gmem_tensor(dpsum)
         dq_accum_gmem = _as_gmem_tensor(dq_accum)
@@ -1497,7 +1652,13 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_data=AuxData(tensors=(lower_bounds, valid, q_offset)),
+                aux_data=AuxData(
+                    tensors=(
+                        (lower_bounds, valid, q_offset, rel_bias, rel_bias_grad_gmem)
+                        if use_rel_bias
+                        else (lower_bounds, valid, q_offset)
+                    )
+                ),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )
