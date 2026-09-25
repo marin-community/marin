@@ -33,6 +33,7 @@ class SubmissionConvention(BaseModel):
         return self
 
     def supports(self, answer_type: AnswerType) -> bool:
+        """Whether this convention can carry the semantic result."""
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
 

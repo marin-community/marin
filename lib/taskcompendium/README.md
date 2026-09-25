@@ -42,6 +42,8 @@ flowchart LR
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
 
+The TaskTrove MCQA importer is one concrete source adapter for the [Nemotron knowledge MCQA corpus](https://huggingface.co/datasets/open-thoughts/TaskTrove/blob/0292300/laion__nemotron-gym-knowledge-mcqa-v2/tasks.parquet). Its caller resolves a cleaned release artifact and passes the archive bytes and release provenance to `read_archive`. The spec records the release revision and original archive identity. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions; the expected letter and option count stay in the private `tasktrove_mcqa` verifier payload.
+
 ## What is a lowering?
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with an environment binding, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the binding says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
