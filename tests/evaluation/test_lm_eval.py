@@ -13,7 +13,7 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 
 @pytest.mark.parametrize("effective", [0, 10])
 def test_run_lm_eval_checks_effective_fewshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effective: int) -> None:
-    def fake_run(_command: list[str], *, check: bool) -> None:
+    def fake_run(_command: list[str], **_kwargs: object) -> None:
         results_dir = tmp_path / "model"
         results_dir.mkdir()
         (results_dir / "results_test.json").write_text(
