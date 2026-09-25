@@ -289,7 +289,6 @@ class SnowballConfig(HFCompatConfig):
             initializer_std=float(_hf_attr(hf_config, ("initializer_std", "initializer_range"), 0.0098821)),
             qk_mult=float(_hf_attr(hf_config, ("qk_mult",), _DEFAULT_QK_MULT)),
             rope=rope,
-            attention_implementation="gpu_fa4_cute" if jax.default_backend() == "gpu" else None,
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> GrugMoeHfConfig:
@@ -468,7 +467,10 @@ class SnowballAttention(eqx.Module):
             q = _reshard_sequence(q, context)
             k = _reshard_sequence(k, None)
             v = _reshard_sequence(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        implementation = self.cfg.attention_implementation
+        if implementation is None and jax.default_backend() == "gpu":
+            implementation = "gpu_fa4_cute"
+        attn_out = attention(q, k, v, mask, implementation=implementation)
         if context is not None:
             attn_out = _reshard_sequence(attn_out, context)
         aligned_v = align_kv_heads(local_v, num_q_heads=attn_out.shape[2])
