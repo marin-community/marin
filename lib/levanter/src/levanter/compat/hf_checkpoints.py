@@ -54,10 +54,11 @@ from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
-from levanter.compat.fsspec_safetensor import StagingByteBudget, read_safetensors_fsspec
+from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
+from levanter.utils.byte_budget import HostByteBudget
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device
 from levanter.utils.logging import silence_transformer_nag
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
     from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
+MAX_CONCURRENT_HF_SHARDS = 16
 _PORTABLE_FAST_TOKENIZER_CLASS = "PreTrainedTokenizerFast"
 _TRANSFORMERS_V5_FAST_TOKENIZER_CLASS = "TokenizersBackend"
 
@@ -428,7 +430,7 @@ def _load_safe_tensors(
     path,
     dtype,
     fs: AbstractFileSystem | None = None,
-    staging_budget: StagingByteBudget | None = None,
+    staging_budget: HostByteBudget | None = None,
     mesh: jax.sharding.Mesh | None = None,
 ) -> dict:
     """Stream a safetensors shard from remote storage and return JAX arrays."""
@@ -466,13 +468,15 @@ def _load_safetensor_shards(
     paths: list[str], dtype: Optional[jnp.dtype], fs: AbstractFileSystem | None = None
 ) -> dict:
     """Read one checkpoint's shards concurrently with a shared staging budget."""
-    budget = StagingByteBudget()
+    budget = HostByteBudget(DEFAULT_STAGING_BUDGET_BYTES)
     mesh = get_concrete_mesh()  # Mesh contexts are thread-local.
 
     def load(path: str) -> dict:
         return _load_safe_tensors(path, dtype, fs=fs, staging_budget=budget, mesh=mesh)
 
-    with ThreadPoolExecutor(max_workers=min(4, len(paths)), thread_name_prefix="hf_shard") as pool:
+    with ThreadPoolExecutor(
+        max_workers=min(MAX_CONCURRENT_HF_SHARDS, len(paths)), thread_name_prefix="hf_shard"
+    ) as pool:
         shards = pool.map(load, paths)
         state_dict = {}
         for shard in shards:
