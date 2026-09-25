@@ -313,7 +313,7 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     assert not (tmp_path / "task").exists()
 
 
-def test_selection_samples_reproducibly_from_compatible_conventions(specification):
+def test_selection_policies_use_compatible_conventions(specification):
     conventions = (
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
