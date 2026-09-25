@@ -40,7 +40,7 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.heuristic import MoeHeuristic
-from experiments.grug.fast_track.model import GrugModelConfig
+from experiments.grug.fast_track.model import AttnResLayerBackward, GrugModelConfig, LocalMixer
 from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -92,6 +92,15 @@ _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
 }
 
 
+class Recipe(StrEnum):
+    """Architecture of the ladder model."""
+
+    BASELINE = "baseline"
+    """Sliding-window/global GQA softmax attention with half-RoPE and QK-norm."""
+    KMA = "kma"
+    """KDA local layers, MLA (KV latent) + Inkling global layers, Block AttnRes; see ``_kma_model``."""
+
+
 class MatchMode(StrEnum):
     """How to budget a run against its variant's baseline (dense@DENSE_TPP / MoE@MOE_TPP).
 
@@ -127,6 +136,8 @@ PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 MAX_RETRIES_FAILURE = 3
 MAX_TASK_FAILURES = 3
+PROFILE_START_STEP = 50
+PROFILE_NUM_STEPS = 5
 
 
 class ThroughputResult(Artifact):
@@ -147,6 +158,12 @@ class H100LadderRung:
     shape: SmallShape
     gpus_per_task: int
     baseline_batch: int  # baseline global batch for this rung (larger rungs run bigger batches)
+    # KMA memory/speed trade-offs (same math): where HBM allows, keep forward intermediates for backward
+    # (the AttnRes layer residuals, the KDA state pass's per-chunk states); where it does not,
+    # rematerialize the attention branch inside each AttnRes layer's backward.
+    attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
+    kda_save_chunk_states: bool = False
+    attn_res_remat_attention: bool = False
 
     @property
     def global_device_count(self) -> int:
@@ -155,13 +172,24 @@ class H100LadderRung:
 
 def _h100_ladder_rung(size: str) -> H100LadderRung:
     if size == "d512":
-        return H100LadderRung(SmallShape(512, 6, 4, 1, 1), gpus_per_task=8, baseline_batch=128)
+        return H100LadderRung(
+            SmallShape(512, 6, 4, 1, 1),
+            gpus_per_task=8,
+            baseline_batch=128,
+            attn_res_layer_backward=AttnResLayerBackward.SAVE,  # KMA d512: 34.5 GiB peak vs 11.7 recomputing
+            kda_save_chunk_states=True,
+        )
     if size == "d768":
         return H100LadderRung(SmallShape(768, 8, 6, 1, 1), gpus_per_task=8, baseline_batch=128)
     if size == "d1024":
         return H100LadderRung(SmallShape(1024, 12, 8, 2, 1), gpus_per_task=8, baseline_batch=256)
     if size == "d1280":
-        return H100LadderRung(SmallShape(1280, 14, 10, 2, 1), gpus_per_task=8, baseline_batch=256)
+        return H100LadderRung(
+            SmallShape(1280, 14, 10, 2, 1),
+            gpus_per_task=8,
+            baseline_batch=256,
+            attn_res_remat_attention=True,  # KMA d1280 OOMs without it
+        )
     raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
 
 
@@ -194,6 +222,27 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=None if dense else hidden // 2,  # dense carries no LatentMoE
+        attn_res_layer_backward=rung.attn_res_layer_backward,
+        kda_save_chunk_states=rung.kda_save_chunk_states,
+        attn_res_remat_attention=rung.attn_res_remat_attention,
+    )
+
+
+def _kma_model(model: GrugModelConfig) -> GrugModelConfig:
+    """The KMA recipe on a ladder model: KDA local layers (K3 layer, dt range 0.02-0.5), MLA global
+    layers with a 512-dim KV latent, full-rank Q and no QK-norm (qk_mult 1), the Inkling relative-position
+    bias in place of RoPE, Block AttnRes with 8 blocks, and SConv only on the attention/MLP branch
+    outputs (no K SConv)."""
+    return dataclasses.replace(
+        model,
+        local_mixer=LocalMixer.KDA,
+        mla=True,
+        inkling_relpos=True,
+        qk_norm=False,
+        qk_mult=1.0,
+        attn_res=True,
+        attn_res_num_blocks=8,
+        sconv_sites=("attn", "mlp"),
     )
 
 
@@ -266,12 +315,19 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    recipe: Recipe = Recipe.BASELINE,
+    attn_res_remat_attention: bool = False,
+    seed: int = 0,
+    profile: bool = False,
+    max_retries_failure: int = MAX_RETRIES_FAILURE,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
     Budget resolution (see ``MatchMode``): ``batch_size`` defaults to the rung's baseline batch;
     ``num_steps`` overrides the step count directly, else it is derived to data- or compute-match the
-    variant's baseline at that batch. Evaluation runs at the midpoint and end. Permanent checkpoints
+    variant's baseline at that batch. ``recipe`` picks the architecture; ``attn_res_remat_attention``
+    forces the KMA attention-branch remat on rungs that do not default to it. Evaluation runs at the
+    midpoint and end. Permanent checkpoints
     default to the final step, with one rolling hourly checkpoint on region-local temporary storage.
     """
     if not run_id.strip():
@@ -281,6 +337,12 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if recipe is Recipe.KMA:
+        model = _kma_model(model)
+    if attn_res_remat_attention:
+        if not model.attn_res:
+            raise ValueError("attn_res_remat_attention requires the kma recipe")
+        model = dataclasses.replace(model, attn_res_remat_attention=True)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -359,11 +421,11 @@ def build_h100_ladder_run(
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             jax_config=dict(DEFAULT_JAX_CONFIG),
-            profiler=ProfilerConfig(enabled=False),
+            profiler=ProfilerConfig(enabled=profile, start_step=PROFILE_START_STEP, num_steps=PROFILE_NUM_STEPS),
             mp=jmp.get_policy(mp_policy),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -419,7 +481,7 @@ def build_h100_ladder_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=rung.gpus_per_task,
-            max_retries_failure=MAX_RETRIES_FAILURE,
+            max_retries_failure=max_retries_failure,
             max_task_failures=MAX_TASK_FAILURES,
         )
 
@@ -437,7 +499,7 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
+def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -> None:
     """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
     python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
@@ -459,7 +521,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
         "--enable-extra-resources",
         *placement_args,
         "--priority",
-        "interactive",
+        priority,
         "--job-name",
         f"{run_id}-coord",
         "-e",
@@ -510,6 +572,41 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
 @click.option(
+    "--recipe",
+    type=click.Choice([r.value for r in Recipe]),
+    default=Recipe.BASELINE.value,
+    show_default=True,
+    help="Architecture: the baseline, or KMA (KDA local + MLA/Inkling global layers + Block AttnRes).",
+)
+@click.option(
+    "--attn-res-remat-attention",
+    is_flag=True,
+    help="KMA: recompute the attention branch in each AttnRes layer's backward (lower peak memory, one "
+    "extra attention forward per layer; always on at d1280).",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Trainer seed (model init and data key); vary it to measure run-to-run noise.",
+)
+@click.option("--profile", is_flag=True, help="Capture a JAX profile of a few steps (uploaded as a W&B artifact).")
+@click.option(
+    "--max-retries",
+    type=click.IntRange(min=0),
+    default=MAX_RETRIES_FAILURE,
+    show_default=True,
+    help="Training-job retries after a failure (0 for debugging runs).",
+)
+@click.option(
+    "--priority",
+    type=click.Choice(["production", "interactive", "batch"]),
+    default="interactive",
+    show_default=True,
+    help="Iris scheduling priority for --submit.",
+)
+@click.option(
     "--submit",
     is_flag=True,
     help="Submit as an Iris H100 job (wraps this launcher in `iris job run`); without it the "
@@ -530,11 +627,17 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    recipe: str,
+    attn_res_remat_attention: bool,
+    seed: int,
+    profile: bool,
+    max_retries: int,
+    priority: str,
     submit: bool,
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_to_cluster(run_id, target_cluster)  # re-execs iris; never returns
+        _submit_to_cluster(run_id, target_cluster, priority)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -544,6 +647,11 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        recipe=Recipe(recipe),
+        attn_res_remat_attention=attn_res_remat_attention,
+        seed=seed,
+        profile=profile,
+        max_retries_failure=max_retries,
     )
 
 

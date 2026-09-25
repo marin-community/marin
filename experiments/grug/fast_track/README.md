@@ -8,13 +8,14 @@ below from 9.4e16 to 4.3e19 FLOPs.
 | file | contents |
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
-| [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
+| [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE; KMA variant (KDA, MLA + Inkling, Block AttnRes) |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
 | [`grugmuon_stacked.py`](grugmuon_stacked.py) | Newton-Schulz orthogonalization (Muon direction) |
 | [`adamh.py`](adamh.py) | AdamH scale transform (the `adamh` LR group) |
 | [`heuristic.py`](heuristic.py) | compute-scaling LR / beta2 / epsilon fit |
 | [`router_metrics.py`](router_metrics.py) | routing-stats telemetry (logging-only) |
+| [`../moe/kda.py`](../moe/kda.py) | chunked Kimi Delta Attention kernels (XLA + fused Pallas) used by the KMA local layers |
 
 ## Results
 
@@ -108,6 +109,30 @@ MoE (data-match baseline; bump the batch — steps halve to hold tokens):
 uv run fast-track --submit --run-id moe-d768 --size d768 --batch-size 256 --version 2026.09.17
 ```
 
+MoE with the KMA recipe (`--recipe kma`):
+
+```bash
+uv run fast-track --submit --run-id kma-d768 --size d768 --recipe kma --version 2026.09.25
+```
+
+KMA swaps the architecture on the same ladder rung:
+
+- local layers: Kimi Delta Attention (Kimi K3's layer: L2-normed q/k, q/k/v ShortConv + SiLU,
+  low-rank forget gate `g = -5 sigmoid(exp(A_log) (x W_a_down W_a_up + dt_bias))` with `dt_bias`
+  initialized over `|g|` in 0.02-0.5, sigmoid write strength `beta`, per-channel output gate, output
+  RMSNorm, hard state resets at document boundaries, no window, no branch-output SConv);
+- global layers: MLA with a 512-dim normed KV latent and full-rank Q, 128-dim heads, no QK-norm
+  (`qk_mult` 1), no K SConv, and the Inkling relative-position bias (extent 1024) in place of RoPE;
+- residual stream: Block Attention Residuals with 8 blocks, a parameter-free RMS key norm and a
+  static final gate.
+
+Its optimizer groups: the AttnRes pseudo-queries take Adam at 0.1x the Adam LR; the Inkling weights
+and the KDA gate / `A_log` / `dt_bias` take Adam; the KDA `beta` projection takes MuonH at 2x the MuonH
+LR; every other KDA matrix follows the MuonH catch-all. Memory trade-offs are set per rung (all same
+math): d512 keeps the AttnRes layer residuals and the KDA chunk states for backward, d1280
+rematerializes each layer's attention branch in backward (`--attn-res-remat-attention` forces it on
+other rungs).
+
 MFU probe (any size, quick — explicit short budget):
 
 ```bash
@@ -121,11 +146,17 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--run-id` | **required** run identifier for artifact + W&B names |
 | `--size` | **required** `d512` / `d768` / `d1024` / `d1280` |
 | `--dense` | dense 3×hidden SwiGLU, no MoE (expert=1, normal eval) |
+| `--recipe` | `baseline` (default) or `kma` (KDA local + MLA/Inkling global layers + Block AttnRes) |
+| `--attn-res-remat-attention` | KMA: recompute the attention branch in backward (always on at d1280) |
 | `--match` | `data` (default) tokens-match or `compute` FLOP-match the variant baseline |
 | `--batch-size` | override the rung's baseline batch (steps rescale to hold the match) |
 | `--num-steps N` | set the step budget explicitly (ignores `--match`) |
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
+| `--seed` | trainer seed (model init and data key) for run-to-run noise estimates |
+| `--profile` | capture a JAX profile of steps 50-54 (uploaded to W&B) |
+| `--max-retries` | training-job retries after a failure (default 3; 0 for debugging) |
+| `--priority` | Iris priority for `--submit` (`interactive` default, `production`, `batch`) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
 | `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
 

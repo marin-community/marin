@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from dataclasses import dataclass
 
 import jax
@@ -82,6 +83,21 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
     return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+
+
+# KDA-layer leaves (``kda_blocks.stacked.attn.<leaf>``) and their update rules. The q/k/v/o and
+# output-gate matrices take the MuonH catch-all, the ShortConv kernels and output-norm scale are
+# ``.weight`` leaves (Adam).
+_KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
+# Low-rank forget gate, per-head A_log and per-channel dt_bias: Adam (no weight decay).
+_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias"})
+# Write-strength projection: MuonH at ``kda_beta_lr_mult`` x the MuonH LR.
+_KDA_BETA_LEAF = "w_beta"
+
+
+def _kda_leaf(path_lower: str) -> str | None:
+    match = _KDA_ATTN_LEAF.fullmatch(path_lower)
+    return None if match is None else match.group(1)
 
 
 def _is_gate_or_router_weight(path_lower: str) -> bool:
@@ -170,6 +186,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     - ``adamh``: ``output_proj`` / ``lm_head``.
     - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate`` / 1-D norm gains
       and the tiny SConv kernels.
+
+    The KMA variant adds the Inkling rel-pos weights and the KDA gate / decay parameters to ``adam``,
+    and two groups: ``attn_res_query`` (AttnRes pseudo-queries, Adam at ``attn_res_query_lr_scale`` x
+    ``adam_lr``) and ``kda_beta`` (the KDA write-strength projection, MuonH at ``kda_beta_lr_mult`` x
+    the MuonH LR).
     """
 
     adam_lr: float = 6e-4
@@ -183,13 +204,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     gate_router_weight_decay: float = 0.02
+    attn_res_query_lr_scale: float = 0.1
+    kda_beta_lr_mult: float = 2.0
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
-            def muonh_transform():
+            def muonh_transform_at(lr):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
@@ -199,7 +222,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
                         muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
+                        learning_rate=lr,
                         coefficient_type=self.coefficient_type,
                     )
                 )
@@ -228,10 +251,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
+            def plain_adam_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-lr))
+                return optax.chain(*components)
+
             transforms = {
-                "muonh": muonh_transform(),
+                "muonh": muonh_transform_at(learning_rate),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
+                "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
+                "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
@@ -246,6 +279,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            kda_leaf = _kda_leaf(path_lower)
+            if kda_leaf == _KDA_BETA_LEAF:
+                return "kda_beta"
+            if kda_leaf in _KDA_ADAM_LEAVES:
+                return "adam"
+            # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
+            if "attn_res_query" in path_lower:
+                return "attn_res_query"
+            # Inkling rel-pos weights (r_proj and the shared bias bank).
+            if ".rel_pos." in path_lower:
+                return "adam"
             if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:

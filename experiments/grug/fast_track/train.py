@@ -265,16 +265,22 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
 def _to_dropless_local(
     model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 ) -> Transformer:
-    """Swap the scanned block's MoE expert backend to the selected dropless local path.
+    """Swap every layer stack's MoE expert backend to the selected dropless local path.
 
-    ``implementation``/``expert_chunks`` are static fields shared across the whole stacked block,
-    so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
+    ``implementation``/``expert_chunks`` are static fields shared across a stacked block, so one
+    replacement per stack covers every layer. The forward reads ``self.expert_mlp.implementation``
     (not the model config), so this alone routes the eval dropless. Must run on an expert-collapsed
     mesh: the local backend raises when the mesh expert axis is larger than one.
     """
-    expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
-    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
-    return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
+
+    def stack_expert_mlps(m: Transformer) -> list:
+        return [stack.stacked.mlp.expert_mlp for stack in m.layer_stacks()]
+
+    dropless = [
+        dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
+        for expert_mlp in stack_expert_mlps(model)
+    ]
+    return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
 def build_tagged_evaluator(
@@ -491,7 +497,9 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         return model
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+    # qb_betas are in layer order; each stack takes the rows of its own layers.
+    per_stack = [new_bias[np.asarray(indices)] for indices in model.stack_layer_indices()]
+    return eqx.tree_at(lambda t: [stack.stacked.mlp.router_bias for stack in t.layer_stacks()], model, per_stack)
 
 
 def initial_state(
@@ -947,7 +955,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if key.startswith(("train/router/", "moe_bias/", "train/attn_res/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
