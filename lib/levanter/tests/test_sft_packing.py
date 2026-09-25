@@ -68,7 +68,7 @@ def tokenizer() -> MarinTokenizer:
         pytest.skip(f"Could not load tokenizer {MODEL_NAME}: {e}")
 
 
-def _chat_example(tokenizer: MarinTokenizer, cache_dir, conversations, *, max_segments: int):
+def _chat_example(tokenizer: MarinTokenizer, cache_dir, conversations, *, max_segments: int, slice_strategy="raise"):
     """Build the first ChatDataset example over `conversations` plus the processed rows."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     processor = ChatProcessor(tokenizer, chat_template=MULTI_TOOL_TEMPLATE, mask_user_turns=True)
@@ -88,7 +88,7 @@ def _chat_example(tokenizer: MarinTokenizer, cache_dir, conversations, *, max_se
         writer.result(),
         Axis("position", POS),
         max_segments_per_example=max_segments,
-        slice_strategy="raise",
+        slice_strategy=slice_strategy,
         mask_user_turns=True,
         block_cross_document_attention=True,
     )
@@ -208,6 +208,26 @@ def test_packed_loss_weight_charges_only_generation_spans(tokenizer, tmp_path):
 
     # Padding carries no loss.
     assert float(loss_weight[segments == -1].sum()) == 0.0
+
+
+def test_packed_chat_drops_overlong_conversation_without_charging_user_tokens(tokenizer, tmp_path):
+    oversized = [
+        {"role": "user", "content": "long prompt " * POS},
+        {"role": "assistant", "content": "answer that must not be trained"},
+    ]
+    example, processed = _chat_example(
+        tokenizer,
+        tmp_path / "drop-overlong",
+        [oversized, _CONV_CHAT],
+        max_segments=2,
+        slice_strategy="drop",
+    )
+    assert len(processed[0]["input_ids"]) > POS
+    tokens = np.asarray(example.tokens)
+    loss_weight = np.asarray(example.loss_weight)
+    charged_next_tokens = tokens[np.nonzero(loss_weight > 0)[0] + 1]
+    expected = processed[1]["input_ids"][processed[1]["assistant_masks"] == 1]
+    np.testing.assert_array_equal(charged_next_tokens, expected)
 
 
 def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
