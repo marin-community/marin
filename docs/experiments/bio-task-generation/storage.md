@@ -22,6 +22,8 @@ Transient object storage is not the sole location of release evidence. Promote a
 
 For each release, record the generation-code commit, task IDs and versions, source accessions, transformations, environment references, asset locations, byte sizes, content hashes, licenses and validation records. Pin Hugging Face downloads by immutable repository revision rather than a moving branch. Preserve revisions used by released manifests.
 
+Include the [instance relationships](task-authoring.md#recipe-variation-and-instance-relationships): operation and scientific-context labels, recipe IDs and versions, component references where used, study and input-asset IDs, generation parameters and derivation links. Downstream users choose their own grouping and splits from this metadata; releases do not assign splits.
+
 The loader should select a task, stage only its required assets, verify their hashes and assemble the Harbor package before solving starts. Shared assets may be cached by content hash; task loading must not require downloading the whole corpus. The exact layout must be tested with the supported Harbor loader before publication.
 
 ## Public artifacts and solver isolation
