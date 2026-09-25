@@ -31,6 +31,7 @@ from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+    _expand_compacted,
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
@@ -184,6 +185,45 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def test_expand_compacted_gradient_is_the_one_to_one_scatter():
+    """The expand backward (a gather through the inverse slot map) equals scattering each kept row's
+    cotangent to its compacted slot, with zeros in unused slots."""
+    rng = np.random.default_rng(1)
+    local_experts, receiver_capacity, hidden, received = 3, 4, 5, 20
+    compact_size = local_experts * receiver_capacity
+    slots = rng.permutation(compact_size)[:9]
+    linear = np.full(received, compact_size)
+    keep = np.zeros(received, dtype=bool)
+    rows = rng.permutation(received)[:9]
+    linear[rows], keep[rows] = slots, True
+    keep[rows[0]] = False  # a row with a slot index that is not kept must not contribute
+    linear[rows[0]] = compact_size
+    compacted = jnp.asarray(rng.normal(size=(local_experts, receiver_capacity, hidden)), jnp.float32)
+    cotangent = jnp.asarray(rng.normal(size=(received, hidden)), jnp.float32)
+    _, vjp = jax.vjp(lambda c: _expand_compacted(c, jnp.asarray(linear, jnp.int32), jnp.asarray(keep)), compacted)
+    (got,) = vjp(cotangent)
+    want = np.zeros((compact_size, hidden), np.float32)
+    for row in range(received):
+        if keep[row]:
+            want[linear[row]] = np.asarray(cotangent[row])
+    np.testing.assert_array_equal(np.asarray(got).reshape(compact_size, hidden), want)
+
+
+def test_receiver_ranks_count_earlier_assignments_to_the_same_expert():
+    """Each slot's rank is the number of earlier slots holding the same expert; empty slots get 0."""
+    rng = np.random.default_rng(0)
+    local_experts = 6
+    received_experts = rng.integers(-1, local_experts, size=500)
+    want = np.zeros_like(received_experts)
+    seen = np.zeros(local_experts, dtype=np.int64)
+    for i, expert in enumerate(received_experts):
+        if expert >= 0:
+            want[i] = seen[expert]
+            seen[expert] += 1
+    got = np.asarray(_receiver_ranks(jnp.asarray(received_experts, jnp.int32), local_experts=local_experts))
+    np.testing.assert_array_equal(got, want)
 
 
 def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():

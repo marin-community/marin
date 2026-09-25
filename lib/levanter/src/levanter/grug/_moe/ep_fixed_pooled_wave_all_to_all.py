@@ -283,12 +283,14 @@ def _expand_compacted_fwd(compacted_output, receiver_linear_indices, receiver_ke
 def _expand_compacted_bwd(residual, cotangent):
     receiver_linear_indices, receiver_keep, compacted_shape = residual
     compact_size = compacted_shape[0] * compacted_shape[1]
-    compacted_grad = (
-        jnp.zeros((compact_size + 1, compacted_shape[2]), dtype=cotangent.dtype)
-        .at[receiver_linear_indices]
-        .set(jnp.where(receiver_keep[:, None], cotangent, 0), mode="drop")
-    )
-    return compacted_grad[:compact_size].reshape(compacted_shape), None, None
+    # Kept rows map one-to-one onto compacted slots, so the transpose of the expand gather is a gather
+    # through the inverse map (an int scatter) rather than a scatter of full-width rows.
+    kept_indices = jnp.where(receiver_keep, receiver_linear_indices, compact_size)
+    compact_sources = _assignment_sources(kept_indices, send_size=compact_size)
+    source_valid = compact_sources < cotangent.shape[0]
+    rows = cotangent[jnp.minimum(compact_sources, cotangent.shape[0] - 1)]
+    compacted_grad = jnp.where(source_valid[:, None], rows, 0)
+    return compacted_grad.reshape(compacted_shape), None, None
 
 
 _expand_compacted.defvjp(_expand_compacted_fwd, _expand_compacted_bwd)
@@ -319,9 +321,12 @@ def _receiver_ranks(
     *,
     local_experts: int,
 ) -> Int[Array, " N"]:
-    expert_indicators = jax.nn.one_hot(received_experts, local_experts, dtype=jnp.int32)
-    inclusive_counts = jnp.cumsum(expert_indicators, axis=0, dtype=jnp.int32)
-    return jnp.sum((inclusive_counts - 1) * expert_indicators, axis=1, dtype=jnp.int32)
+    """Each received assignment's zero-based rank among earlier assignments to the same local expert
+    (0 for empty slots, ``received_experts < 0``). Sort-based: an inclusive count over a one-hot
+    ``[N, local_experts]`` matrix gives the same integers but costs a full-width cumsum."""
+    valid = received_experts >= 0
+    ranks = _ranks_within_groups(received_experts, num_groups=local_experts, valid=valid)
+    return jnp.where(valid, ranks, 0)
 
 
 def _interleaved_receiver_ranks(
