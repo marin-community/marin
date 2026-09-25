@@ -218,7 +218,6 @@ config:
       source_kind: manual
       source_ref: owner-recovery:new-gcp-json
       disposition: remove-candidate
-      disposition: keep
     - name: OPENAI_API_KEY
       scope: repository
       repository: marin-community/marin
@@ -280,14 +279,6 @@ config:
       source_ref: env:ANTHROPIC_ADMIN_KEY
       disposition: review
       note: Optional cost-report provider credential.
-    - name: CLAUDE_MAX_OAUTH_TOKEN
-      scope: repository
-      repository: marin-community/marin
-      presence: referenced-missing
-      source_kind: manual
-      source_ref: owner-recovery:claude-max-oauth-token
-      disposition: review
-      note: Fallback reference; CLAUDE_CODE_OAUTH_TOKEN is present at organization scope.
     - name: COREWEAVE_API_TOKEN
       scope: repository
       repository: marin-community/marin
