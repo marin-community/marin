@@ -14,6 +14,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
@@ -53,7 +54,7 @@ from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
-from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
+from levanter.compat.fsspec_safetensor import StagingByteBudget, read_safetensors_fsspec
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -423,7 +424,13 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None) -> dict:
     return d
 
 
-def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None) -> dict:
+def _load_safe_tensors(
+    path,
+    dtype,
+    fs: AbstractFileSystem | None = None,
+    staging_budget: StagingByteBudget | None = None,
+    mesh: jax.sharding.Mesh | None = None,
+) -> dict:
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
         fs, stripped = url_to_fs(path, asynchronous=True)
@@ -434,13 +441,43 @@ def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None) -> dic
         except AttributeError:
             pass
 
-    mesh = get_concrete_mesh()
+    if mesh is None:
+        mesh = get_concrete_mesh()
 
     loop = get_loop()
     bes = functools.partial(best_effort_sharding, mesh=mesh)
 
     # fsspec.asyn.sync erases the coroutine's Dict[str, jax.Array] return into a broad type.
-    return cast(dict, fsspec_sync(loop, read_safetensors_fsspec, path, dtype_override=dtype, sharding_fn=bes, fs=fs))
+    return cast(
+        dict,
+        fsspec_sync(
+            loop,
+            read_safetensors_fsspec,
+            path,
+            dtype_override=dtype,
+            sharding_fn=bes,
+            fs=fs,
+            staging_budget=staging_budget,
+        ),
+    )
+
+
+def _load_safetensor_shards(
+    paths: list[str], dtype: Optional[jnp.dtype], fs: AbstractFileSystem | None = None
+) -> dict:
+    """Read shards concurrently with one staging budget per host process."""
+    budget = StagingByteBudget()
+    mesh = get_concrete_mesh()  # Mesh contexts are thread-local.
+
+    def load(path: str) -> dict:
+        return _load_safe_tensors(path, dtype, fs=fs, staging_budget=budget, mesh=mesh)
+
+    with ThreadPoolExecutor(max_workers=min(4, len(paths)), thread_name_prefix="hf_shard") as pool:
+        shards = pool.map(load, paths)
+        state_dict = {}
+        for shard in shards:
+            state_dict.update(shard)
+    return state_dict
 
 
 # NB: for large models this will be jitted several times (once for each unique subset of keys at least)
@@ -823,22 +860,26 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             # Keep shard order deterministic across hosts.
             shard_files = list(dict.fromkeys(index["weight_map"].values()))
-            final_state_dict = {}
-
-            # where we load into memory then update some dict
             if "safetensors" in index_file:
                 loader = _load_safe_tensors
             else:
                 loader = _load_torch
 
+            shard_paths = []
             for shard_file in shard_files:
                 shard_path = os.path.join(id, shard_file)
                 if not os.path.exists(shard_path):
                     # Download the shard if not found locally
                     shard_path = hf_hub_download(id, shard_file, revision=rev)
 
-                shard_state_dict = loader(shard_path, dtype)
-                final_state_dict.update(shard_state_dict)
+                shard_paths.append(shard_path)
+
+            if loader is _load_safe_tensors:
+                return _load_safetensor_shards(shard_paths, dtype)
+
+            final_state_dict = {}
+            for shard_path in shard_paths:
+                final_state_dict.update(loader(shard_path, dtype))
 
         return final_state_dict
 
@@ -855,18 +896,17 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if not shard_files:
             raise FileNotFoundError(f"No HF-ish checkpoint files found in {url}")
 
-        for shard_file in shard_files:
-            shard_path = os.path.join(path, shard_file)
+        shard_paths = [os.path.join(path, shard_file) for shard_file in shard_files]
+        if loader is _load_safe_tensors:
+            return _load_safetensor_shards(shard_paths, dtype, fs=fs)
+
+        for shard_path in shard_paths:
             if not fs.exists(shard_path):
                 raise FileNotFoundError(f"Shard file {shard_path} not found")
 
-            if loader is _load_safe_tensors:
-                shard_state_dict = _load_safe_tensors(shard_path, dtype, fs=fs)
-            else:
-                assert loader is not None
-                shard_state_dict = _load_torch(shard_path, dtype, fs=fs)
-
-            final_state_dict.update(shard_state_dict)
+        assert loader is not None
+        for shard_path in shard_paths:
+            final_state_dict.update(_load_torch(shard_path, dtype, fs=fs))
 
         return final_state_dict
 

@@ -1,12 +1,19 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+import json
+import struct
+import threading
+
 import numpy as np
 import pytest
 import jax.numpy as jnp
 from fsspec.asyn import AsyncFileSystem
-from safetensors.numpy import load_file, save_file
+from fsspec.implementations.memory import MemoryFileSystem
+from safetensors.numpy import load_file, save, save_file
 from levanter.compat.fsspec_safetensor import (
+    StagingByteBudget,
     read_safetensors_fsspec,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -87,6 +94,75 @@ def test_load_from_remote_file_url(tmp_path, monkeypatch):
     assert set(remote_state.keys()) == set(expected.keys())
     for key in expected:
         np.testing.assert_array_equal(np.array(remote_state[key]), expected[key])
+
+
+def test_load_sharded_remote_reads_overlap(monkeypatch):
+    first = np.arange(8, dtype=np.float32)
+    second = np.arange(8, dtype=np.float32) + 10
+    shard_bytes = {"first.safetensors": save({"first": first}), "second.safetensors": save({"second": second})}
+    rendezvous = threading.Barrier(2, timeout=5)
+
+    class ObservedFS(MemoryFileSystem):
+        def cat_file(self, path, start=None, end=None, **kwargs):
+            if path.endswith(".safetensors") and start is not None:
+                name = path.rsplit("/", 1)[-1]
+                data_start = 8 + struct.unpack("<Q", shard_bytes[name][:8])[0]
+                if start >= data_start:
+                    rendezvous.wait()
+            return super().cat_file(path, start=start, end=end, **kwargs)
+
+    fs = ObservedFS()
+    for name, payload in shard_bytes.items():
+        fs.pipe(f"/model/{name}", payload)
+    fs.pipe(
+        "/model/model.safetensors.index.json",
+        json.dumps({"weight_map": {"first": "first.safetensors", "second": "second.safetensors"}}).encode(),
+    )
+
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.url_to_fs", lambda _: (fs, "/model"))
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.best_effort_sharding", lambda shape, mesh: None)
+
+    converter = HFCheckpointConverter.__new__(HFCheckpointConverter)
+    state = converter._load_from_remote("memory://model")
+
+    np.testing.assert_array_equal(np.asarray(state["first"]), first)
+    np.testing.assert_array_equal(np.asarray(state["second"]), second)
+
+
+@pytest.mark.asyncio
+async def test_safetensors_reads_respect_shared_staging_budget(monkeypatch):
+    payload = save({"first": np.arange(32, dtype=np.float32), "second": np.arange(32, dtype=np.float32)})
+    data_start = 8 + struct.unpack("<Q", payload[:8])[0]
+    monkeypatch.setattr("levanter.compat.fsspec_safetensor.DEFAULT_CHUNK_SIZE_BYTES", 128)
+    monkeypatch.setattr("levanter.compat.fsspec_safetensor.MAX_CONCURRENT_CHUNKS", 2)
+
+    class ObservedFS(AsyncFileSystem):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        async def _cat_file(self, path, start=None, end=None, **kwargs):
+            if start is not None and start >= data_start:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                await asyncio.sleep(0)
+                self.active -= 1
+            return payload[start:end]
+
+        async def _size(self, path):
+            return len(payload)
+
+    fs = ObservedFS()
+    arrays = await read_safetensors_fsspec("memory://model", fs=fs, staging_budget=StagingByteBudget(256))
+
+    assert fs.peak == 1
+    np.testing.assert_array_equal(np.asarray(arrays["first"]), np.arange(32, dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(arrays["second"]), np.arange(32, dtype=np.float32))
+
+    fs_without_pressure = ObservedFS()
+    await read_safetensors_fsspec("memory://model", fs=fs_without_pressure, staging_budget=StagingByteBudget(512))
+    assert fs_without_pressure.peak == 2
 
 
 @pytest.mark.asyncio

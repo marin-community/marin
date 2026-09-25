@@ -3,6 +3,7 @@
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import os
@@ -43,6 +44,32 @@ ShardingFunction = Callable[[Tuple[int, ...]], Optional[jax.sharding.Sharding]]
 
 DEFAULT_CHUNK_SIZE_BYTES = int(os.environ.get("LEVANTER_FSSPEC_CHUNK_BYTES", 2 * 1024**3))
 MAX_CONCURRENT_CHUNKS = int(os.environ.get("LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS", "4"))
+DEFAULT_STAGING_BUDGET_BYTES = 8 * 1024**3
+
+
+class StagingByteBudget:
+    """Bound raw and converted host buffers shared by concurrent shard readers."""
+
+    def __init__(self, limit: int = DEFAULT_STAGING_BUDGET_BYTES):
+        if limit <= 0:
+            raise ValueError("staging budget must be positive")
+        self.limit = limit
+        self._available = limit
+        self._condition = asyncio.Condition()
+
+    @contextlib.asynccontextmanager
+    async def reserve(self, size: int):
+        # A single tensor may exceed the budget. Let it proceed alone.
+        charge = min(size, self.limit)
+        async with self._condition:
+            await self._condition.wait_for(lambda: self._available >= charge)
+            self._available -= charge
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._available += charge
+                self._condition.notify_all()
 
 
 @dataclass(frozen=True)
@@ -209,6 +236,7 @@ async def read_safetensors_fsspec(
     dtype_override: Optional[jnp.dtype] = None,
     sharding_fn: Optional[ShardingFunction] = None,
     fs: Optional[AbstractFileSystem] = None,
+    staging_budget: Optional[StagingByteBudget] = None,
 ) -> Dict[str, jax.Array]:
     """
     Stream tensors from a safetensors file using fsspec, optionally sharding the outputs.
@@ -250,9 +278,11 @@ async def read_safetensors_fsspec(
     pbar = tqdm.tqdm(total=total_file_size, unit="B", unit_scale=True, desc=f"Reading {path}")
     progress_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max(1, min(MAX_CONCURRENT_CHUNKS, len(chunk_specs))))
+    staging_budget = staging_budget or StagingByteBudget()
 
     async def _materialize_chunk(chunk: ChunkSpec) -> Dict[str, jax.Array]:
-        async with semaphore:
+        # Reserve room for the range read and a possible dtype conversion copy.
+        async with semaphore, staging_budget.reserve(2 * chunk.size):
             raw = await async_fs._cat_file(chunk.file_path, start=chunk.byte_start, end=chunk.byte_end)
             chunk_view = memoryview(raw)
             chunk_results: Dict[str, jax.Array] = {}
@@ -277,6 +307,9 @@ async def read_safetensors_fsspec(
                     array = jnp.asarray(tensor_np)
 
                 chunk_results[record.key] = array
+
+            # device_put may retain the host buffer until its transfer completes.
+            await asyncio.to_thread(jax.block_until_ready, chunk_results)
 
             async with progress_lock:
                 pbar.update(chunk.size)
