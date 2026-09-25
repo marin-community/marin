@@ -1360,6 +1360,40 @@
         "promoter_records": 80
       },
       "limitations": "One observed Drosophila chromosome and Ensembl release; task covers protein-coding isoforms, not MANE Select or noncoding transcript universes. Native pass does not establish Harbor pass, exact CompBioBench endpoint coverage, reviewed competency or release credit. Harbor submission was rejected by automatic approval review pending user authorization for this packet."
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "fc1764b712",
+      "environment_kind": "Task-specific checksum-locked statsmodels 0.14.6 on existing reserved TRC CPU; package GLM with independent Newton and full row-keyed artifact comparison",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-clinical-package-check-20260925-113651",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 16,
+        "automatic_retries": 0,
+        "model_calls": 0
+      },
+      "input_bundle_sha256": "88f86f721355b28413f51f0d6076cf678bacc7dda5ba3e5322427c0bfc3fd1bf",
+      "output_archive_sha256": "ccfe0192a504d01610514e3e8d9e840bdd5d06c68e42c05130e3cbb384f4106f",
+      "output_archive_bytes": 8265,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-clinical-package-check-20260925-113651/0/2c5eb507df85d808/outputs.tar.zst",
+      "archive_storage_status": "Iris 7-day temporary regional output; exact lock and compact validation evidence preserved in this repository",
+      "checks_file": "native_validation_runs/ccfe0192a504.json",
+      "checks_sha256": "c7d1b0cfc97b10c723def38a3e8d4f7f20f774eb2396ad521f80b21f6f37c999",
+      "summary": {
+        "expected_repositories": 0,
+        "attempted_repositories": 0,
+        "passed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1
+      },
+      "limitations": "Package oracle and separate native reference agree for this fixed complete-case logit workflow. Harbor image build, terminal transfer, verifier and model-agent behavior remain separate gates."
     }
   ],
   "numerical_portability": [

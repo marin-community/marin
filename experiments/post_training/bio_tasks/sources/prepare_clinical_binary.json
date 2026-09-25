@@ -1,0 +1,44 @@
+{
+  "protocol_id": "medicaldata-licorice-gargle-binary-response-v1",
+  "source": {
+    "package": "medicaldata",
+    "version": "0.2.0",
+    "archive_url": "https://cran.r-project.org/src/contrib/medicaldata_0.2.0.tar.gz",
+    "archive_sha256": "56dab0c6078e6f9a9f183427a4481c5497e5d107b795bf965cc7ce4ac4c39236",
+    "member": "medicaldata/data/licorice_gargle.rda",
+    "member_sha256": "aa0fe8957848031e6bd9df8d327ad31b19633bdf4b918f937bba5346acc3b9d4",
+    "license": "MIT + file LICENSE",
+    "attribution": "Amy S. Nowacki, Licorice Gargle Dataset, TSHS Resources Portal (2017); Ruetzler et al., Anesthesia & Analgesia 117:614-621 (2013)",
+    "observations": "235 real adult trial participants, one row per participant; generated P0001-P0235 keys preserve source row order"
+  },
+  "independent_conversion_check": {
+    "url": "https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/medicaldata/licorice_gargle.csv",
+    "sha256": "2cc1078d1478095fd252e4d0cb9aa5ab5d71c9c41fdccb50af60a2756c937f4a",
+    "comparison": "All 19 observed source columns, row order, numerical values and missingness must agree with original RDA. Mirror is not the authoritative task source."
+  },
+  "cohort": {
+    "age": "preOp_age, years",
+    "bmi": "preOp_calcBMI, kg/m^2",
+    "recorded_gender": "preOp_gender, 0=male, 1=female as labeled by source",
+    "randomized_arm": "treat, 0=5g sugar-water, 1=0.5g licorice",
+    "outcome": "pacu30min_throatPain, recorded 0-10 sore-throat score at rest 30 minutes after PACU arrival",
+    "response_event": "Observed outcome equals zero, meaning no sore throat at that time point",
+    "missingness": "Use the same complete cases for age, BMI, recorded gender, arm and 30-minute outcome in every model; exclude two missing outcomes without imputation. Emit NA for their missing cohort response indicators.",
+    "expected_complete_cases": 233,
+    "expected_no_pain_responses": 169,
+    "observed_age_range_years": [18, 86],
+    "observed_bmi_range_kg_m2": [15.6, 36.33],
+    "range_note": "The package manual rounds the BMI range to 16-36; these exact extrema come from the original RDA and checked CSV mirror."
+  },
+  "models": {
+    "age": ["intercept", "licorice", "female", "age_per_10y"],
+    "bmi": ["intercept", "licorice", "female", "bmi_per_5kg_m2"],
+    "joint": ["intercept", "licorice", "female", "age_per_10y", "bmi_per_5kg_m2"],
+    "age_per_10y": "(age_years - 60) / 10",
+    "bmi_per_5kg_m2": "(bmi_kg_m2 - 25) / 5",
+    "estimator": "Unpenalized binomial-logit maximum likelihood, no interaction, model-based inverse observed-information standard errors, two-sided normal Wald tests",
+    "comparison": "AIC across all models; one-degree-of-freedom likelihood-ratio tests only for each nested reduced model versus joint"
+  },
+  "output_artifacts": ["trial.tsv", "cohort.tsv", "coefficients.tsv", "model_fit.tsv", "comparisons.tsv", "predictions.tsv", "reference.json"],
+  "limitations": "The endpoint is prevention of a recorded postoperative symptom, not remission from a chronic disease. Age/BMI associations are conditional on model covariates and do not establish treatment-response heterogeneity or clinical utility."
+}

@@ -752,7 +752,7 @@
     {
       "id": "clinical-binary-response",
       "title": "Fit and compare prespecified models for an observed binary clinical response",
-      "status": "source-assessment",
+      "status": "harbor-validated-method-component; exact benchmark endpoints unmapped",
       "targets": [
         {
           "benchmark": "BixBench",
@@ -793,7 +793,7 @@
           "canonical_task_id": "bix-51-q2",
           "relation": "identical-question",
           "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
+          "protocol_validation": "Shared binomial-logit machinery passed on independent trial; exact q51 outcome/model specification remains unmapped."
         },
         {
           "benchmark": "BixBench-Verified-50",
@@ -802,7 +802,7 @@
           "canonical_task_id": "bix-51-q8",
           "relation": "identical-question",
           "additional_rank_credit": 0,
-          "protocol_validation": "Still requires separate endpoint and artifact checks."
+          "protocol_validation": "Shared binomial-logit machinery passed on independent trial; exact q51 outcome/model specification remains unmapped."
         }
       ],
       "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
@@ -818,14 +818,30 @@
         "model coefficients, likelihoods and uncertainty",
         "prediction profiles and diagnostics"
       ],
-      "data_readiness": "The existing censored PBC survival cohort does not establish a binary treatment-response endpoint with the required covariates.",
+      "data_readiness": "medicaldata 0.2.0 licorice-gargle RCT: 235 observed patients, recorded age/BMI/gender/arm and 30-minute throat-pain outcome. Original RDA agrees with independent CSV conversion on every source field.",
       "blockers": [
-        "Acquire a documented independent response cohort with usable age/BMI/sex fields.",
-        "Do not recode censored survival as treatment response.",
-        "Check separation, sparse outcomes and categorical reference coding."
+        "BixBench-Verified-50 q51-q2 requires BMI as the sole predictor of camrelizumab efficacy PR; the validated licorice BMI model also includes arm and recorded gender, and its outcome is no postoperative pain.",
+        "BixBench-Verified-50 q51-q8 requires a simple age model for camrelizumab response; the validated licorice age model includes arm and gender. An independently validated age-only coefficient is still needed.",
+        "A new prespecified independent-data task must fit BMI-only and age-only models and validate exact artifacts before any endpoint-level method mapping; the different clinical outcome remains an explicit adaptation limit."
       ],
       "effort_tiebreak": "Medium after source validation; model summaries and independent likelihood checks required.",
-      "validation_evidence": []
+      "validation_evidence": [
+        {
+          "job_id": "/exedev/bio-clinical-binary-reference-20260925-112809",
+          "status": "passed native source/reference check",
+          "archive_sha256": "c27049610a50d3782b345a19118a3cd8a830ae8883df4e7d89f9b98f4e5729de"
+        },
+        {
+          "job_id": "/exedev/bio-clinical-package-check-20260925-113651",
+          "status": "passed pinned statsmodels package oracle and independent Newton check",
+          "archive_sha256": "ccfe0192a504d01610514e3e8d9e840bdd5d06c68e42c05130e3cbb384f4106f"
+        },
+        {
+          "job_id": "/exedev/bio-clinical-harbor-20260925-120003",
+          "status": "passed eight deterministic Harbor cases; no exact BixBench endpoint mapping",
+          "canonical_task_sha256": "f27c68c0592806c07103f40654b578f380d9d62dfbcaa72df586a3a39cc73404"
+        }
+      ]
     },
     {
       "id": "reference-gene-model-audit",
@@ -1208,7 +1224,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioSecBench-Refusal — direct framing",
+      "name": "BioSecBench-Refusal \u2014 direct framing",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "priority_score": null,
       "reason": "The reviewed release overview describes Routine and Red-Team tasks and paired public examples. Its refusal objective differs from successful analysis of observed data.",
@@ -1240,7 +1256,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "ABLE — agentic biological AI tool use",
+      "name": "ABLE \u2014 agentic biological AI tool use",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "priority_score": null,
       "reason": "The inspected primary abstract describes structure retrieval, sequence generation and design validation with biological AI tools; no task-level manifest has been inspected.",
@@ -1248,7 +1264,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioASQ — retrieval / end-to-end QA",
+      "name": "BioASQ \u2014 retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
       "reason": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",

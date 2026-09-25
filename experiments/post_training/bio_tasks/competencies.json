@@ -32,7 +32,8 @@
     "real-phix-assembly": "bio.assembly-qc",
     "real-phix-bam-read-structure": "bio.read-quality",
     "real-heme-pocket-burial": "bio.ligand-structure-affinity",
-    "real-dmel-gene-model-audit": "bio.genomic-interval-operations"
+    "real-dmel-gene-model-audit": "bio.genomic-interval-operations",
+    "real-clinical-binary-response": "bio.clinical-response-model"
   },
   "validated_assignments": [],
   "release_ready_assignments": [],

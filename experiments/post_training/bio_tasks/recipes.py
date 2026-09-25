@@ -21,6 +21,7 @@ from experiments.post_training.bio_tasks.generators.reads import RECIPES as READ
 from experiments.post_training.bio_tasks.generators.real_assembly import RECIPES as REAL_ASSEMBLY_RECIPES
 from experiments.post_training.bio_tasks.generators.real_bam import RECIPES as REAL_BAM_RECIPES
 from experiments.post_training.bio_tasks.generators.real_clinical import RECIPES as REAL_CLINICAL_RECIPES
+from experiments.post_training.bio_tasks.generators.real_clinical_binary import RECIPES as REAL_CLINICAL_BINARY_RECIPES
 from experiments.post_training.bio_tasks.generators.real_clusters import RECIPES as REAL_CLUSTER_RECIPES
 from experiments.post_training.bio_tasks.generators.real_domains import RECIPES as REAL_DOMAIN_RECIPES
 from experiments.post_training.bio_tasks.generators.real_enrichment import RECIPES as REAL_ENRICHMENT_RECIPES
@@ -915,6 +916,7 @@ RECIPES = (
     *REAL_SINGLECELL_RECIPES,
     *REAL_SINGLECELL_REPRESENTATION_RECIPES,
     *REAL_CLINICAL_RECIPES,
+    *REAL_CLINICAL_BINARY_RECIPES,
     *REAL_GENOMES_RECIPES,
     *REAL_GENE_MODEL_RECIPES,
     *REAL_READS_RECIPES,
@@ -958,7 +960,7 @@ DOMAIN_RECIPES = {
         + REAL_SINGLECELL_RECIPES
         + REAL_SINGLECELL_REPRESENTATION_RECIPES
     ),
-    "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES,
+    "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES + REAL_CLINICAL_BINARY_RECIPES,
     "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES + REAL_PHYLOGENY_RECIPES,
     "assembly-and-ecology": ASSEMBLY_RECIPES + REAL_ASSEMBLY_RECIPES,
     "structures-and-proteomics": (

@@ -23,6 +23,7 @@ from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SO
 from experiments.post_training.bio_tasks.solvers.real_assembly import solve_assembly
 from experiments.post_training.bio_tasks.solvers.real_bam import solve_bam
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_clinical_binary import solve_clinical_binary
 from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clusters
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
 from experiments.post_training.bio_tasks.solvers.real_enrichment import solve_enrichment
@@ -59,6 +60,7 @@ OUTPUT_SOLVERS = {
     "real-rnaseq-shrinkage-enrichment-audit": solve_enrichment,
     "real-singlecell-representation-audit": solve_representation,
     "real-dmel-gene-model-audit": solve_gene_model,
+    "real-clinical-binary-response": solve_clinical_binary,
 }
 
 

@@ -1781,6 +1781,76 @@
         "duration_seconds": 21.58,
         "retries": 0
       }
+    },
+    "medicaldata:licorice_gargle": {
+      "landing_page": "https://higgi13425.github.io/medicaldata/reference/licorice_gargle.html",
+      "lineage": "Ruetzler-2013-licorice-gargle-randomized-trial",
+      "citation": "Ruetzler et al., Anesthesia & Analgesia 117:614-621 (2013); medicaldata 0.2.0, Licorice Gargle Dataset.",
+      "license": "MIT + file LICENSE for the medicaldata 0.2.0 CRAN package and contained dataset",
+      "license_source": "https://cran.r-project.org/src/contrib/medicaldata_0.2.0.tar.gz:medicaldata/DESCRIPTION,LICENSE",
+      "retrieved_at": "2026-09-25",
+      "data_origin": "real",
+      "observations": "235 original randomized trial participants. Stable task IDs follow source row order; no patient observations were generated.",
+      "outcome_semantics": "pacu30min_throatPain is recorded 0-10 sore-throat score 30 minutes after PACU arrival. The task event is observed score zero, no pain at that time point; it is not chronic disease remission.",
+      "source_validation": "Original RDA member and independently published Rdatasets CSV conversion agree on all 235 rows, 19 fields, values, order and missingness. The original RDA is authoritative.",
+      "benchmark_screening": "Independent observed source, not a BixBench fixture. BixBench-51 endpoint correspondences remain provisional and require individual review; BioMysteryBench is held out.",
+      "assets": {
+        "medicaldata_0.2.0.tar.gz": {
+          "role": "original source package with DESCRIPTION and LICENSE",
+          "url": "https://cran.r-project.org/src/contrib/medicaldata_0.2.0.tar.gz",
+          "download_sha256": "56dab0c6078e6f9a9f183427a4481c5497e5d107b795bf965cc7ce4ac4c39236",
+          "vendored_sha256": "56dab0c6078e6f9a9f183427a4481c5497e5d107b795bf965cc7ce4ac4c39236",
+          "vendored_bytes": 510194,
+          "rda_member": "medicaldata/data/licorice_gargle.rda",
+          "rda_member_sha256": "aa0fe8957848031e6bd9df8d327ad31b19633bdf4b918f937bba5346acc3b9d4"
+        },
+        "licorice-gargle-trial.tsv.gz": {
+          "role": "solver input",
+          "content_sha256": "5727ac676777c6ef57d3479d92a2afbcc7fa302b6dd830ca02cc1cca412b0f03",
+          "content_bytes": 7116,
+          "vendored_sha256": "11ca331586a94280034ec073120a664c1f75af23962fb4a23229ab07edb5e9fd",
+          "vendored_bytes": 1839,
+          "transformation": "Original package rows P0001-P0235, five unmodified numeric columns renamed with units and zero-padded row-order IDs; gzip level 9, mtime 0."
+        },
+        "licorice-gargle-binary-reference.json.gz": {
+          "role": "private reference; never solver input",
+          "content_sha256": "d670c05687f1a8a28c0dc74c69e001d77136f5eaec88873ffd47b7d445d88aaa",
+          "content_bytes": 24631,
+          "vendored_sha256": "5075a890b9a9bae35a51735fda65d1967da995a82758f632dc6aa1388814adc2",
+          "vendored_bytes": 3438,
+          "transformation": "Full typed row-keyed statsmodels reference from the original RDA; gzip level 9, mtime 0."
+        }
+      },
+      "independent_conversion": {
+        "url": "https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/medicaldata/licorice_gargle.csv",
+        "sha256": "2cc1078d1478095fd252e4d0cb9aa5ab5d71c9c41fdccb50af60a2756c937f4a",
+        "comparison": "All 19 RDA fields, row order, values and missingness agree; CSV is a cross-check only."
+      },
+      "native_preparation": {
+        "job_id": "/exedev/bio-clinical-binary-reference-20260925-112809",
+        "archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-clinical-binary-reference-20260925-112809/0/dd5d9fd7265ccb0a/outputs.tar.zst",
+        "archive_sha256": "c27049610a50d3782b345a19118a3cd8a830ae8883df4e7d89f9b98f4e5729de",
+        "archive_bytes": 7000,
+        "package_versions": {
+          "numpy": "2.3.5",
+          "pandas": "2.3.3",
+          "pyreadr": "0.5.6",
+          "scipy": "1.17.0",
+          "statsmodels": "0.14.6"
+        },
+        "independent_newton_check": "Every cohort, coefficient, model-fit, comparison and prediction row agrees; maximum numerical difference below 4e-13.",
+        "status": "reference-passed; package oracle and Harbor separate"
+      },
+      "limitations": "One trial and one postoperative symptom time point. The task does not test ordinal pain, interactions, transportability, model calibration, or treatment-response heterogeneity.",
+      "package_oracle_validation": {
+        "job_id": "/exedev/bio-clinical-package-check-20260925-113651",
+        "archive_sha256": "ccfe0192a504d01610514e3e8d9e840bdd5d06c68e42c05130e3cbb384f4106f",
+        "archive_bytes": 8265,
+        "lock_sha256": "ef8c7bfc2ed4b37f3c3ca076a7a10b45a24e726048d03760ecac4c98dbce7772",
+        "checks_file": "native_validation_runs/ccfe0192a504.json",
+        "checks_sha256": "c7d1b0cfc97b10c723def38a3e8d4f7f20f774eb2396ad521f80b21f6f37c999",
+        "status": "passed all five row-keyed artifact tables and seven summary fields; Harbor separate"
+      }
     }
   },
   "excluded_candidate_lineages": [

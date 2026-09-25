@@ -6036,6 +6036,161 @@
         }
       ],
       "limitations": "One observed GSE81682 lineage and one frozen instance. This validates the declared read-count representation workflow, not all single-cell benchmark endpoints or human performance."
+    },
+    {
+      "job_id": "/exedev/bio-clinical-harbor-20260925-120003",
+      "source_revision": "fc1764b712f8038d196b28bfc3282f31075411b1 + frozen source bundle overlay",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "passed",
+      "validation_role": "canonical-registered-task; family-method evidence, no exact BixBench-51 endpoint credit",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "fresh private pinned-package oracle with terminal setup check",
+      "agent_and_verifier_backend": "Daytona",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 7,
+      "discriminating_negative_cases": 6,
+      "source_bundle_sha256": "12591af7e667d1a84898829b9f88c2fef5909ae15faa9f550313cf34e1138519",
+      "package_evidence_sha256": "ccfe0192a504d01610514e3e8d9e840bdd5d06c68e42c05130e3cbb384f4106f",
+      "environment_lock_sha256": "ef8c7bfc2ed4b37f3c3ca076a7a10b45a24e726048d03760ecac4c98dbce7772",
+      "reference_contract_sha256": "f7d8475d4fa75c462ddbe27c4505d02857a06c7bc8bc9d79674ed2332a343008",
+      "reference_oracle_archive_sha256": "bc774ec8e4826ce7710c7a7d76b1a4858aef3abbadaba5494618c18cc7ba8cde",
+      "canonical_task_id": "real-clinical-binary-response-v1-20260925-00000",
+      "canonical_task_sha256": "f27c68c0592806c07103f40654b578f380d9d62dfbcaa72df586a3a39cc73404",
+      "instruction_sha256": "01c3496ff3885484e0a666017d86911b2856818bc7a4ecdd7b61be9d34c6eeae",
+      "task_toml_sha256": "589fac2da5cbd392bef8da03263cfbcb341623381672b1f3bbfe8b2072e61da9",
+      "canonical_task_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/f27c68c0592806c07103f40654b578f380d9d62dfbcaa72df586a3a39cc73404/harbor/train/real-clinical-binary-response-v1-20260925-00000",
+      "private_oracle_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/f27c68c0592806c07103f40654b578f380d9d62dfbcaa72df586a3a39cc73404/oracles/real-clinical-binary-response-v1-20260925-00000",
+      "canonical_corpus_files": 13,
+      "canonical_corpus_bytes": 194381,
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-clinical-harbor-20260925-120003/0/9a31cd24220737cf/outputs.tar.zst",
+        "bytes": 49607,
+        "sha256": "0c945016279bd7e83a53c1ed47e2350ebdd3647ed37f06b71b8fdbe678f4b3db",
+        "retention": "Iris regional temporary seven-day output"
+      },
+      "evidence": {
+        "local_sanitized_file": "/tmp/bio-clinical-harbor-20260925/verified-evidence/evidence.json",
+        "sha256": "952c2837ae88475b80ae58c19f4f7c8551af90f589e9522769b95cc2c565be31"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-50c80a11",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a-worker-0"
+      },
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 16,
+        "timeout_seconds": 3600,
+        "harbor_timeout_seconds": 2400,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "cleanup": {
+        "trials": 8,
+        "actions": 0,
+        "remaining": 0
+      },
+      "summary_identity_check": "Five artifact-only controls preserved all seven passing summary fields; wrong-event control failed only no_pain_responses while all artifacts passed.",
+      "cases": [
+        {
+          "control": "fresh-native-oracle",
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "changed-response-coding",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "cohort.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "changed-treatment-coefficient",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "coefficients.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-joint-aic",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "model_fit.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-likelihood-ratio",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "comparisons.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-prediction-profile",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "predictions.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-event-orientation",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 6,
+          "summary_checks_total": 7,
+          "summary_failure_fields": [
+            "no_pain_responses"
+          ]
+        },
+        {
+          "control": "empty-output",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "coefficients.tsv",
+            "cohort.tsv",
+            "comparisons.tsv",
+            "model_fit.tsv",
+            "predictions.tsv"
+          ],
+          "summary_checks_passed": 0,
+          "summary_checks_total": 0,
+          "summary_failure_fields": []
+        }
+      ],
+      "limitations": "One observed licorice trial and fixed no-pain endpoint. This verifies binary-logit/AIC machinery, not the exact camrelizumab efficacy-PR q51-q2/q51-q8 endpoints; those remain unmapped. BMI and age reduced models also include arm and gender, unlike sole-predictor benchmark models. No disease-remission, transportability, interaction or human-performance claim."
     }
   ]
 }

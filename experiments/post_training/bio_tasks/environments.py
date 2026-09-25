@@ -15,7 +15,7 @@ SOURCE = Path(__file__).parent
 
 @dataclass(frozen=True)
 class EnvironmentProfile:
-    repository_index: int
+    repository_index: int | None
     evidence: str
     memory_mb: int
     blas_core: str | None = None
@@ -44,6 +44,7 @@ PROFILES = {
     "real-phix-assembly": EnvironmentProfile(27, "native_validation_runs/cd4c5520958b.json", 4096),
     "real-phix-bam-read-structure": EnvironmentProfile(3, "native_validation_runs/81c78459a53b.json", 2048),
     "real-dmel-gene-model-audit": EnvironmentProfile(19, "native_validation_runs/1d21faa8f7b0.json", 2048),
+    "real-clinical-binary-response": EnvironmentProfile(None, "native_validation_runs/ccfe0192a504.json", 2048),
 }
 
 
@@ -58,7 +59,11 @@ def environment_files(recipe: str, base_image: str) -> TaskFiles:
     raw = (SOURCE / profile.evidence).read_bytes()
     if hashlib.sha256(raw).hexdigest() != record["checks_sha256"]:
         raise ValueError(f"Changed environment validation evidence: {profile.evidence}")
-    check = next(row for row in json.loads(raw)["checks"] if row["repository_index"] == profile.repository_index)
+    checks = json.loads(raw)["checks"]
+    if profile.repository_index is None:
+        check = next(row for row in checks if row["recipe"] == recipe and row.get("repository_index") is None)
+    else:
+        check = next(row for row in checks if row["repository_index"] == profile.repository_index)
     if check["status"] != "passed":
         raise ValueError(f"Environment has no passing reference check: {recipe}")
     packages = check["environment"]["resolved_packages"]

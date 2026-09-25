@@ -1,51 +1,47 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-25T11:22:36Z",
+  "updated_at": "2026-09-25T12:15:00Z",
   "benchmark": "BixBench-Verified-50",
   "inventory": "bixbench-verified-50.json",
   "purpose": "Choose the next realistic Harbor tasks for a Verified-first MVP. This is an authoring queue, not a coverage ledger.",
   "counting": "The 50 Verified question IDs alias original BixBench IDs. Count each shared task group once across the two inventories. A workflow-family match, native component, or source question alone earns no completed coverage; validate every claimed endpoint and artifact on independent observed data.",
   "selection_rule": [
+    "Read each target's exact Verified question before freezing a task protocol; workflow-family stages are insufficient to establish endpoint coverage. Record the question's exact model specification, filtering population, output statistic, and any adaptation before assigning credit.",
     "Prefer a connected workflow that can exercise several currently uncovered Verified endpoints without combining unrelated scientific questions.",
     "Require observed input with verified source identity, rights suitable for training-task redistribution, and no source-capsule or biological-lineage leakage.",
     "Favor a complete native-package oracle, deterministic artifact checks, and an offline Harbor runtime near or below 30 minutes.",
     "After each accepted task, recompute missing endpoints and select the next feasible workflow. Do not force a blocked family merely because it has many question IDs."
   ],
+  "review_checkpoint": "After the first three independently sourced, Harbor-validated tasks from distinct Verified workflow families, inspect their public examples, negative-control failures and exact endpoint mappings before scaling the remaining queue. This is a review point, not a task-count cap.",
   "current_assignments": [
     {
       "workstream": "clinical-logistic-regression",
       "owner": "review_enrichment_task",
-      "state": "native reference passed; independent solver and Harbor acceptance pending",
-      "candidate": "clinical-binary-response",
+      "state": "adjusted-model Harbor task passed but misses exact sole-predictor questions; univariable task authoring, no endpoint credit",
+      "candidate": "clinical-univariable-logit-audit",
       "endpoint_ids": [
         "bix-51-q2",
         "bix-51-q8"
       ]
     },
     {
-      "workstream": "chromosomal-cpg-density or expression-essentiality-association",
+      "workstream": "chromosomal-cpg-density",
       "owner": "gene_model_task_sol_high",
-      "state": "independent source and endpoint screening",
-      "candidate": null,
+      "state": "independent observed source prepared; corrected exact-question task authoring, no endpoint credit",
+      "candidate": "anole-age-cpg-density",
       "endpoint_ids": [
         "bix-52-q2",
         "bix-52-q6",
-        "bix-52-q7",
-        "bix-16-q1",
-        "bix-16-q3",
-        "bix-16-q4"
+        "bix-52-q7"
       ]
     },
     {
-      "workstream": "gene-length-expression-association or colony-morphometry",
+      "workstream": "gene-length-expression-association",
       "owner": "bam_harbor_sol_high",
-      "state": "independent source and endpoint screening",
-      "candidate": null,
+      "state": "independent CD14 source gate passed; exact-question task authoring, no endpoint credit",
+      "candidate": "cd14-gene-length-expression",
       "endpoint_ids": [
-        "bix-22-q1",
-        "bix-22-q4",
-        "bix-18-q1",
-        "bix-18-q3"
+        "bix-22-q4"
       ]
     }
   ],
@@ -81,7 +77,7 @@
         "bix-52-q7"
       ],
       "capsule_count": 1,
-      "state": "source-screening"
+      "state": "task-authoring"
     },
     {
       "rank": 3,
@@ -102,7 +98,7 @@
         "bix-22-q4"
       ],
       "capsule_count": 1,
-      "state": "source-screening"
+      "state": "task-authoring"
     },
     {
       "rank": 5,
