@@ -20,7 +20,7 @@ class ModelHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        assert request["tools"][0]["function"]["name"] == "Bash"
+        assert [tool["function"]["name"] for tool in request["tools"]] == ["Bash"]
         completed = sum(message["role"] == "tool" for message in request["messages"])
         if completed >= len(self.bash_commands):
             message = {"role": "assistant", "content": "Done."}

@@ -10,7 +10,7 @@ from harbor.agents.base import BaseAgent, TurnCapExhaustedError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from shellbox.machine import BashSessionProvider, ShellUpdate
+from shellbox.machine import BashSessionProvider, ShellSession, ShellUpdate
 
 BASH_TOOL = {
     "type": "function",
@@ -18,56 +18,24 @@ BASH_TOOL = {
         "name": "Bash",
         "description": (
             "Run a command in the persistent Bash shell. Directory, variables, functions, and jobs persist. "
+            "A completed command returns output and exit_code; a long command returns status=running. "
+            "To continue a running command, omit command to read, pass input to send text, or set signal=interrupt. "
             "Output is capped at 128 KiB; redirect larger output to a file."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command to run"},
+                "input": {
+                    "type": "string",
+                    "description": "Text to send to a running command; include a newline to submit",
+                },
+                "signal": {"type": "string", "enum": ["interrupt"], "description": "Interrupt the foreground process"},
                 "wait_ms": {"type": "integer", "description": "Wait up to this many milliseconds; maximum 30000"},
             },
-            "required": ["command"],
         },
     },
 }
-
-BASH_READ_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "BashRead",
-        "description": "Read output and status from the current Bash command.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "wait_ms": {"type": "integer", "description": "Wait up to this many milliseconds; maximum 30000"}
-            },
-        },
-    },
-}
-
-BASH_INPUT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "BashInput",
-        "description": "Send text to the current interactive Bash command; include a newline to submit it.",
-        "parameters": {
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
-        },
-    },
-}
-
-BASH_INTERRUPT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "BashInterrupt",
-        "description": "Send Ctrl-C to the current Bash foreground process group.",
-        "parameters": {"type": "object", "properties": {}},
-    },
-}
-
-BASH_TOOLS = [BASH_TOOL, BASH_READ_TOOL, BASH_INPUT_TOOL, BASH_INTERRUPT_TOOL]
 SHELLSIM_BASH_TOOL = {
     **BASH_TOOL,
     "function": {
@@ -77,6 +45,11 @@ SHELLSIM_BASH_TOOL = {
             "ShellSim uses built-in commands and does not execute arbitrary native programs. "
             "Output is capped at 128 KiB; redirect larger output to a file."
         ),
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string", "description": "Shell command to run"}},
+            "required": ["command"],
+        },
     },
 }
 BASH_OUTPUT_LIMIT_BYTES = 128 * 1024
@@ -128,7 +101,7 @@ class BashAgent(BaseAgent):
         if not isinstance(environment, BashSessionProvider):
             raise TypeError("BashAgent requires an environment with persistent Bash sessions")
         shell = await environment.open_bash_session()
-        tools = BASH_TOOLS if shell.interactive else [SHELLSIM_BASH_TOOL]
+        tools = [BASH_TOOL if shell.interactive else SHELLSIM_BASH_TOOL]
         messages: list[dict] = [
             {"role": "system", "content": "Solve the task using the Bash tool. Say when finished."},
             {"role": "user", "content": instruction},
@@ -158,23 +131,7 @@ class BashAgent(BaseAgent):
                     name = call["function"]["name"]
                     arguments = json.loads(call["function"]["arguments"])
                     if name == "Bash":
-                        result = _shell_result(
-                            await shell.execute(
-                                arguments["command"],
-                                wait=_wait_seconds(arguments),
-                                output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES,
-                            )
-                        )
-                    elif name == "BashRead":
-                        result = _shell_result(
-                            await shell.read(wait=_wait_seconds(arguments), output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES)
-                        )
-                    elif name == "BashInput":
-                        await shell.write(arguments["text"].encode())
-                        result = _shell_result(await shell.read(wait=0.5, output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES))
-                    elif name == "BashInterrupt":
-                        await shell.interrupt()
-                        result = _shell_result(await shell.read(wait=5, output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES))
+                        result = _shell_result(await _bash_action(shell, arguments))
                     else:
                         raise ValueError(f"Unsupported tool: {name}")
                     messages.append(
@@ -185,3 +142,21 @@ class BashAgent(BaseAgent):
                         }
                     )
         raise TurnCapExhaustedError(f"BashAgent reached {self.max_turns} turns")
+
+
+async def _bash_action(shell: ShellSession, arguments: dict) -> ShellUpdate:
+    actions = {name for name in ("command", "input", "signal") if name in arguments}
+    if len(actions) > 1:
+        raise ValueError("Bash accepts one of command, input, or signal per call")
+    wait = _wait_seconds(arguments)
+    if "command" in arguments:
+        return await shell.execute(arguments["command"], wait=wait, output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES)
+    if not shell.interactive:
+        raise ValueError("ShellSim Bash requires command")
+    if "input" in arguments:
+        await shell.write(arguments["input"].encode())
+    elif "signal" in arguments:
+        if arguments["signal"] != "interrupt":
+            raise ValueError(f"Unsupported Bash signal: {arguments['signal']}")
+        await shell.interrupt()
+    return await shell.read(wait=wait, output_limit_bytes=BASH_OUTPUT_LIMIT_BYTES)
