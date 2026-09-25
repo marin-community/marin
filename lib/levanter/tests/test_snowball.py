@@ -335,7 +335,7 @@ def test_snowball_load_path_multidevice_sharding():
     assert "OK" in result.stdout
 
 
-def test_snowball_fresh_process_hf_discovery(tmp_path):
+def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
     """HF config loading must leave the JAX backend uninitialized for distributed setup."""
     cfg = _tiny_config()
     hf = cfg.to_hf_config(cfg.vocab_size)
