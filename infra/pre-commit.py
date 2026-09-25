@@ -51,6 +51,9 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    # Preserve the measured Atomic Ops baseline and its original MIT license.
+    "lib/levanter/src/levanter/kernels/pallas/gdn2/upstream/**",
+    "lib/levanter/src/levanter/kernels/pallas/gdn2/LICENSE",
     # grpc generated files
     "**/*_connect.py",
     "**/*_pb2.py",
