@@ -7,9 +7,19 @@ import hashlib
 import json
 from typing import Any
 
-from taskcompendium.models import AnswerType, FunctionCall, NativeFunction, Source, TaskRequirements, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    FunctionCall,
+    NativeActionRequest,
+    NativeFunction,
+    NativeMessage,
+    Source,
+    TaskRequirements,
+    TaskSpec,
+    format_native_messages,
+)
 from taskcompendium.nemo_verifier import predicted_action_verifier
-from taskcompendium.submission import AnswerFormat, NativeMessage, SubmissionConvention, format_native_messages
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
@@ -131,14 +141,15 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
         source=source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.NATIVE_ACTION,
-        permitted_submission_conventions=("nemo-native-final-action",),
+        native_action_request=NativeActionRequest(
+            functions=functions,
+            messages=messages,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+        ),
     )
     convention = SubmissionConvention(
-        id="nemo-native-final-action",
+        id="native-final-action",
         answer_format=AnswerFormat.FINAL_ACTION,
-        functions=functions,
-        messages=messages,
-        tool_choice=tool_choice,
-        parallel_tool_calls=parallel_tool_calls,
     )
     return specification, convention

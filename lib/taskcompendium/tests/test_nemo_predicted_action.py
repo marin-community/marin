@@ -16,6 +16,7 @@ from taskcompendium.importers.nemo_predicted_action import canonical_sha256, imp
 from taskcompendium.lowering import HarborTaskBinding, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
 from taskcompendium.predicted_action import compare, decode_action
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 
@@ -36,16 +37,19 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert specification.answer_type == AnswerType.NATIVE_ACTION
     assert convention.supports(AnswerType.NATIVE_ACTION)
     assert not convention.supports(AnswerType.FILE)
+    request = specification.native_action_request
+    assert request is not None
     assert specification.source.dataset == provenance["dataset"]
     assert specification.source.revision == provenance["dataset_revision"]
-    assert [message.role for message in convention.messages] == ["system", "user", "assistant", "user"]
-    assert convention.messages[0].content == row["responses_create_params"]["input"][0]["content"]
-    assert convention.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
+    assert [message.role for message in request.messages] == ["system", "user", "assistant", "user"]
+    assert request.messages[0].content == row["responses_create_params"]["input"][0]["content"]
+    assert request.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
     task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     convention_data = json.loads((task / "submission_convention.json").read_text())
-    assert "authenticate_user" in {function["name"] for function in convention_data["functions"]}
+    assert convention_data == {"id": "native-final-action", "answer_format": "final_action"}
+    assert "authenticate_user" in {function.name for function in request.functions}
     assert not (task / "tests").exists()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
@@ -139,6 +143,18 @@ def test_predicted_action_rejects_instruction_message_drift(tmp_path):
     assert not (tmp_path / "task").exists()
 
 
+def test_predicted_action_reuses_final_action_convention_without_changing_source_request(tmp_path):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, _ = import_row(row, canonical_sha256(row))
+    convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
+    candidates = compatible_lowerings(specification, (convention,), (HarborTaskBinding(),))
+
+    assert len(candidates) == 1
+    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    exported = read_specification(task / "specification.json")
+    assert exported.native_action_request == specification.native_action_request
+
+
 @pytest.mark.parametrize(
     "response,reward,status",
     [
@@ -213,7 +229,8 @@ async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_pat
 
 async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification, _ = import_row(row, canonical_sha256(row))
+    convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
     binding = HarborTaskBinding()
     task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
     requests = []
@@ -236,8 +253,17 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": 1.0}
     request, authorization = requests[0]
-    assert request["tools"][0]["function"]["name"] == "authenticate_user"
-    assert request["messages"] == [{"role": message.role, "content": message.content} for message in convention.messages]
+    native_request = specification.native_action_request
+    assert native_request is not None
+    assert [tool["function"]["name"] for tool in request["tools"]] == [
+        function.name for function in native_request.functions
+    ]
+    assert [tool["function"]["parameters"] for tool in request["tools"]] == [
+        function.parameters for function in native_request.functions
+    ]
+    assert request["messages"] == [
+        {"role": message.role, "content": message.content} for message in native_request.messages
+    ]
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert authorization == "Bearer test-token"

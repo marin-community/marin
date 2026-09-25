@@ -71,7 +71,8 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
     """Run a lowered task through Harbor's agent, environment, and custom verifier."""
     if binding != read_binding(task_dir / BINDING_FILE):
         raise ValueError("Launch binding differs from the exported task binding")
-    validate_binding(read_specification(task_dir / SPECIFICATION_FILE), binding)
+    specification = read_specification(task_dir / SPECIFICATION_FILE)
+    validate_binding(specification, binding)
     try:
         convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     except ValueError:
@@ -87,11 +88,14 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
     }
     kwargs = dict(launch.agent_kwargs)
     if launch.agent == "chat" and convention is not None and convention.answer_format == AnswerFormat.FINAL_ACTION:
+        request = specification.native_action_request
+        if request is None:
+            raise ValueError("Final-action task requires a source request")
         agents["chat"] = "taskcompendium.harbor.adapter:NativeActionAgent"
-        kwargs["functions"] = [function.model_dump(mode="json") for function in convention.functions]
-        kwargs["messages"] = [message.model_dump(mode="json") for message in convention.messages]
-        kwargs["tool_choice"] = convention.tool_choice
-        kwargs["parallel_tool_calls"] = convention.parallel_tool_calls
+        kwargs["functions"] = [function.model_dump(mode="json") for function in request.functions]
+        kwargs["messages"] = [message.model_dump(mode="json") for message in request.messages]
+        kwargs["tool_choice"] = request.tool_choice
+        kwargs["parallel_tool_calls"] = request.parallel_tool_calls
     agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": kwargs}
     if launch.model is not None:
         agent["model_name"] = launch.model

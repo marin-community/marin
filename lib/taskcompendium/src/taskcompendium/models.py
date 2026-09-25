@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 
 
 class AnswerType(StrEnum):
@@ -97,6 +97,47 @@ class NativeFunction(BaseModel):
     strict: bool | None = None
 
 
+class NativeMessage(BaseModel):
+    """One source conversation turn sent to a native-action model."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    role: str
+    content: str
+
+    @model_validator(mode="after")
+    def validate_message(self) -> "NativeMessage":
+        if self.role not in {"system", "user", "assistant"} or not self.content.strip():
+            raise ValueError("Native messages require a supported role and nonempty content")
+        return self
+
+
+def format_native_messages(messages: tuple[NativeMessage, ...]) -> str:
+    """Produce the Harbor instruction view of structured source messages."""
+    return "\n\n".join(f"{message.role.title()}:\n{message.content.strip()}" for message in messages)
+
+
+class NativeActionRequest(BaseModel):
+    """Source conversation and advertised output functions for one task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    messages: tuple[NativeMessage, ...]
+    functions: tuple[NativeFunction, ...]
+    tool_choice: str | None = None
+    parallel_tool_calls: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "NativeActionRequest":
+        if not self.messages or not self.functions:
+            raise ValueError("Native actions require messages and advertised functions")
+        if len({function.name for function in self.functions}) != len(self.functions):
+            raise ValueError("Advertised function names must be unique")
+        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
+            raise ValueError("Unsupported native tool choice")
+        return self
+
+
 class TaskRequirements(BaseModel):
     """Environment functionality required to run the task.
 
@@ -122,7 +163,7 @@ class TaskSpec(BaseModel):
     source: Source
     requirements: TaskRequirements
     answer_type: AnswerType
-    permitted_submission_conventions: tuple[str, ...] | None = None
+    native_action_request: NativeActionRequest | None = None
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -131,9 +172,11 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
             raise ValueError("A task id and instructions are required")
-        if self.permitted_submission_conventions is not None:
-            if not self.permitted_submission_conventions:
-                raise ValueError("At least one submission convention must be permitted")
-            if len(set(self.permitted_submission_conventions)) != len(self.permitted_submission_conventions):
-                raise ValueError("Permitted submission conventions must be unique")
+        if self.answer_type == AnswerType.NATIVE_ACTION:
+            if self.native_action_request is None:
+                raise ValueError("Native-action tasks require a source request")
+            if self.instructions != format_native_messages(self.native_action_request.messages):
+                raise ValueError("Final-action instructions differ from source messages")
+        elif self.native_action_request is not None:
+            raise ValueError("Only native-action tasks can carry a source request")
         return self
