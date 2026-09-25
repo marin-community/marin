@@ -345,6 +345,46 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_ungraded_extraction_filters_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = [
+        {
+            key: value
+            for key, value in _lm_eval_row(0, name, 0.0, response).items()
+            if key not in {"metrics", "exact_match"}
+        }
+        for name, response in (("strict-match", "[invalid]"), ("flexible-extract", "4"))
+    ]
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).output for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_ungraded_filter_variants_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    raw = _lm_eval_row(0, "none", 0.0, "4")
+    del raw["filter"], raw["metrics"], raw["exact_match"]
+    raw["filter_variants"] = [
+        {"filter": "strict-match", "filtered_resps": ["[invalid]"], "metrics": {}},
+        {"filter": "flexible-extract", "filtered_resps": ["4"], "metrics": {}},
+    ]
+    _write_jsonl(results, [raw])
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).extracted for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
 def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     # lm-eval stamps each row with its own numeric schema_version; it is not a score.
     results = tmp_path / "run" / "results"

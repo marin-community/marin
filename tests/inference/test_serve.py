@@ -30,6 +30,7 @@ from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
+from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
@@ -67,7 +68,7 @@ from marin.inference.model_preparation import resolve_model_path, select_tensor_
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -218,10 +219,14 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
 
 def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeypatch):
     observed: dict[str, object] = {}
+    observed_chat_templates: list[str] = []
 
     @contextmanager
     def environment(**kwargs):
         observed.update(kwargs)
+        extra_args = kwargs["extra_args"]
+        template_path = extra_args[extra_args.index("--chat-template") + 1]
+        observed_chat_templates.append(Path(template_path).read_text())
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
@@ -230,6 +235,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     model = ServedModelConfig(
         weights="org/model",
@@ -249,6 +255,37 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
     assert extra_args[extra_args.index("--revision") + 1] == "model-sha"
     assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
     assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "tokenizer-sha"
+    assert observed_chat_templates == ["{{ messages }}"]
+
+
+def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
+    observed_templates = []
+
+    @contextmanager
+    def environment(**kwargs):
+        extra_args = kwargs["extra_args"]
+        observed_templates.append(Path(extra_args[extra_args.index("--chat-template") + 1]).read_text())
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+    spec = ModelSpec(
+        weights="org/model",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content=None,
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+    )
+
+    with VllmBackend(VllmEngineConfig(), port=8000).start(spec):
+        pass
+
+    assert observed_templates == ["{{ messages }}"]
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):

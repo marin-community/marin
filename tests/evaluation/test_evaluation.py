@@ -18,7 +18,7 @@ from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, EvalSample, EvaluationStore, 
 from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _coverage_with_aggregate_counts
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -503,6 +503,16 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
+def test_aggregate_coverage_keeps_the_full_benchmark_extent():
+    coverage = {
+        "custom": TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=0, errors={"ungraded": 10}),
+    }
+
+    reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {"total_examples": 10.0}})
+
+    assert reconciled["custom"] == TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=10)
 
 
 def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypatch):
