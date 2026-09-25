@@ -7,14 +7,22 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.checkpoint import load_checkpoint
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator, Transformer
-from experiments.grug.moe_hero_pipeline.pipeline import _copy_array_to_host, split_transformer
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_hero_pipeline.checkpoint import checkpoint_state, restore_checkpoint, save_checkpoint
+from experiments.grug.moe_hero_pipeline.pipeline import (
+    GrugMoeAutomaticPipelineState,
+    _copy_array_to_host,
+    split_transformer,
+)
 
 
 def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
@@ -175,3 +183,76 @@ def test_parked_host_copy_survives_device_alias_deletion_and_restores_bits():
     parked.delete()
     assert restored.sharding == sharding
     np.testing.assert_array_equal(np.asarray(restored).view(np.uint32), values.view(np.uint32))
+
+
+@pytest.mark.parametrize("optimizer_name", ["adamw", "muonh"])
+def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_path, optimizer_name):
+    mesh, model = _tiny_hero(QbEstimator.HIST)
+    optimizer = (
+        optax.adamw(1e-4)
+        if optimizer_name == "adamw"
+        else GrugMoeMuonHConfig(learning_rate=1e-4, adam_lr=1e-4, warmup=0).build(3)
+    )
+
+    def pipeline_state(layer_counts):
+        stages = split_transformer(model, len(layer_counts), layer_counts=layer_counts)
+        trainable = []
+        for stage in stages:
+            params, _ = eqx.partition(stage, eqx.is_array)
+            for index in range(len(stage.blocks)):
+                params = eqx.tree_at(lambda current, index=index: current.blocks[index].mlp.router_bias, params, None)
+            trainable.append(params)
+        return GrugMoeAutomaticPipelineState(
+            trainable_params=tuple(trainable),
+            opt_state=tuple(optimizer.init(params) for params in trainable),
+            pending_qb_betas=tuple(
+                jnp.arange(len(stage.blocks) * model.config.num_experts, dtype=jnp.float32).reshape(
+                    len(stage.blocks), model.config.num_experts
+                )
+                + 10 * stage.start_layer
+                for stage in stages
+            ),
+        )
+
+    with jax.set_mesh(mesh):
+        state = pipeline_state((2, 3))
+        if optimizer_name == "adamw":
+            gradients = jax.tree.map(jnp.ones_like, state.trainable_params)
+            updates = tuple(
+                optimizer.update(gradient, opt_state, params)
+                for gradient, opt_state, params in zip(gradients, state.opt_state, state.trainable_params, strict=True)
+            )
+            state = dataclasses.replace(
+                state,
+                trainable_params=tuple(
+                    optax.apply_updates(params, update)
+                    for params, (update, _) in zip(state.trainable_params, updates, strict=True)
+                ),
+                opt_state=tuple(next_state for _, next_state in updates),
+            )
+        else:
+            # MuonH's sharded Newton-Schulz update is GPU-only; give each state
+            # array a distinct nonzero value to test its nested checkpoint tree.
+            state = dataclasses.replace(
+                state,
+                opt_state=jax.tree.map(lambda value: value + jnp.ones_like(value), state.opt_state),
+            )
+        canonical = checkpoint_state(state)
+        root = str(tmp_path)
+        path = save_checkpoint(root, state, step=1, contract={"model": "tiny-hero", "optimizer": optimizer_name})
+        loaded = load_checkpoint(jax.tree.map(jnp.zeros_like, canonical), path)
+        assert jax.tree.structure(loaded) == jax.tree.structure(canonical)
+        for actual, expected in zip(jax.tree.leaves(loaded), jax.tree.leaves(canonical), strict=True):
+            np.testing.assert_array_equal(actual, expected)
+
+        destination = pipeline_state((1, 1, 1, 1, 1))
+        destination = jax.tree.map(jnp.zeros_like, destination)
+        shardings = jax.tree.map(lambda value: value.sharding, destination)
+        restored, completed = restore_checkpoint(
+            root, destination, shardings, contract={"model": "tiny-hero", "optimizer": optimizer_name}
+        )
+        assert completed == 1
+        restored_canonical = checkpoint_state(restored)
+        assert jax.tree.structure(restored_canonical) == jax.tree.structure(canonical)
+        for actual, expected in zip(jax.tree.leaves(restored_canonical), jax.tree.leaves(canonical), strict=True):
+            np.testing.assert_array_equal(actual, expected)

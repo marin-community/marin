@@ -275,7 +275,29 @@ def split_transformer(
     layer_counts: tuple[int, ...] | None = None,
 ) -> tuple[GrugMoePipelineStage, ...]:
     """Split a Grug MoE transformer into contiguous stage pytrees."""
-    blocks = _unstacked_blocks(model)
+    full_stage = GrugMoePipelineStage(
+        token_embed=model.token_embed,
+        embed_norm=model.embed_norm,
+        embed_gated_norm=model.embed_gated_norm,
+        output_proj=model.output_proj,
+        blocks=_unstacked_blocks(model),
+        final_norm=model.final_norm,
+        final_gated_norm=model.final_gated_norm,
+        config=model.config,
+        start_layer=0,
+        end_layer=model.config.num_layers,
+    )
+    return split_pipeline_stage(full_stage, num_stages, layer_counts=layer_counts)
+
+
+def split_pipeline_stage(
+    stage: GrugMoePipelineStage,
+    num_stages: int,
+    *,
+    layer_counts: tuple[int, ...] | None = None,
+) -> tuple[GrugMoePipelineStage, ...]:
+    """Partition contiguous Hero layers while keeping boundary modules on edge stages."""
+    blocks = stage.blocks
     if layer_counts is None:
         ranges = evenly_partition_layers(len(blocks), num_stages)
     else:
@@ -293,16 +315,16 @@ def split_transformer(
         is_last = stage_index == num_stages - 1
         stages.append(
             GrugMoePipelineStage(
-                token_embed=model.token_embed if is_first else None,
-                embed_norm=model.embed_norm if is_first else None,
-                embed_gated_norm=model.embed_gated_norm if is_first else None,
-                output_proj=model.output_proj if is_last else None,
+                token_embed=stage.token_embed if is_first else None,
+                embed_norm=stage.embed_norm if is_first else None,
+                embed_gated_norm=stage.embed_gated_norm if is_first else None,
+                output_proj=stage.output_proj if is_last else None,
                 blocks=blocks[start_layer:end_layer],
-                final_norm=model.final_norm if is_last else None,
-                final_gated_norm=model.final_gated_norm if is_last else None,
-                config=model.config,
-                start_layer=start_layer,
-                end_layer=end_layer,
+                final_norm=stage.final_norm if is_last else None,
+                final_gated_norm=stage.final_gated_norm if is_last else None,
+                config=stage.config,
+                start_layer=stage.start_layer + start_layer,
+                end_layer=stage.start_layer + end_layer,
             )
         )
     return tuple(stages)
