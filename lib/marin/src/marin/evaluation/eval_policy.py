@@ -139,6 +139,12 @@ POLICIES: Mapping[str, Mapping[str, PolicyEval]] = MappingProxyType(
         SEPTEMBER_24_VERSION: SEPTEMBER_24,
     }
 )
+RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
+        SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
+    }
+)
 
 
 def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
@@ -235,16 +241,27 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
     """Keep evaluator versions fixed within a verified cohort."""
     if version not in POLICIES:
         return ()
-    commit = EVALCHEMY_COMMIT if evaluation.mechanism == "evalchemy" else HARBOR_COMMIT
+    commits = RUNTIME_COMMITS.get(version)
+    if commits is None:
+        return (f"missing evaluator pins for {version}",)
+    commit = commits.get(evaluation.mechanism)
+    if commit is None:
+        return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
     if commit not in runtime:
         return (f"evaluator runtime must use commit {commit}",)
-    if evaluation.harbor is not None and evaluation.harbor.harbor_config_commit != HARBOR_COMMIT:
-        return (f"Harbor preflight must use commit {HARBOR_COMMIT}",)
+    if evaluation.harbor is not None:
+        harbor_commit = commits.get("harbor")
+        if harbor_commit is None:
+            return (f"missing harbor evaluator pin for {version}",)
+        if evaluation.harbor.harbor_config_commit != harbor_commit:
+            return (f"Harbor preflight must use commit {harbor_commit}",)
     return ()
 
 
 def record_policy_violations(record: EvalRunRecord) -> tuple[str, ...]:
-    """Validate both the saved launch settings and the actual evaluator runtime."""
+    """Validate verified records; historical labels remain readable without a policy claim."""
+    if record.version not in POLICIES:
+        return ()
     return (
         *policy_violations(record.version, record.model, record.evaluation),
         *runtime_violations(record.version, record.evaluation, record.provenance.eval_runtime),

@@ -46,6 +46,7 @@ def _panel(store, **kwargs):
 
 def test_api_defaults_to_the_current_verified_cohort():
     assert evaldash_app._selection({}).cohort_version == "eval-policy-2026-09-24-verified"
+    assert evaldash_app._selection({"cohort": ""}).cohort_version == "eval-policy-2026-09-24-verified"
     assert evaldash_app._selection({"cohort": "all"}).cohort_version is None
 
 
@@ -160,6 +161,7 @@ def test_api_surface_over_fixtures(client):
     meta = client.get("/meta").json()
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
+    assert meta["verified_cohorts"] == ["eval-policy-2026-09-16-verified", "eval-policy-2026-09-24-verified"]
 
     panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}

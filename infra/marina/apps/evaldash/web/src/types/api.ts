@@ -141,13 +141,20 @@ export interface PanelFamily {
   default: string
 }
 
+export interface PolicyRejection {
+  run_id: string
+  model: string
+  benchmark: string
+  reasons: string[]
+}
+
 export interface Panel {
   benchmarks: string[]
   protocols: Record<string, { metric: string; kind: string }>
   panel: string[]
   families: PanelFamily[]
   rows: PanelRow[]
-  policy_rejections: { run_id: string; model: string; reasons: string[] }[]
+  policy_rejections: PolicyRejection[]
   request: PanelRequest
 }
 
@@ -174,7 +181,7 @@ export interface Comparison {
   benchmarks: string[]
   shared: string[]
   rows: ComparisonRow[]
-  policy_rejections: { run_id: string; model: string; reasons: string[] }[]
+  policy_rejections: PolicyRejection[]
   aggregates: Record<string, PanelAggregate | null>
 }
 
@@ -192,6 +199,7 @@ export interface EvalFamily {
 export interface Meta {
   models: string[]
   default_cohort: string
+  verified_cohorts: string[]
   evals: string[]
   suites: EvalSuite[]
   families: EvalFamily[]

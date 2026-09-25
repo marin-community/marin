@@ -136,16 +136,16 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-The API defaults to `cohort=eval-policy-2026-09-24-verified`; `cohort=all` selects the newest admissible run per benchmark across cohorts. A named verified cohort admits only records with its approved benchmark config, evaluator revision, and thinking mode. Historical policy labels remain in run detail, but do not qualify as verified comparisons. Models with different normalized source YAMLs have separate comparison names ending in `@<12-character digest>`.
+The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`. Historical labels remain selectable, and `cohort=all` selects the newest admissible run per benchmark across cohorts. The UI marks those views with an asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved benchmark config, evaluator revision, and thinking mode. Models with different normalized source YAMLs have separate comparison names ending in `@<12-character digest>`.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
 of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
-size for a capped run, or a metric protocol mismatch. A cohort that re-ran only part of a model's
-benchmark set does not hide results that are still the newest available for their own benchmark when
-`cohort=all` is selected. A `(model, benchmark)` with no admitted
-cell is reported in `missing` with the reason and the offending run, so an empty cell is explained.
+size for a capped run, or a metric protocol mismatch. A cohort may contain only a subset of
+its benchmarks. A `(model, benchmark)` with no admitted cell is reported in `missing` with the reason
+and the offending run. Policy-rejected runs are reported separately with their model, benchmark,
+run ID, and reasons, scoped to the selected cohort and filters.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
 is produced carries its panel, per-benchmark metrics, and policy. An unusable query value (an unknown
