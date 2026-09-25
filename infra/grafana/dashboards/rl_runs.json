@@ -497,23 +497,151 @@
     },
     {
       "id": 20,
+      "type": "table",
+      "title": "Span coverage: clock domain, ranks, failed steps",
+      "description": "Rows per role and `clock_domain`, the ranks that reported, and steps with `outcome=failure`. `_launch` rows measure launch time and are not comparable with `_wall` rows. A failed step looks fast.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 9
       },
-      "panelRef": "rl_span_coverage"
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No spans. The run reported a policy_step, so the trainer's timing sink is not reaching Finelog."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ranks"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_steps"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "—"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "span_coverage",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "role",
+              "text": "sink role",
+              "type": "string"
+            },
+            {
+              "selector": "clock",
+              "text": "clock domain",
+              "type": "string"
+            },
+            {
+              "selector": "ranks",
+              "text": "ranks",
+              "type": "number"
+            },
+            {
+              "selector": "steps",
+              "text": "steps",
+              "type": "number"
+            },
+            {
+              "selector": "failed_steps",
+              "text": "steps that failed",
+              "type": "number"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 21,
+      "type": "table",
+      "title": "Terminal event and lost records",
+      "description": "The `terminal` event of each attempt's processes, by role: status, reason, and the exporter's queued and lost records summed over those processes. A nonzero lost count means every panel here reads an incomplete row set.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 9
       },
-      "panelRef": "rl_run_outcome"
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No terminal event. The run is still going, or it exited without publishing one. Check the job's own state."
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "run_outcome",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "attempt",
+              "type": "string"
+            },
+            {
+              "selector": "role",
+              "text": "process",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "lost_records",
+              "text": "records lost",
+              "type": "number"
+            },
+            {
+              "selector": "queued_records",
+              "text": "records queued",
+              "type": "number"
+            }
+          ]
+        }
+      ]
     },
     {
       "type": "row",
@@ -530,13 +658,79 @@
     },
     {
       "id": 12,
+      "type": "timeseries",
+      "title": "Step composition: exclusive seconds per span",
+      "description": "Seconds each driver span spent outside its children, so the bands sum to `step`. The `step` band is time outside every child span. `generate` is near zero when its child spans are on. Harbor and MiniSwe runners publish no generate child spans, so all of `generate` lands in its own band. A negative band means a child is counted inside another.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
         "y": 18
       },
-      "panelRef": "rl_step_composition"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "mean seconds per step",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "step_composition",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "id": 2,
@@ -744,13 +938,87 @@
     },
     {
       "id": 23,
+      "type": "timeseries",
+      "title": "Signed span residuals: generate and policy_ppo_train",
+      "description": "`generate_span_residual` from the driver and `policy_span_residual` on the slowest rank. Positive is ordinary. Negative means a child is counted twice. Never clamped.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
         "y": 34
       },
-      "panelRef": "rl_span_residuals"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds the children do not account for"
+          },
+          "unit": "s",
+          "noValue": "No residual rows. Builds without span trees publish neither residual, and policy_span_residual also needs trainer.policy_train_spans=true."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "generate_residual",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "generate_span_residual",
+              "text": "generate_span_residual",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "policy_residual",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "policy_span_residual",
+              "text": "policy_span_residual",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "type": "row",

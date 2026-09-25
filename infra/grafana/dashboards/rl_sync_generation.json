@@ -123,23 +123,156 @@
     },
     {
       "id": 302,
+      "type": "timeseries",
+      "title": "generate: share of each child span",
+      "description": "`generate`'s direct child spans as shares of `generate`. `rollout_collect` is the fan-out over trajectories. `generate_span_residual` should stay near zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 1
       },
-      "panelRef": "rl_generate_breakdown"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the generate wall",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No generate child spans. This runner or build does not publish them. The generate total is on Step composition.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "generate_breakdown",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "id": 303,
+      "type": "timeseries",
+      "title": "Per-trajectory wait: rollout_engine_await and rollout_env_await",
+      "description": "`_seconds_sum` ÷ `rollout_trajectory_count` for `rollout_engine_await` and `rollout_env_await`, and `rollout_engine_await_seconds_max`. The sums overlap across coroutines, so never stack them. `rollout_engine_await` is the caller's wait on the inference client. For callers that pass text, it includes chat templating on the driver thread.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 1
       },
-      "panelRef": "rl_trajectory_wait"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds per trajectory"
+          },
+          "unit": "s",
+          "noValue": "No rollout wait counters. This build or runner does not publish them.",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "trajectory_wait",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "engine_wait_per_trajectory",
+              "text": "engine_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "env_wait_per_trajectory",
+              "text": "env_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "engine_await_max",
+              "text": "engine_await_max",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "type": "row",
@@ -222,13 +355,80 @@
     },
     {
       "id": 304,
+      "type": "timeseries",
+      "title": "Environment wait: queue, exec and resume",
+      "description": "`rollout_env_queue`, `rollout_env_exec` and `rollout_env_resume` as shares of `rollout_env_await`. A large resume share means event-loop backlog. The remainder should stay near zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 10
       },
-      "panelRef": "rl_environment_wait_split"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the environment wait",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No environment-wait counters. This build does not split the environment wait.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "environment_split",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "type": "row",

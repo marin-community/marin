@@ -570,9 +570,6 @@ def store(request) -> duckdb.DuckDBPyConnection:
 BOTH_CLOCKS = pytest.mark.parametrize("store", ["wall", "launch"], indirect=True)
 
 
-# The shared RL panels live in dashboards/panels/rl_*.json and are mounted by panelRef, so
-# they can move between dashboards without their body moving. These tests follow the panel, not the
-# dashboard: a fragment is the single source of truth for everything except id and gridPos.
 def _stitched() -> dict:
     return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
@@ -583,23 +580,6 @@ def _dashboard(name: str = "rl_sync_train_step.json") -> dict:
 
 def _rl_dashboards() -> dict:
     return {name: _stitched()[name] for name in ("rl_sync_train_step.json", "rl_sync_generation.json", "rl_runs.json")}
-
-
-def _our_panels() -> list[dict]:
-    """The panels/rl_*.json fragments wherever mounted, plus every panel on the train step and generation boards.
-
-    rl_runs.json's own inline panels are not held to these rules.
-    """
-    ours = {path.stem for path in (DASHBOARDS / "panels").glob("rl_*.json")}
-    mounted = [
-        panel
-        for name, board in _rl_dashboards().items()
-        for panel, source in zip(board["panels"], json.loads((DASHBOARDS / name).read_text())["panels"], strict=True)
-        if source.get("panelRef") in ours
-        or (name in ("rl_sync_train_step.json", "rl_sync_generation.json") and panel["type"] != "row")
-    ]
-    assert len(mounted) >= len(ours), (len(mounted), len(ours))
-    return mounted
 
 
 def _all_panels(title: str) -> list[dict]:
@@ -699,15 +679,8 @@ def _target_rows(database: duckdb.DuckDBPyConnection, target: dict) -> list[tupl
 
 
 def _panel_rows(database: duckdb.DuckDBPyConnection, title: str) -> list[tuple]:
-    """One panel's rows, searched across the sync RL boards.
-
-    A shared fragment has one body wherever it is mounted, and the panel is asserted unique, so a
-    copy-pasted second body cannot pass as the same panel.
-    """
-    matches = _all_panels(title)
-    assert matches, f"no panel titled {title!r} on a sync RL board"
-    assert len({json.dumps(match["targets"], sort_keys=True) for match in matches}) == 1, title
-    (target,) = matches[0]["targets"]
+    """The rows of the one panel with this title on the three sync RL boards."""
+    ((target,),) = [panel["targets"] for panel in _all_panels(title)]
     return _target_rows(database, target)
 
 
@@ -918,8 +891,14 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
     """An empty panel and a broken producer render identically, and half of these panels are empty
     on a run made by a build that predates their series. That distinction belongs on the panel face,
     not behind a description hover."""
-    for panel in _our_panels():
-        assert panel["fieldConfig"]["defaults"].get("noValue"), panel["title"]
+    boards = _rl_dashboards()
+    span_panels_on_rl_runs = [panel for panel in boards["rl_runs.json"]["panels"] if panel["id"] in (12, 20, 21, 23)]
+    for panel in [
+        *(panel for name in ("rl_sync_train_step.json", "rl_sync_generation.json") for panel in boards[name]["panels"]),
+        *span_panels_on_rl_runs,
+    ]:
+        if panel["type"] != "row":
+            assert panel["fieldConfig"]["defaults"].get("noValue"), panel["title"]
 
 
 def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
