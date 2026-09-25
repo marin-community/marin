@@ -8,7 +8,7 @@ Use transcriptomics to review the curation process before broadening it. These a
 
 | Source | Useful material |
 | --- | --- |
-| [Snakemake STAR–DESeq2 workflow](https://github.com/snakemake-workflows/rna-seq-star-deseq2) | Connected alignment and differential-expression workflow |
+| [Snakemake STAR–DESeq2 workflow](https://github.com/snakemake-workflows/rna-seq-star-deseq2) | Connected alignment and differential-expression workflow; [recipe analysis](star-deseq2.md) |
 | [nf-core/rnaseq](https://nf-co.re/rnaseq/3.27.0/) and [differentialabundance](https://nf-co.re/differentialabundance/2.0.0/) | Read processing produces counts and QC; downstream differential analysis is a separate workflow |
 | [Galaxy reference-based RNA-seq tutorial](https://training.galaxyproject.org/training-material/topics/transcriptomics/tutorials/ref-based/tutorial.html) | Scientific framing, observed reads, counting and differential analysis |
 | [Bioconductor rnaseqGene](https://bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html) | The airway treatment study, paired design and native reference code |

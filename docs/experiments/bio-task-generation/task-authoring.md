@@ -33,6 +33,22 @@ Focused tasks isolate scientific operations and make failures easier to diagnose
 
 Internal component reuse does not require exposing a procedural checklist to the solver. Instructions can state a scientific objective and the methodological constraints needed for deterministic verification. Completing a workflow means delivering its defined scientific result; executing every plotting or demonstration cell in a source notebook is not required.
 
+## Deriving recipes from pipelines
+
+Inspect each rule or process as a candidate recipe boundary. For Snakemake, use the rules together with their input/output dependencies and configuration; apply the same procedure to other workflow engines. Record each candidate's inputs, outputs, scientific work, verification approach and resource needs.
+
+| Pipeline component | Candidate treatment |
+| --- | --- |
+| A rule producing a useful scientific artifact, such as gene counts | Focused recipe with staged upstream inputs |
+| Closely coupled rules, such as model fitting and contrast extraction | Integrated recipe spanning those rules; keep separate recipes only where each supports a useful question |
+| A connected set of rules with branching or aggregation | Integrated recipe with explicit interfaces and all required inputs |
+| Download, indexing or format-handling rule | Usually prepared infrastructure; a separate task is useful only when it tests a substantive input-selection, format or configuration decision |
+| Plot or report rule | Grade numerical artifacts underlying the report when they preserve the scientific objective; visual appearance is not a reward |
+
+The rule is a discovery unit; the recipe is the scientific generation contract. One recipe may use several rules, and one configurable rule may suggest several recipes with different scientific assumptions. Avoid enumerating every possible subgraph. Prioritize useful scientific endpoints and reusable intermediate artifacts. Instantiating a rule for many samples produces executions, not automatically distinct recipes.
+
+For each selected boundary, stage compatible upstream artifacts, expose meaningful scientific decisions, define a deterministic verifier and identify variation sufficient for the initial ten-instance target. Record whether the task executes the source workflow or reuses its component packages. See the [STAR–DESeq2 worked example](examples/star-deseq2.md).
+
 ## Proposal contract
 
 | Field | Required contents |
@@ -60,6 +76,8 @@ The proposal worker should expose unresolved assumptions before construction. Fr
 Prioritize breadth across independent studies, organisms, designs, questions and workflow stages before making many variants of one dataset. Keep shared-study and recipe identifiers so instance counts do not imply independent scientific coverage. No observed/simulated percentage is set.
 
 Every instance needs validation. Preserve biological replication and estimable contrasts where required by the scientific design; do not relabel conditions while retaining the original interpretation or represent fabricated replicates as observed samples. Document simulation assumptions and check relevant properties. New seeds can supply repeated practice but do not add new workflow coverage. Changing identifiers alone supplies little useful diversity.
+
+Subsetting is a standard authoring technique for fitting realistic workflows into the sandbox. Consider reads, samples, features or reference regions according to the task's objective. Preserve paired reads and required design structure; declare the subset and any narrowed scientific scope. Pin the selection procedure, seed where used, source asset and resulting hashes, then recompute expected results on the subset. Measure both resource use and scientific adequacy. Several subsets of one study retain shared lineage, and changing subset seeds alone does not establish recipe breadth.
 
 ## Recipe variation and instance relationships
 

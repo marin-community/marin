@@ -88,6 +88,7 @@ nav:
           - Validation: experiments/bio-task-generation/validation.md
           - Storage and Publication: experiments/bio-task-generation/storage.md
           - Transcriptomics Examples: experiments/bio-task-generation/examples/transcriptomics.md
+          - STAR–DESeq2 Example: experiments/bio-task-generation/examples/star-deseq2.md
       - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Agent MoE Experiment Digest: reports/agent-moe-experiments.md

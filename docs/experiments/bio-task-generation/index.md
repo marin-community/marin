@@ -16,6 +16,7 @@ Task generation includes repository discovery, input curation, model-assisted au
 | [Validation](validation.md) | Execute references, challenge graders, trial tasks and decide release readiness |
 | [Storage and publication](storage.md) | Public artifacts, release layout, provenance and solver isolation |
 | [Transcriptomics examples](examples/transcriptomics.md) | Concrete candidates for reviewing the process |
+| [STAR–DESeq2 worked example](examples/star-deseq2.md) | Inspect a source workflow, define focused and integrated recipes, and plan instance variation |
 
 ## Direction
 
