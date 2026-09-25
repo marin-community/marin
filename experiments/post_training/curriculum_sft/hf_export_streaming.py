@@ -47,6 +47,14 @@ class _Weight:
     router_bias: bool = False
 
 
+@dataclass
+class _ShardFiles:
+    files: dict[str, np.memmap]
+    views: dict[str, np.ndarray]
+    index: dict
+    source_shards: dict[str, list[str]]
+
+
 def _weights(config: GrugModelConfig, arrays: dict[str, CheckpointArray]) -> list[_Weight]:
     root = (
         ("model.embed_tokens.weight", "token_embed", False),
@@ -100,9 +108,7 @@ def _weights(config: GrugModelConfig, arrays: dict[str, CheckpointArray]) -> lis
     return weights
 
 
-def _create_shards(
-    directory: Path, weights: list[_Weight], max_shard_size: int
-) -> tuple[dict[str, np.memmap], dict[str, np.ndarray], dict, dict[str, list[str]]]:
+def _create_shards(directory: Path, weights: list[_Weight], max_shard_size: int) -> _ShardFiles:
     by_source: dict[str, list[_Weight]] = {}
     for weight in weights:
         by_source.setdefault(weight.source, []).append(weight)
@@ -164,7 +170,7 @@ def _create_shards(
                 buffer=mapped,
                 offset=8 + len(header_bytes) + offsets[tensor.name][0],
             )
-    return files, views, {"metadata": {"total_size": total_size}, "weight_map": weight_map}, source_shards
+    return _ShardFiles(files, views, {"metadata": {"total_size": total_size}, "weight_map": weight_map}, source_shards)
 
 
 def _read_chunks(checkpoint_path: str, entry: CheckpointArray):
@@ -241,8 +247,8 @@ def export_checkpoint_streaming(
         raise ValueError(f"Expected an OCDBT zarr3 checkpoint with a manifest at {checkpoint_path}")
     arrays = {entry.path: entry for entry in manifest.arrays}
     weights = _weights(config, arrays)
-    files, views, index, source_shards = _create_shards(directory, weights, max_shard_size)
-    logger.info("Writing %d BF16 tensors into %d safetensors shards", len(weights), len(files))
+    shards = _create_shards(directory, weights, max_shard_size)
+    logger.info("Writing %d BF16 tensors into %d safetensors shards", len(weights), len(shards.files))
 
     def upload(filename: str) -> None:
         started = time.monotonic()
@@ -254,15 +260,15 @@ def export_checkpoint_streaming(
         uploads = []
 
         def source_complete(source: str, targets: list[_Weight]) -> None:
-            for filename in source_shards[source]:
-                files[filename].flush()
+            for filename in shards.source_shards[source]:
+                shards.files[filename].flush()
             for target in targets:
-                del views[target.name]
-            for filename in source_shards[source]:
-                del files[filename]
+                del shards.views[target.name]
+            for filename in shards.source_shards[source]:
+                del shards.files[filename]
                 uploads.append(pool.submit(upload, filename))
 
-        _write_chunks(checkpoint_path, arrays, weights, views, source_complete)
+        _write_chunks(checkpoint_path, arrays, weights, shards.views, source_complete)
         for future in uploads:
             future.result()
 
@@ -271,7 +277,7 @@ def export_checkpoint_streaming(
         config.hf_checkpoint_converter().replaced(tokenizer=tokenizer).with_config_overrides({"dtype": "bfloat16"})
     )
     (directory / "config.json").write_text(json.dumps(converter.hf_config_dict(config, config.vocab_size)))
-    if len(set(index["weight_map"].values())) > 1:
-        (directory / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps(index))
+    if len(set(shards.index["weight_map"].values())) > 1:
+        (directory / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps(shards.index))
     for path in directory.iterdir():
         upload(path.name)
