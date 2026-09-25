@@ -13,14 +13,17 @@ from marin.datakit.download.rollout_transforms import (
     normalize_reasoning_tokens,
 )
 
+SOURCE_THINK_START = "<think>"
+SOURCE_THINK_END = "</think>"
+
 
 def _json_command_payload_and_prefix(content: str) -> tuple[dict, str] | None:
     decoder = json.JSONDecoder()
     search_start = 0
-    if content.lstrip().lower().startswith("<think>"):
-        end = content.lower().find("</think>")
+    if content.lstrip().lower().startswith(SOURCE_THINK_START):
+        end = content.lower().find(SOURCE_THINK_END)
         if end != -1:
-            search_start = end + len("</think>")
+            search_start = end + len(SOURCE_THINK_END)
     elif content.lstrip().startswith(REASONING_START):
         end = content.find(REASONING_END)
         if end != -1:
@@ -62,7 +65,7 @@ def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
             return None
         payload, prefix = parsed
         response = {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)}
-        if prefix.lower().startswith(("<think>", REASONING_START)):
+        if prefix.lower().startswith((SOURCE_THINK_START, REASONING_START)):
             try:
                 normalized_prefix = normalize_reasoning_tokens(prefix)
             except ReasoningFormatError:
