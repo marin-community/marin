@@ -156,7 +156,7 @@ class DirectChatAgent(BaseAgent):
 
 
 class SemanticVerifier(BaseVerifier):
-    """Grade private task metadata with access to Harbor's verifier environment."""
+    """Grade the submitted answer against the task's private reference."""
 
     async def verify(self) -> VerifierResult:
         try:
