@@ -71,6 +71,8 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+# Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
+_AUX_HIDDEN = "aux_lm_hidden"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -266,6 +268,12 @@ class GrugModelConfig:
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
+    aux_lm_layer: int | None = None
+    """Early auxiliary LM loss: the residual stream after this layer (the plain sum of the AttnRes
+    sources) goes through a parameter-free RMS norm and the shared lm_head. None disables it."""
+    aux_lm_weight: float = 1.0
+    """Weight of the auxiliary loss at step 0; annealed linearly to 0 at ``aux_lm_steps``."""
+    aux_lm_steps: int = 500
     second_embed: bool = False
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
@@ -1549,6 +1557,7 @@ class Transformer(eqx.Module):
         block_logits: tuple[jax.Array, ...] = tuple(_attn_res_source_logits(src, queries, eps) for src in extra_sources)
         partial: jax.Array | None = hidden
         layer_stats = []
+        aux_hidden = None
         for i, layer in enumerate(layers):
             if i % seg_size == 0 and i // seg_size < num_blocks:
                 assert partial is not None
@@ -1566,6 +1575,8 @@ class Transformer(eqx.Module):
                 eps,
             )
             layer_stats.append(stats)
+            if i == cfg.aux_lm_layer:
+                aux_hidden = sum(blocks[len(extra_sources) :], partial)
         assert partial is not None
         final_index = 2 * cfg.num_layers
         logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
@@ -1582,6 +1593,8 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
+        if aux_hidden is not None:
+            final_stats[_AUX_HIDDEN] = aux_hidden
         return hidden, jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats), final_stats
 
     @named_call
@@ -1604,24 +1617,40 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        aux_loss_weight: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0."""
         hidden, router_metrics = self(token_ids, mask=mask)
+        aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
-            hidden,
-            self.output_proj,
-            labels,
-            weight=loss_weight,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-            dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
-        )
+        def lm_loss(h: jax.Array) -> jax.Array:
+            return fused_linear_softmax_cross_entropy_loss(
+                h,
+                self.output_proj,
+                labels,
+                weight=loss_weight,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+                implementation="xla_fast_bwd",
+                block_sizes=_CE_BLOCK_SIZES,
+            )
+
+        cross_entropy_loss = lm_loss(hidden)
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
+        aux_loss = None
+        if aux_hidden is not None and aux_loss_weight is not None:
+            aux_in = reshard(rms_norm(aux_hidden.astype(hidden.dtype)), _batch_spec())
+            aux_loss = jax.lax.cond(
+                aux_loss_weight > 0,
+                lambda h: lm_loss(h).astype(loss_dtype),
+                lambda h: jnp.zeros((), loss_dtype),
+                aux_in,
+            )
+            loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -1634,6 +1663,8 @@ class Transformer(eqx.Module):
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            if aux_loss is not None:
+                summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers

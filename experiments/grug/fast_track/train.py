@@ -558,7 +558,17 @@ def _drop_metrics(
     }
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _aux_loss_weight(model_config, step: jax.Array) -> jax.Array | None:
+    """The early auxiliary LM loss weight at ``step``: linear from ``aux_lm_weight`` to 0 at ``aux_lm_steps``."""
+    if model_config.aux_lm_layer is None:
+        return None
+    frac = jnp.clip(1.0 - step.astype(jnp.float32) / model_config.aux_lm_steps, 0.0, 1.0)
+    return model_config.aux_lm_weight * frac
+
+
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, step: jax.Array | None = None):
+    aux_weight = None if step is None else _aux_loss_weight(params.config, step)
+
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
@@ -568,6 +578,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
             reduction="mean",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
+            aux_loss_weight=aux_weight,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -631,7 +642,7 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, state.step)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
