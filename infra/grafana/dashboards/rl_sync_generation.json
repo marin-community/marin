@@ -122,83 +122,11 @@
       "panels": []
     },
     {
-      "id": 305,
-      "type": "timeseries",
-      "title": "generate and policy_train per step",
-      "description": "Inclusive wall seconds of the driver's `generate` and `policy_train` spans. When the step time moves, check which line moved.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "mean seconds per step"
-          },
-          "unit": "s",
-          "min": 0,
-          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings.",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/generation",
-          "view": "generation_vs_training",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 302,
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 0,
         "y": 1
       },
       "panelRef": "rl_generate_breakdown"
@@ -207,8 +135,8 @@
       "id": 303,
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 12,
+        "x": 12,
         "y": 1
       },
       "panelRef": "rl_trajectory_wait"

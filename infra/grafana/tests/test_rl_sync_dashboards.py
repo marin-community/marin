@@ -766,34 +766,6 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
     assert sum(bands[phase] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
 
 
-SHORT_STEP = {"step": 1000.0, "policy_train": 100.0}
-
-
-def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> None:
-    """The first bucket also holds a short step, so the share there is of the bucket's step time:
-    a mean of the two steps' ratios would weigh the short step as much as the long one."""
-    store.execute(
-        f"""INSERT INTO "telemetry_v1.marinskyrl"
-            SELECT * REPLACE (
-                CASE json_get(attributes_json, 'phase') WHEN 'step' THEN {SHORT_STEP["step"]}
-                     ELSE {SHORT_STEP["policy_train"]} END AS value,
-                timestamp_ms + 60000 AS timestamp_ms,
-                CAST(json_merge_patch(attributes_json, json_object('step', '100')) AS VARCHAR) AS attributes_json)
-            FROM "telemetry_v1.marinskyrl"
-            WHERE json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'step') = '0'
-              AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall'
-              AND json_get(attributes_json, 'phase') IN ('step', 'policy_train')"""
-    )
-
-    shares = dict(_panel_rows(store, "policy_train share of the step"))
-    first = shares.pop(min(shares))
-
-    assert first == pytest.approx(
-        (DRIVER_PHASES["policy_train"] + SHORT_STEP["policy_train"]) / (STEP_SECONDS + SHORT_STEP["step"])
-    )
-    assert {round(share, 4) for share in shares.values()} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
-
-
 @BOTH_CLOCKS
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
     # A NULL policy_ppo_train on the fast rank. Finelog sorts NULLs first under DESC, so without
@@ -977,17 +949,6 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
     not behind a description hover."""
     for panel in _our_panels():
         assert panel["fieldConfig"]["defaults"].get("noValue"), panel["title"]
-
-
-def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
-    """The premise the old layout encoded -- policy_train owns 90.4% of the step -- was true before
-    the grouped-mm fix and is false now. Two series on one axis is what makes that legible."""
-    rows = _panel_rows(store, "generate and policy_train per step")
-
-    by_series = {series: seconds for _, series, seconds in rows}
-    assert set(by_series) == {"generate", "policy_train"}
-    assert by_series["generate"] == pytest.approx(DRIVER_PHASES["generate"])
-    assert by_series["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
 
 
 def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:

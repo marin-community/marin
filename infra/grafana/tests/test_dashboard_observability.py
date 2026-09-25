@@ -237,9 +237,9 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
-        "rl_runs.json": {"/v1/rl/overview": (19, sections["rl"])},
+        "rl_runs.json": {"/v1/rl/overview": (18, sections["rl"])},
         "rl_sync_generation.json": {
-            "/v1/rl/generation": (5, sections["rl_sync_generation"]),
+            "/v1/rl/generation": (4, sections["rl_sync_generation"]),
             "/v1/vllm/overview": (5, sections["vllm"]),
         },
         "rl_sync_train_step.json": {"/v1/rl/train-step": (11, sections["rl_sync_train_step"])},

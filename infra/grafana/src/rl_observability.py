@@ -458,15 +458,6 @@ LEFT JOIN contained ON contained.t = driver.t AND contained.phase = driver.phase
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
-        "policy_train_share": (
-            """
-SELECT t,
-       SUM(CASE WHEN phase = 'policy_train' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN phase = 'step' THEN sum_value END), 0) AS policy_train_share
-FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
-GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
         "generate_residual": (
             "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_span_residual FROM spans "
             "WHERE statistic = 'driver' AND phase = 'generate_span_residual' GROUP BY 1 ORDER BY 1"
@@ -519,7 +510,8 @@ SELECT t, execution_uid, step, name, phase, parent, counter,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value
 FROM selected
-WHERE name <> 'phase_duration_seconds' OR (clock_domain = 'inclusive_wall' AND root = 'step')
+WHERE name <> 'phase_duration_seconds'
+   OR (clock_domain = 'inclusive_wall' AND root = 'step' AND (phase = 'generate' OR parent = 'generate'))
 GROUP BY t, execution_uid, step, name, phase, parent, counter
 ORDER BY t, execution_uid, step, name
 LIMIT {RL_MAX_SPAN_ROWS + 1}
@@ -542,11 +534,6 @@ GROUP BY 1, 2, 3
 """.strip(),
     )
     views = {
-        "generation_vs_training": (
-            "SELECT t, phase AS series, SUM(sum_value) / SUM(sample_count) AS value FROM driver "
-            "WHERE name = 'phase_duration_seconds' AND phase IN ('generate', 'policy_train') "
-            "GROUP BY 1, 2 ORDER BY 1"
-        ),
         "generate_breakdown": (
             """
 WITH spans AS (
