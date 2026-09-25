@@ -111,7 +111,7 @@ jobs:
 
       # Bound the wait below the job timeout (180) so a hung ferry fails this
       # *step* (failure(), runner stays alive for the Loom launch) instead of
-      # tripping the job timeout (cancelled(), which force-kills triage). See the
+      # tripping the job timeout, which can interrupt the Loom launch. See the
       # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
       # leaves time for diagnostics.
       - name: Wait for Grug multislice smoke

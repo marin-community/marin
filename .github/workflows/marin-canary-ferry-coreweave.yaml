@@ -173,8 +173,8 @@ jobs:
 
       # Keep the wait below the job timeout (180) so a hung ferry fails this
       # *step* (failure(), runner stays alive for the Loom launch) rather than
-      # tripping the job timeout (cancelled(), which force-kills triage after
-      # GitHub's short grace — exit 143). The monitor --timeout (120m) exits
+      # tripping the job timeout, which can interrupt the Loom launch. An
+      # already launched session continues. The monitor --timeout (120m) exits
       # gracefully; timeout-minutes is a hard backstop if the monitor wedges
       # between polls. Healthy runs finish in ~35m, leaving time for diagnostics.
       - name: Wait for canary ferry

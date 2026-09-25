@@ -57,7 +57,7 @@ jobs:
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
 
-      - name: Invalidate review of a previous head
+      - name: Clear review label before launch
         if: contains(github.event.pull_request.labels.*.name, 'agentic-lint')
         env:
           GH_TOKEN: ${{ github.token }}

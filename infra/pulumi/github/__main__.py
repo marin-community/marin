@@ -24,7 +24,7 @@ LOOM_STACK = "organization/marin-loom/marin-loom"
 AGENTIC_LINT_FEDERATION = "agentic-lint"
 CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
 FORK_FERRY_FEDERATION = "fork-ferry"
-GITHUB_AUTOMATION_FEDERATION = "ops-claude"
+GITHUB_AUTOMATION_FEDERATION = "ops-loom-github"
 PR_REVIEW_FEDERATION = "pr-review"
 
 

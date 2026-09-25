@@ -276,76 +276,76 @@ config:
       profile: fork-ferry
       serviceTag: fork-ferry
       ref: refs/heads/main
-    - name: ops-claude
+    - name: ops-loom-github
       repositoryId: *marinRepositoryId
-      workflowRef: marin-community/marin/.github/workflows/ops-claude.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-github.yaml@refs/heads/main
+      profile: &githubAutomationProfile github-automation
+      serviceTag: *githubAutomationProfile
     - name: nightshift-cleanup
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-nightshift-cleanup.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: nightshift-ci-tests
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-nightshift-ci-tests.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: nightshift-doc-drift
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-nightshift-doc-drift.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: agent-prose-cleanup
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-agent-prose-cleanup.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-ferry
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-ferry-coreweave
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry-coreweave.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-datakit-tier1
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier1.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-datakit-tier2
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier2.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-datakit-tier3
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier3.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: canary-grug-multislice
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/marin-canary-grug-multislice.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: iris-screenshot-review
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-iris-screenshot-review.yaml@refs/heads/main
-      profile: github-automation
-      serviceTag: github-automation
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       event: workflow_run
       ref: refs/heads/main
     - name: pr-review

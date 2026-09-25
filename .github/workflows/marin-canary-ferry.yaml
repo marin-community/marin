@@ -117,12 +117,12 @@ jobs:
 
       # Bound the wait below the job timeout (360) so a hung ferry fails this
       # *step* rather than tripping the job timeout. A step timeout is failure(),
-      # which keeps the runner alive and lets the Loom launch run
-      # before the job deadline; a job timeout is cancelled(), which force-kills triage after
-      # GitHub's short cancellation grace (exit 143). --child-wait-timeout only
+      # which keeps the runner alive long enough to launch Loom. A job timeout
+      # can interrupt that launch; an already launched Loom session continues.
+      # --child-wait-timeout only
       # bounds the queue wait — once a child is RUNNING the monitor relies on
-      # this wall clock. Healthy runs finish in ~2h, so 300 leaves 60m for
-      # diagnostics + triage.
+      # this wall clock. Healthy runs finish in ~2h, so 300 leaves time for
+      # diagnostics and the Loom launch.
       - name: Wait for canary ferry
         id: wait
         timeout-minutes: 300

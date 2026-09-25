@@ -136,7 +136,7 @@ remaining GitHub agent workflows have individual federation mappings to the
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
 `LOOM_AGENTIC_LINT_PROFILE` and `LOOM_GITHUB_AUTOMATION_PROFILE`. Both stack
-updates must finish before the migrated Actions workflows can launch sessions.
+updates must finish before these Actions workflows can launch sessions.
 
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
