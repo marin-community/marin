@@ -12,6 +12,7 @@ from rigging.filesystem.cluster_config import DataConfig, StoreType
 from iac.buckets.lifecycle import expiration_rules
 
 HERO_CHECKPOINT_PREFIX = "marin/grug/hero-"
+PROTECTED_HERO_BUCKET = "marin-us-east-02a"
 CHECKPOINT_DELETE_ACTIONS = ("s3:DeleteObject", "s3:DeleteObjectVersion")
 COREWEAVE_ORGANIZATION_ID = "208261"
 COREWEAVE_MULTIPART_ABORT_RULE_ID = "marin-abort-incomplete-mpu"
@@ -19,34 +20,38 @@ COREWEAVE_MULTIPART_EXPIRATION = 7
 
 
 def coreweave_bucket_policy(bucket_name: str) -> str:
-    """Return organization access with permanent hero deletion denied."""
+    """Return organization access, protecting hero checkpoints in the 02a bucket."""
+    statements = [
+        {
+            "Sid": "AllowOrganizationS3Access",
+            "Effect": "Allow",
+            "Principal": {"CW": "*"},
+            "Action": ["s3:*"],
+            "Resource": [
+                f"arn:aws:s3:::{bucket_name}",
+                f"arn:aws:s3:::{bucket_name}/*",
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "cw:PrincipalOrgID": [COREWEAVE_ORGANIZATION_ID],
+                }
+            },
+        }
+    ]
+    if bucket_name == PROTECTED_HERO_BUCKET:
+        statements.append(
+            {
+                "Sid": "DenyHeroCheckpointDeletion",
+                "Effect": "Deny",
+                "Principal": {"CW": "*"},
+                "Action": list(CHECKPOINT_DELETE_ACTIONS),
+                "Resource": f"arn:aws:s3:::{bucket_name}/{HERO_CHECKPOINT_PREFIX}*",
+            }
+        )
     return json.dumps(
         {
             "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Sid": "AllowOrganizationS3Access",
-                    "Effect": "Allow",
-                    "Principal": {"CW": "*"},
-                    "Action": ["s3:*"],
-                    "Resource": [
-                        f"arn:aws:s3:::{bucket_name}",
-                        f"arn:aws:s3:::{bucket_name}/*",
-                    ],
-                    "Condition": {
-                        "StringEquals": {
-                            "cw:PrincipalOrgID": [COREWEAVE_ORGANIZATION_ID],
-                        }
-                    },
-                },
-                {
-                    "Sid": "DenyHeroCheckpointDeletion",
-                    "Effect": "Deny",
-                    "Principal": {"CW": "*"},
-                    "Action": list(CHECKPOINT_DELETE_ACTIONS),
-                    "Resource": f"arn:aws:s3:::{bucket_name}/{HERO_CHECKPOINT_PREFIX}*",
-                },
-            ],
+            "Statement": statements,
         },
         sort_keys=True,
     )
