@@ -6,6 +6,7 @@ import json
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from itertools import batched
 from pathlib import Path
 from typing import Any, Dict, Iterator, Sequence
 
@@ -15,7 +16,6 @@ from zephyr.stage_io import ZephyrWorkerError
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.utils import batched
 from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,

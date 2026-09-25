@@ -3,12 +3,13 @@
 
 """Finelog stats schemas and counter-key constants for Zephyr pipelines.
 
-Two namespaces are written:
+Three namespaces are written:
 
 - ``zephyr.stage`` — one row per stage at completion, emitted by the
   coordinator. Contains throughput and aggregated resource usage.
 - ``zephyr.worker`` — one row per shard at START, each sample interval
   (RUNNING), and END, emitted by the long-lived worker actor.
+- ``zephyr.shuffle`` — optional target placeholders and reducer input sizes.
 
 Runners sample CPU and memory counters. Worker heartbeats write per-shard rows
 and send aggregated counters to the coordinator for stage stats.
@@ -33,7 +34,10 @@ logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
+ZEPHYR_SHUFFLE_STATS_NAMESPACE = "zephyr.shuffle"
 WORKER_STATS_INTERVAL = 5.0
+MAX_METRIC_STAGE_SERIES = 256
+METRIC_BIN_SECONDS = 15
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
 """Counter key for items processed"""
@@ -120,6 +124,7 @@ class ZephyrWorkerStat:
     execution_id: str
     stage_name: str
     shard_idx: int
+    attempt_id: str
     status: str  # ZephyrWorkerStatStatus value; str because LogClient cannot serialize StrEnum
     ts: datetime
     items: int
@@ -134,10 +139,60 @@ class ZephyrWorkerStat:
     mem_peak_bytes: int
 
 
+@dataclass(frozen=True)
+class PipelineMetricPoint:
+    """One time-series point for the coordinator dashboard."""
+
+    timestamp_ms: int
+    stage: str
+    item_rate: float
+    byte_rate: float
+    cpu_cores: float
+    memory_bytes: int
+
+
+@dataclass(frozen=True)
+class PipelineMetricsResult:
+    """Dashboard points and a user-visible data-source warning."""
+
+    points: tuple[PipelineMetricPoint, ...]
+    warning: str = ""
+
+
+@dataclass(frozen=True)
+class StatsConfig:
+    """Configuration for Zephyr metrics reporting."""
+
+    finelog_url: str
+
+
+@dataclass
+class ZephyrShuffleStat:
+    """Initial target placeholder or input size observed by a reducer.
+
+    Payload bytes measure encoded records, not compressed storage or RAM.
+    All three counts are null until measured. Stage names identify the reduce
+    stage; job IDs identify the producer. Local runs have no job ID.
+    """
+
+    key_column: ClassVar[str] = "execution_id"
+
+    execution_id: str
+    stage_name: str
+    target_shard: int
+    num_targets: int
+    attempt: int
+    input_rows: int | None
+    payload_bytes: int | None
+    num_sources: int | None
+    ts: datetime
+    job_id: str
+
+
 class StatsWriter:
     """Manages finelog connections and emits Zephyr stat rows.
 
-    Call ``connect()`` to get a live instance; pass a pre-resolved URL when
+    Call ``connect()`` to get a live instance; pass explicit ``StatsConfig`` when
     an Iris context is not available. All emit methods are no-ops when the
     log client is unavailable.
     """
@@ -146,6 +201,7 @@ class StatsWriter:
         self._log_client = log_client
         self._stage_table: Table | None = None
         self._worker_table: Table | None = None
+        self._shuffle_table: Table | None = None
         if log_client is not None:
             with suppress(Exception):
                 self._stage_table = log_client.get_table(ZEPHYR_STAGE_STATS_NAMESPACE, ZephyrStageStat)
@@ -153,13 +209,13 @@ class StatsWriter:
                 self._worker_table = log_client.get_table(ZEPHYR_WORKER_STATS_NAMESPACE, ZephyrWorkerStat)
 
     @classmethod
-    def connect(cls, url: str | None = None) -> "StatsWriter":
-        """Connect to finelog; resolves the URL via Iris if not provided.
+    def connect(cls, config: StatsConfig | None = None) -> "StatsWriter":
+        """Connect to Finelog using explicit configuration or Iris discovery.
 
         Returns a no-op instance if the URL cannot be determined or the
         connection fails.
         """
-        resolved = url or cls.resolve_url()
+        resolved = config.finelog_url if config is not None else cls.resolve_url()
         if resolved is None:
             return cls(None)
         try:
@@ -232,6 +288,7 @@ class StatsWriter:
         status: ZephyrWorkerStatStatus,
         start_time: float,
         counters: dict[str, int | float],
+        attempt_id: str,
     ) -> None:
         """Build and emit a ZephyrWorkerStat row from the runner's counter dict."""
         if self._worker_table is None:
@@ -245,6 +302,7 @@ class StatsWriter:
             execution_id=execution_id,
             stage_name=stage_name,
             shard_idx=shard_idx,
+            attempt_id=attempt_id,
             status=status,
             ts=datetime.now(UTC).replace(tzinfo=None),
             items=items,
@@ -263,7 +321,118 @@ class StatsWriter:
         except Exception:
             logger.warning("Failed to write worker stat to finelog", exc_info=True)
 
+    def query_pipeline_metrics(self, execution_id: str, max_points: int) -> PipelineMetricsResult:
+        """Return 15-second averages from intervals within each shard attempt.
+
+        Counter deltas and sampled memory contribute only for their interval's
+        overlap with each bin. Failed attempts include work up to their last
+        sample. No usage extends beyond the last sample of an attempt.
+        """
+        if self._log_client is None:
+            return PipelineMetricsResult((), "Finelog is not available for this coordinator.")
+
+        escaped_execution_id = execution_id.replace("'", "''")
+        sql = f"""
+WITH samples AS (
+  SELECT stage_name, status, mem_current_bytes,
+         extract(epoch FROM ts) AS sample_time,
+         lag(extract(epoch FROM ts)) OVER attempt AS previous_time,
+         items - lag(items) OVER attempt AS items,
+         bytes_processed - lag(bytes_processed) OVER attempt AS bytes_processed,
+         cpu_time_total - lag(cpu_time_total) OVER attempt AS cpu_time
+  FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"
+  WHERE execution_id = '{escaped_execution_id}'
+    AND attempt_id IS NOT NULL
+  WINDOW attempt AS (PARTITION BY stage_name, shard_idx, attempt_id ORDER BY ts, seq)
+), intervals AS (
+  SELECT * FROM samples
+  WHERE sample_time > previous_time AND status != '{ZephyrWorkerStatStatus.START}'
+), bounds AS (
+  SELECT CAST(floor(min(previous_time) / {METRIC_BIN_SECONDS}) AS BIGINT) AS first_bin,
+         CAST(ceil(max(sample_time) / {METRIC_BIN_SECONDS}) AS BIGINT) - 1 AS last_bin
+  FROM intervals
+), bins AS (
+  SELECT unnest(generate_series(greatest(first_bin, last_bin - {max_points} + 1), last_bin))
+         * {METRIC_BIN_SECONDS} AS bin_start
+  FROM bounds
+  WHERE first_bin IS NOT NULL
+), stages AS (
+  SELECT DISTINCT stage_name FROM intervals
+  WHERE sample_time > (SELECT min(bin_start) FROM bins)
+  ORDER BY stage_name
+  LIMIT {MAX_METRIC_STAGE_SERIES}
+), overlaps AS (
+  SELECT bins.bin_start, stages.stage_name, sample_time, previous_time,
+         items, bytes_processed, cpu_time, mem_current_bytes,
+         least(sample_time, bin_start + {METRIC_BIN_SECONDS})
+           - greatest(previous_time, bin_start) AS duration
+  FROM bins CROSS JOIN stages
+  LEFT JOIN intervals ON intervals.stage_name = stages.stage_name
+    AND sample_time > bin_start AND previous_time < bin_start + {METRIC_BIN_SECONDS}
+)
+SELECT to_timestamp_millis(bin_start * 1000) AS time_bin,
+       stage_name,
+       sum(items * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS item_rate,
+       sum(bytes_processed * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS byte_rate,
+       sum(cpu_time * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS cpu_cores,
+       sum(mem_current_bytes * duration) / {METRIC_BIN_SECONDS} AS memory_bytes
+FROM overlaps
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
+LIMIT {max_points + MAX_METRIC_STAGE_SERIES}
+""".strip()
+        row_limit = max_points + MAX_METRIC_STAGE_SERIES
+        try:
+            rows = self._log_client.query(sql, max_rows=row_limit).to_pylist()
+        except Exception:
+            logger.warning("Failed to query Zephyr pipeline metrics", exc_info=True)
+            return PipelineMetricsResult((), "Finelog metrics are temporarily unavailable.")
+
+        points = [
+            PipelineMetricPoint(
+                timestamp_ms=_timestamp_ms(row["time_bin"]),
+                stage=str(row["stage_name"]),
+                item_rate=float(row["item_rate"] or 0),
+                byte_rate=float(row["byte_rate"] or 0),
+                cpu_cores=float(row["cpu_cores"] or 0),
+                memory_bytes=int(row["memory_bytes"] or 0),
+            )
+            for row in rows
+        ]
+        return PipelineMetricsResult(_complete_metric_bins(points, max_points))
+
+    def emit_shuffle_stats(self, records: list[ZephyrShuffleStat]) -> None:
+        """Append target placeholders or measurements; create the table on demand."""
+        if self._log_client is None:
+            return
+        try:
+            if self._shuffle_table is None:
+                self._shuffle_table = self._log_client.get_table(ZEPHYR_SHUFFLE_STATS_NAMESPACE, ZephyrShuffleStat)
+            self._shuffle_table.write(records)
+        except Exception:
+            logger.warning("Failed to write shuffle stats to finelog", exc_info=True)
+
     def close(self) -> None:
         if self._log_client is not None:
             with suppress(Exception):
                 self._log_client.close()
+
+
+def _timestamp_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return int(value.timestamp() * 1000)
+
+
+def _complete_metric_bins(points: list[PipelineMetricPoint], max_points: int) -> tuple[PipelineMetricPoint, ...]:
+    by_timestamp: dict[int, list[PipelineMetricPoint]] = {}
+    for point in points:
+        by_timestamp.setdefault(point.timestamp_ms, []).append(point)
+
+    selected: list[PipelineMetricPoint] = []
+    for timestamp in sorted(by_timestamp, reverse=True):
+        time_bin = by_timestamp[timestamp]
+        if selected and len(selected) + len(time_bin) > max_points:
+            break
+        selected.extend(time_bin)
+    return tuple(sorted(selected, key=lambda point: (point.timestamp_ms, point.stage)))

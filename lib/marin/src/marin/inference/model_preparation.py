@@ -4,14 +4,40 @@
 """Model path resolution and automatic inference sharding."""
 
 import json
+from urllib.parse import unquote, urlsplit
 
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.model_cache import resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
-from transformers import AutoConfig
+from transformers import AutoConfig, PreTrainedTokenizerBase
 
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
+
+
+def _tool_template_probe() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "probe",
+                "description": "Probe the model's tool-aware chat template.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
+def _vllm_model_path(path: str) -> str:
+    """Return a local filesystem path instead of a ``file://`` storage URI."""
+
+    parsed = urlsplit(path)
+    if parsed.scheme != "file":
+        return path
+    if parsed.netloc not in ("", "localhost"):
+        raise ValueError(f"vLLM cannot serve a non-local file URI: {path!r}")
+    return unquote(parsed.path)
 
 
 def select_tensor_parallel_size(
@@ -52,6 +78,17 @@ def read_attention_heads(model: str, revision: str | None = None) -> tuple[int, 
     raise ValueError(f"Could not find num_attention_heads in the model config for {model!r}.")
 
 
+def tool_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
+    """Return the tokenizer template selected when a request contains tools."""
+    if tokenizer.chat_template is None:
+        return None
+    return tokenizer.get_chat_template(tools=_tool_template_probe())
+
+
+def read_tool_chat_template(model: str, revision: str | None = None) -> str | None:
+    return tool_chat_template(load_tokenizer(model, revision=revision))
+
+
 def _read_model_config_dict(model: str, revision: str | None = None) -> dict:
     if _is_object_store_path(model):
         return json.loads((StoragePath(model) / "config.json").read_text())
@@ -62,7 +99,8 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
     """Resolve and optionally mirror an HF model to the region-local cache."""
 
     if revision is None or _is_object_store_path(model):
-        return resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        resolved = resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        return _vllm_model_path(resolved)
     pinned_model = f"{model}@{revision}"
     resolved = resolve_cached_model_path(
         pinned_model,
@@ -70,4 +108,4 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
         cache_prefix=_MODEL_CACHE_PREFIX,
     )
     # With caching disabled, vLLM receives the bare model plus its separate revision argument.
-    return model if resolved == pinned_model else resolved
+    return model if resolved == pinned_model else _vllm_model_path(resolved)

@@ -29,6 +29,7 @@ from iris.cluster.config import (
     SliceConfig,
     StorageConfig,
 )
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
@@ -298,6 +299,10 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    batch_priority_class = k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-batch")
+    assert batch_priority_class is not None
+    assert batch_priority_class["value"] == 0
+    assert batch_priority_class["preemptionPolicy"] == "PreemptLowerPriority"
     assert {
         name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
         for name in (
@@ -387,13 +392,18 @@ def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled()
     provider.shutdown()
 
 
-def test_start_controller_leaves_node_agent_absent_without_external_finelog():
+def test_start_controller_runs_cache_recovery_agent_without_external_finelog():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     _seed_prerequisites(k8s, cluster_config)
     provider.start_controller(cluster_config)
 
-    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "disabled"
+    }
+    assert {"name": "task-cache", "mountPath": DEFAULT_TASK_CACHE_DIR} in agent_spec["containers"][0]["volumeMounts"]
     provider.shutdown()
 
 

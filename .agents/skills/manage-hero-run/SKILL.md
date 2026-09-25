@@ -24,10 +24,11 @@ Classify the run before loading supporting workflows:
   1e22 FLOP guideline. It requires the full run record below.
 - A **bounded diagnostic** has a small fixed step or time limit, lifecycle-managed output, no
   canonical export, and one monitoring owner. Record its launch contract in the originating
-  conversation or durable session channel. Do not create an issue or logbook solely to submit it.
+  conversation or durable session channel. Do not create a separate repository artifact solely to
+  submit it.
 
-Do not load `run-research`, `task-logbook`, `task-snapshot`, `file-issue`, or their writing guides
-for a bounded diagnostic. Load them only when the run requires the artifact they govern.
+Do not load publication workflows for a bounded diagnostic. Use `research` only when the user asks
+for a research program or prior-work brief.
 
 ## Launch
 
@@ -76,19 +77,18 @@ If any value is inferred, label it as inferred. If code lineage, checkpoint poli
 
 ## Run Record
 
-For a production run, create or use a dedicated experiment issue and an append-only logbook at
-`.agents/logbooks/<run>.md`. Follow `task-logbook` for their format and publication rules. Bootstrap
-and push both links before launch.
+For a production run, create or use one durable record in the existing experiment issue, W&B
+report, or durable session channel. Do not add a repository logbook solely for the run.
 
 Record each production instance's command, source SHA and bundle, dirty-tree status, DRI,
 hardware/topology, tracker identity, output and checkpoint roots, retention and projected bytes,
-`initialize_from`, final step, and monitoring owner. Update the logbook at material events. Post
-concise issue updates for launches, failures, relaunches, retention changes, milestones, and final
-seal; post a routine status at least every 24 hours.
+`initialize_from`, final step, and monitoring owner. Update the record at material events. When an
+issue exists, post concise updates for launches, failures, relaunches, retention changes,
+milestones, and final seal; post a routine status at least every 24 hours.
 
 For a bounded diagnostic, record the same applicable fields in the durable session channel or
-originating conversation. Add an issue or logbook when the diagnostic needs a handoff, lasts more
-than one day, changes production lineage, or produces an artifact that must remain discoverable.
+originating conversation. If it needs a handoff, lasts more than one day, changes production
+lineage, or produces a discoverable artifact, keep using that durable channel or an existing issue.
 
 ## Babysitting
 
@@ -119,7 +119,7 @@ For instance, it's ok to fix a logging bug or misconfiguration of evaluation cal
 - **Resume loss mismatch:** Levanter is generally bitwise identical on TPU. Resumes and GPU runs can sometimes differ slightly, but should stay very close. During catch-up, alert if loss differs from the pre-resume lineage by more than `0.002`; after post-resume warmup, alert if loss differs by more than `1%`.
 - **Sustained loss spike:** alert if loss is more than `50%` above the expected trend for roughly 10 or more consecutive steps.
 - **Final-step misunderstanding:** progress bars may round or display a nominal max while config has extra steps. Compute final step from config/code and use that for ETA and completion.
-- **Benign-looking success with missing artifacts:** orchestrator says success but final checkpoint, W&B summary, logbook update, or seal tag is missing. Do not seal until final artifacts are verified.
+- **Benign-looking success with missing artifacts:** orchestrator says success but final checkpoint, W&B summary, durable record update, or seal tag is missing. Do not seal until final artifacts are verified.
 
 ## Resume And Recovery
 
@@ -129,7 +129,12 @@ Many failures can be recoverable just by relaunching using the same id. These in
 
 ### Launching with a new run id
 
-- Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the issue and logbook.
+- Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
+- For code cutovers, follow `deploy-hero-change` and the
+  [hero launcher procedure](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).
+  Keep the W&B entity/project, fork once at a verified checkpoint boundary, and
+  resume the child on retries. Verify new progress in Finelog; inherited W&B
+  history does not establish that training has resumed.
 - Use `initialize_from` to have training pick up from a specific prior checkpoint.
 - If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
 - Sort by parsed numeric step, not lexicographic path order.
@@ -159,8 +164,8 @@ When a hero run finishes or reaches a handoff milestone:
   W&B run id/display name when enabled.
 - Stop or delete heartbeat/monitor automations that are no longer needed.
 - If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
-- For a production run, create and push a seal tag. Update its GitHub issue and logbook with the
-  tracker, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a production run, create and push a seal tag. Update its durable record with the tracker,
+  checkpoint, commit/tag, final metrics, launch command, and caveats.
 - For a bounded diagnostic, post the final result in the originating conversation or durable
   session channel. Include the command, source SHA, terminal status, final step and metrics, output
   and checkpoint paths, tracker identity when enabled, and caveats.
@@ -169,5 +174,5 @@ When a hero run finishes or reaches a handoff milestone:
 ## References
 
 - change-grug skill
-- run-research skill
+- research skill
 - use-iris skill

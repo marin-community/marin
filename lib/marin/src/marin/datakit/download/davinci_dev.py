@@ -22,22 +22,35 @@ The HF dataset is gated (auto-approve); ``HF_TOKEN`` must be set locally
 for ``download_hf_step`` to authenticate.
 """
 
+import json
+
+import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
     render_tool_message,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("success", pa.bool_()),
+    ]
+)
 
 HF_DATASET_ID = "GAIR/daVinci-Dev"
 HF_REVISION = "7df0a81"
@@ -158,6 +171,46 @@ def davinci_dev_ctx_native_normalize_steps() -> tuple[StepSpec, ...]:
 # ---------------------------------------------------------------------------
 
 ENV_GLOBS = ["env-native.jsonl"]
+# Tool contract published with the pinned env-native trajectories:
+# https://github.com/GAIR-NLP/daVinci-Dev/blob/81968c804fe59aa3991b30e6f67ce9998334529e/env_traj_utils/convert_trajectories.py
+ENV_TOOLS = [
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Execute a shell command. Use an empty command to poll output or ctrl+c to interrupt.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "submit",
+        "description": "Finish the interaction when the task is complete or cannot be continued.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "name": "str_replace_editor",
+        "description": "View, create, or edit files. Replacement text must uniquely match the original file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "enum": ["view", "create", "str_replace", "insert", "undo_edit"]},
+                "path": {"type": "string", "description": "Absolute file or directory path."},
+                "file_text": {"type": "string"},
+                "old_str": {"type": "string"},
+                "new_str": {"type": "string"},
+                "insert_line": {"type": "integer"},
+                "view_range": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["command", "path"],
+        },
+    },
+]
+
+TERMINAL_SUBMISSION_TOOLS = frozenset({"finish", "submit"})
 
 
 def _success_to_tag(success: bool | None) -> str | None:
@@ -181,6 +234,39 @@ def env_row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "GAIR/daVinci-Dev/env-native")]
 
 
+def env_row_to_chat_doc(row: dict) -> list[dict]:
+    messages = row.get("messages")
+    if not messages:
+        return []
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+    if messages[-1].get("role") == "tool" and len(messages) >= 2:
+        final_call_id = messages[-1].get("tool_call_id")
+        previous = messages[-2]
+        terminal_call = next(
+            (
+                call
+                for call in previous.get("tool_calls") or []
+                if call.get("id") == final_call_id
+                and (call.get("function") or {}).get("name") in TERMINAL_SUBMISSION_TOOLS
+            ),
+            None,
+        )
+        if previous.get("role") == "assistant" and terminal_call is not None:
+            messages = messages[:-1]
+    if messages[-1].get("role") != "assistant":
+        counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
+        return []
+    success = row.get("success") if "success" in row else None
+    return checked_openai_chat_document(
+        messages,
+        "GAIR/daVinci-Dev/env-native",
+        counter_prefix="davinci_dev/env/chat",
+        success=success,
+        chat_template_kwargs={"tools": ENV_TOOLS},
+    )
+
+
 def transform_env_native(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/env-native.jsonl")
@@ -190,6 +276,20 @@ def transform_env_native(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="davinci-dev-env-transform", resources=ResourceConfig(cpu=1, ram="16g"))
     ctx.execute(pipeline)
+
+
+def transform_env_native_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/env-native.jsonl")
+        .flat_map(load_jsonl)
+        .flat_map(env_row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    ZephyrContext(name="davinci-dev-env-chat-transform", resources=ResourceConfig(cpu=1, ram="16g")).execute(pipeline)
 
 
 def download_davinci_dev_env_native_step() -> StepSpec:
@@ -223,4 +323,22 @@ def davinci_dev_env_native_normalize_steps() -> tuple[StepSpec, ...]:
             # the default 16 GiB worker on load. Bump to 64 GiB.
             worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
         ),
+    )
+
+
+def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step(
+        "raw/davinci-dev-env-native", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=ENV_GLOBS
+    )
+    processed = StepSpec(
+        name="processed-chat/davinci-dev-env-native",
+        deps=[dl],
+        fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
+        hash_attrs={"version": "2026.09.09.quarantine"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA,
+        name="normalized-chat/davinci-dev-env-native",
+        download=processed,
+        worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
     )

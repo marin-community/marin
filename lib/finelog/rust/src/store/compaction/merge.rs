@@ -16,12 +16,10 @@ use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch};
-use arrow::compute::{
-    cast, interleave, lexsort_to_indices, take_record_batch, SortColumn, SortOptions,
-};
+use arrow::compute::{cast, interleave, SortOptions};
 use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
+use arrow::row::{Row, RowConverter, Rows, SortField};
 
 /// Rows per output batch from the k-way merge. This is a batching decision only:
 /// the writer accumulates across batches and cuts row groups at its own
@@ -77,130 +75,167 @@ pub fn project_to_schema(
     RecordBatch::try_new(Arc::clone(target_schema), columns)
 }
 
-/// The merge sort-key collation: ascending, NULLS LAST. The pre-sort
-/// (`sort_batch_by`) and the merge (`kway_merge` via `RowConverter`) MUST share
-/// this so a key column with NULLs lands null-key rows at the END in both paths,
-/// giving a consistent physical segment layout.
+/// The merge sort-key collation: ascending, NULLS LAST, shared by the run
+/// encoding and the merge so a key column with NULLs lands null-key rows at the
+/// END in both paths, giving a consistent physical segment layout.
 const MERGE_SORT_OPTIONS: SortOptions = SortOptions {
     descending: false,
     nulls_first: false,
 };
 
-/// Stably sort `batch` by `sort_cols` (ascending, NULLS LAST), returning the
-/// reordered batch.
+/// Build the row converter every run and merge over `sort_cols` shares.
 ///
-/// L0 segments are written UNSORTED (seq-monotonic only), so an L0->L1 merge's
-/// inputs are not key-sorted; `kway_merge` requires each input to be internally
-/// sorted on the merge keys. The executor runs each projected input through this
-/// before merging, so the merge sees pre-sorted inputs and the global output has
-/// the configured order. A segment already sorted (L>=1 inputs) is unchanged by
-/// a stable sort.
-pub fn sort_batch_by(batch: &RecordBatch, sort_cols: &[usize]) -> Result<RecordBatch, ArrowError> {
-    if batch.num_rows() <= 1 {
-        return Ok(batch.clone());
-    }
-    let columns: Vec<SortColumn> = sort_cols
-        .iter()
-        .map(|&i| SortColumn {
-            values: Arc::clone(batch.column(i)),
-            options: Some(MERGE_SORT_OPTIONS),
-        })
-        .collect();
-    let indices = lexsort_to_indices(&columns, None)?;
-    take_record_batch(batch, &indices)
-}
-
-/// A heap entry: the owned sort-key `Row` of one batch's current cursor.
-///
-/// `Ord` is reversed (min-heap via `BinaryHeap`, which is a max-heap): the
-/// "greatest" entry is the row that should be popped LAST, so we compare so the
-/// globally-smallest row is the heap's max. The `(Reverse-style)` comparison is
-/// implemented directly to keep the smallest sort-key row at the top.
-struct HeapEntry {
-    row: OwnedRow,
-    batch_idx: usize,
-}
-
-impl PartialEq for HeapEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.row == other.row
-    }
-}
-impl Eq for HeapEntry {}
-impl PartialOrd for HeapEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for HeapEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse so BinaryHeap (max-heap) yields the smallest row first.
-        other.row.cmp(&self.row)
-    }
-}
-
-/// Merge already-sorted `batches` into a globally `(sort_cols)`-sorted sequence
-/// of `RecordBatch` chunks of at most 16384 rows each.
-///
-/// `sort_cols` are column indices into the (uniform) batch schema, e.g.
-/// `[key_idx, seq_idx]`. All batches must share the same schema (project via
-/// `project_to_schema` first). Returns one batch per 16384-row chunk so a large
-/// merge doesn't materialize a single giant batch and the chunks line up with
-/// the parquet row-group size.
-pub fn kway_merge(
-    batches: &[RecordBatch],
+/// One conversion of each batch's sort keys serves both the per-batch sort and
+/// the k-way merge, and using one converter guarantees the two compare rows
+/// identically.
+pub fn merge_row_converter(
+    schema: &ArrowSchema,
     sort_cols: &[usize],
-) -> Result<Vec<RecordBatch>, ArrowError> {
-    let non_empty: Vec<&RecordBatch> = batches.iter().filter(|b| b.num_rows() > 0).collect();
-    let schema = batches
-        .first()
-        .map(|b| b.schema())
-        .ok_or_else(|| ArrowError::ComputeError("kway_merge: no input batches".into()))?;
-    if non_empty.is_empty() {
-        return Ok(vec![RecordBatch::new_empty(schema)]);
-    }
-
+) -> Result<RowConverter, ArrowError> {
     let fields: Vec<SortField> = sort_cols
         .iter()
         .map(|&i| {
             SortField::new_with_options(schema.field(i).data_type().clone(), MERGE_SORT_OPTIONS)
         })
         .collect();
-    let converter = RowConverter::new(fields)?;
+    RowConverter::new(fields)
+}
 
-    // Per-batch Row encodings of the sort-key columns.
-    let rows_per_batch: Vec<Rows> = non_empty
+/// One internally-sorted merge input: a batch, the row encoding of its sort
+/// keys, and — for a batch that arrived unsorted — the logical-to-physical
+/// order that sorts it.
+///
+/// Sort order is ascending, NULLS LAST ([`MERGE_SORT_OPTIONS`]). L0 segments
+/// are written UNSORTED (seq-monotonic only), so an L0 input is not key-sorted;
+/// higher-level inputs and migration sources the legacy compactor wrote already
+/// are, and their check costs one linear scan of the encoding. An unsorted
+/// input keeps its rows in place and carries the sorted order as indirection —
+/// no gather copy, no re-encoding — because the merge's interleave gathers
+/// physical row indices anyway.
+pub struct SortedRun {
+    batch: RecordBatch,
+    rows: Rows,
+    order: Option<Vec<u32>>,
+}
+
+impl SortedRun {
+    pub fn batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+
+    fn physical(&self, logical: usize) -> usize {
+        match &self.order {
+            Some(order) => order[logical] as usize,
+            None => logical,
+        }
+    }
+
+    fn row(&self, logical: usize) -> Row<'_> {
+        self.rows.row(self.physical(logical))
+    }
+}
+
+/// Encode `batch`'s sort keys once and wrap it as a [`SortedRun`].
+pub fn sort_batch_to_run(
+    batch: &RecordBatch,
+    converter: &RowConverter,
+    sort_cols: &[usize],
+) -> Result<SortedRun, ArrowError> {
+    let columns: Vec<ArrayRef> = sort_cols
         .iter()
-        .map(|b| {
-            let cols: Vec<ArrayRef> = sort_cols.iter().map(|&i| Arc::clone(b.column(i))).collect();
-            converter.convert_columns(&cols)
-        })
-        .collect::<Result<_, _>>()?;
+        .map(|&i| Arc::clone(batch.column(i)))
+        .collect();
+    let rows = converter.convert_columns(&columns)?;
+    let sorted = (1..rows.num_rows()).all(|i| rows.row(i - 1) <= rows.row(i));
+    let order = if sorted {
+        None
+    } else {
+        let mut indices: Vec<u32> = (0..batch.num_rows() as u32).collect();
+        indices.sort_unstable_by(|&a, &b| rows.row(a as usize).cmp(&rows.row(b as usize)));
+        Some(indices)
+    };
+    Ok(SortedRun {
+        batch: batch.clone(),
+        rows,
+        order,
+    })
+}
 
-    let total: usize = non_empty.iter().map(|b| b.num_rows()).sum();
+/// A heap entry: the borrowed sort-key `Row` of one batch's current cursor.
+/// Borrowing from the per-batch `Rows` buffers avoids an allocation per merged
+/// row; the buffers outlive the heap and are never mutated while it runs.
+///
+/// `Ord` is reversed (min-heap via `BinaryHeap`, which is a max-heap): the
+/// "greatest" entry is the row that should be popped LAST, so we compare so the
+/// globally-smallest row is the heap's max. The `(Reverse-style)` comparison is
+/// implemented directly to keep the smallest sort-key row at the top.
+struct HeapEntry<'a> {
+    row: Row<'a>,
+    batch_idx: usize,
+}
+
+impl PartialEq for HeapEntry<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.row == other.row
+    }
+}
+impl Eq for HeapEntry<'_> {}
+impl PartialOrd for HeapEntry<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for HeapEntry<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse so BinaryHeap (max-heap) yields the smallest row first.
+        other.row.cmp(&self.row)
+    }
+}
+
+/// Merge `runs` into a globally sorted sequence of `RecordBatch` chunks of at
+/// most 16384 rows each.
+///
+/// All runs must share the same schema (project via `project_to_schema` first)
+/// and the same converter ([`merge_row_converter`]). Returns one batch per
+/// 16384-row chunk so a large merge doesn't materialize a single giant batch
+/// and the chunks line up with the parquet row-group size.
+///
+/// The implicit `seq` sort key makes every row's key unique, so the merge is
+/// order-independent regardless of input order.
+pub fn merge_runs(runs: &[SortedRun]) -> Result<Vec<RecordBatch>, ArrowError> {
+    let schema = runs
+        .first()
+        .map(|run| run.batch.schema())
+        .ok_or_else(|| ArrowError::ComputeError("merge_runs: no input runs".into()))?;
+    let non_empty: Vec<&SortedRun> = runs.iter().filter(|run| run.batch.num_rows() > 0).collect();
+    if non_empty.is_empty() {
+        return Ok(vec![RecordBatch::new_empty(schema)]);
+    }
+
+    let total: usize = non_empty.iter().map(|run| run.batch.num_rows()).sum();
     let mut cursors = vec![0usize; non_empty.len()];
 
-    // Seed the heap with each batch's first row. We store the `OwnedRow`
-    // (detached from its `Rows` buffer) so the heap can outlive a single borrow.
-    let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::with_capacity(non_empty.len());
-    for (bi, rows) in rows_per_batch.iter().enumerate() {
+    // Seed the heap with each run's first row.
+    let mut heap: BinaryHeap<HeapEntry<'_>> = BinaryHeap::with_capacity(non_empty.len());
+    for (bi, run) in non_empty.iter().enumerate() {
         heap.push(HeapEntry {
-            row: rows.row(0).owned(),
+            row: run.row(0),
             batch_idx: bi,
         });
     }
 
-    // (batch_idx, row_idx) pairs in global sort order, partitioned into chunks.
+    // (batch_idx, physical_row_idx) pairs in global sort order, partitioned
+    // into chunks. An unsorted run's indirection resolves here, so interleave
+    // performs its reorder as part of the ordinary gather.
     let mut chunks: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut current: Vec<(usize, usize)> = Vec::with_capacity(MERGE_CHUNK_ROWS.min(total));
     while let Some(entry) = heap.pop() {
         let bi = entry.batch_idx;
-        let ri = cursors[bi];
-        current.push((bi, ri));
+        current.push((bi, non_empty[bi].physical(cursors[bi])));
         cursors[bi] += 1;
-        if cursors[bi] < rows_per_batch[bi].num_rows() {
+        if cursors[bi] < non_empty[bi].batch.num_rows() {
             heap.push(HeapEntry {
-                row: rows_per_batch[bi].row(cursors[bi]).owned(),
+                row: non_empty[bi].row(cursors[bi]),
                 batch_idx: bi,
             });
         }
@@ -212,14 +247,16 @@ pub fn kway_merge(
     if !current.is_empty() {
         chunks.push(current);
     }
-
     // Gather each output column for each chunk via interleave.
     let num_cols = schema.fields().len();
     let mut out: Vec<RecordBatch> = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
         let mut cols: Vec<ArrayRef> = Vec::with_capacity(num_cols);
         for c in 0..num_cols {
-            let arrays: Vec<&dyn Array> = non_empty.iter().map(|b| b.column(c).as_ref()).collect();
+            let arrays: Vec<&dyn Array> = non_empty
+                .iter()
+                .map(|run| run.batch.column(c).as_ref())
+                .collect();
             cols.push(interleave(&arrays, chunk)?);
         }
         out.push(RecordBatch::try_new(Arc::clone(&schema), cols)?);
@@ -281,6 +318,16 @@ mod tests {
         .unwrap()
     }
 
+    /// Merge batches through the run API: one shared converter, one encoding.
+    fn merge(batches: &[RecordBatch], sort_cols: &[usize]) -> Vec<RecordBatch> {
+        let converter = merge_row_converter(&batches[0].schema(), sort_cols).unwrap();
+        let runs: Vec<SortedRun> = batches
+            .iter()
+            .map(|b| sort_batch_to_run(b, &converter, sort_cols).unwrap())
+            .collect();
+        merge_runs(&runs).unwrap()
+    }
+
     fn collect_rows(batches: &[RecordBatch]) -> Vec<(i64, i64, String)> {
         let mut out = Vec::new();
         for b in batches {
@@ -301,7 +348,7 @@ mod tests {
         let a = batch(vec![(1, 10, "a1"), (4, 30, "a4")]);
         let b = batch(vec![(2, 10, "b2"), (5, 20, "b5")]);
         let c = batch(vec![(3, 20, "c3"), (6, 30, "c6")]);
-        let merged = kway_merge(&[a, b, c], &[1, 0]).unwrap();
+        let merged = merge(&[a, b, c], &[1, 0]);
 
         let rows = collect_rows(&merged);
         assert_eq!(rows.len(), 6, "no row loss / no duplication");
@@ -322,11 +369,12 @@ mod tests {
     }
 
     #[test]
-    fn sort_batch_by_orders_unsorted_input() {
-        // an UNSORTED L0-style batch: keys 30,10,20 with seqs 1,2,3.
+    fn an_unsorted_run_merges_in_sorted_order() {
+        // an UNSORTED L0-style batch: keys 30,10,20 with seqs 1,2,3. The run
+        // keeps the batch in place and carries the order as indirection; the
+        // merge output is what must come back sorted.
         let b = batch(vec![(1, 30, "a"), (2, 10, "b"), (3, 20, "c")]);
-        let sorted = sort_batch_by(&b, &[1, 0]).unwrap();
-        let rows = collect_rows(&[sorted]);
+        let rows = collect_rows(&merge(&[b], &[1, 0]));
         let keyed: Vec<(i64, i64)> = rows.iter().map(|(s, k, _)| (*k, *s)).collect();
         assert_eq!(keyed, vec![(10, 2), (20, 3), (30, 1)]);
     }
@@ -336,7 +384,7 @@ mod tests {
         // No key column: sort by seq alone. Disjoint seq ranges, reversed input.
         let a = batch(vec![(3, 0, "a3"), (4, 0, "a4")]);
         let b = batch(vec![(1, 0, "b1"), (2, 0, "b2")]);
-        let merged = kway_merge(&[a, b], &[0]).unwrap();
+        let merged = merge(&[a, b], &[0]);
         let seqs: Vec<i64> = collect_rows(&merged).iter().map(|(s, _, _)| *s).collect();
         assert_eq!(seqs, vec![1, 2, 3, 4]);
     }
@@ -348,7 +396,7 @@ mod tests {
         let n = MERGE_CHUNK_ROWS as i64 + 100;
         let a = batch((0..n).step_by(2).map(|s| (s, s, "a")).collect());
         let b = batch((1..n).step_by(2).map(|s| (s, s, "b")).collect());
-        let merged = kway_merge(&[a, b], &[1, 0]).unwrap();
+        let merged = merge(&[a, b], &[1, 0]);
         assert!(merged.len() >= 2, "large merge splits into chunks");
         assert_eq!(merged[0].num_rows(), MERGE_CHUNK_ROWS);
         let total: usize = merged.iter().map(|m| m.num_rows()).sum();

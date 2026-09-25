@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 import humanfriendly
+from rigging.timing import Duration
 
 from fray.device_flops import device_flops as _device_flops
 
@@ -710,6 +711,7 @@ class JobRequest:
             fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
+        timeout: Backend-enforced execution deadline, if supported.
     """
 
     name: str
@@ -722,6 +724,7 @@ class JobRequest:
     max_retries_preemption: int = 100
     max_task_failures: int = 0
     priority: int = 0
+    timeout: Duration | None = None
 
     def __post_init__(self):
         if " " in self.name:

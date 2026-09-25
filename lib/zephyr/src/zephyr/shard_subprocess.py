@@ -8,12 +8,10 @@ This module is the child body: it loads one ``ShardTask``, runs the stage in a
 clean process, and writes the result file the parent reads back.
 
 It is kept separate from ``zephyr.runners`` (which holds the runner classes and
-the shared in-process helpers) so the module executed via ``python -m`` is never
-*also* imported during ``zephyr`` package initialization. ``zephyr.runners`` is
-pulled in transitively by ``zephyr/__init__.py`` (``__init__`` → ``execution``
-→ ``runners``); if it were the ``-m`` target, ``runpy`` would find it already
-in ``sys.modules`` and warn while re-executing its body a second time. Nothing
-in the package-init graph imports ``shard_subprocess``, so no such warning.
+the shared in-process helpers) so the ``python -m`` target stays a leaf module
+nothing else imports. Were it a module the child pulls in on the way to its own
+execution, ``runpy`` would find it already in ``sys.modules`` and warn while
+re-executing its body a second time.
 """
 
 import logging

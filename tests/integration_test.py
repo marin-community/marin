@@ -43,6 +43,7 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.timing import Duration
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -309,6 +310,7 @@ def main():
                         ),
                         resources=ResourceConfig.with_cpu(),
                         environment=create_environment(env_vars=env_vars),
+                        timeout=Duration.from_minutes(30),
                     )
                 )
                 handle.wait(raise_on_failure=True, stream_logs=True)

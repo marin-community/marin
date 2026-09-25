@@ -101,11 +101,7 @@ def configure(
         endpoint = runtime.resolver(runtime.endpoint).rstrip("/") + TELEMETRY_ENDPOINT_PATH
         telemetry.configure(endpoint=endpoint, service=service, attributes=resource)
     except Exception:
-        try:
-            logger.warning("could not configure Finelog for %s telemetry", service, exc_info=True)
-        except Exception:
-            pass
-        return
+        logger.warning("could not configure Finelog for %s telemetry", service, exc_info=True)
 
 
 def resolve(

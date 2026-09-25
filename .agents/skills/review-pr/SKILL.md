@@ -1,115 +1,68 @@
 ---
 name: review-pr
-description: Run a multi-agent correctness review only when explicitly requested for a pull request.
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(uv run infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
+description: Review an explicitly identified Marin pull request against the repository's correctness and maintainability expectations.
+allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh api:*), Bash(git diff:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git show:*), Bash(rg:*), Bash(uv run infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
 ---
 
-Provide a code review for the given pull request.
+# Review a pull request
 
-**Agent assumptions (applies to all agents and sub-agents):**
-- All tools are functional. Do not test tools or make exploratory calls.
-- Only call a tool if it is required to complete the task.
+Review the requested pull request at the exact head named by the caller. The
+review is read-only except for comments posted when `--comment` is requested.
 
-Follow these steps precisely:
+## Review standard
 
-1. Launch a fast scout sub-agent to check if any of the following are true:
-   - The PR is closed
-   - The PR is a draft
-   - The PR does not need code review (e.g. automated PR, trivial obviously-correct change)
-   - A prior automated correctness review contains `<!-- marin-correctness-review -->`
-     in either issue comments or inline review comments, and a re-review was not
-     explicitly requested. Check both `gh pr view <PR> --json comments` and
-     `gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate`. When a
-     maintainer explicitly requests a re-review, always proceed.
+A reviewable Marin pull request:
 
-   If any condition is true, stop. Still review agent-generated PRs.
+- Implements the behavior claimed by its title and description without an
+  introduced correctness, security, state-transition, or error-handling defect.
+- Follows the root and path-scoped `AGENTS.md` or `CLAUDE.md` instructions. If
+  tests change, it also follows root `TESTING.md` and any scoped testing guide.
+- Keeps public interfaces, invariants, dependency direction, configuration,
+  and types coherent across every changed call site. Marin does not preserve
+  backward compatibility unless the request explicitly requires it.
+- Uses tests for behavior rather than implementation details, incidental prose,
+  private state, tautologies, or mocks below an I/O boundary.
+- Keeps abstraction proportional to demonstrated reuse. Flag a maintainability
+  problem only when the change creates a concrete structural obstacle, hidden
+  assumption, or distant coupling that materially constrains nearby work.
+- Keeps documentation synchronized with behavior. The pull-request title and
+  body must follow `.agents/skills/writing-style/pull-requests.md`; the body is
+  the squash-merge commit message, not a template, file inventory, or test log.
 
-2. Launch a fast scout sub-agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
-   - The root CLAUDE.md and AGENTS.md files, if they exist
-   - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
+Report only actionable defects introduced by the pull request. Validate every
+finding against the diff, relevant surrounding code, and applicable
+instructions. Do not report style preferences, speculative failures, harmless
+duplication in `experiments/grug`, or pre-existing problems. If the evidence is
+uncertain, omit the finding.
 
-3. Launch a deep-review sub-agent to view the PR and return a summary of the changes. The
-   same agent also checks the PR title and description against
-   `.agents/skills/writing-style/pull-requests.md` and returns any problems it
-   finds:
+## Workflow
 
-   - a title over 72 characters, a non-imperative title, or a conventional-commit
-     prefix such as `feat:` or `fix:`;
-   - a body whose length comes from diff narration, repetition, or background a
-     future reader does not need;
-   - a "Testing" / "Validation" / "Test plan" section, or "how I verified it" narration;
-   - a templated What/Change/Scope/Testing heading scaffold, or empty boilerplate
-     headings (a `## Summary` that restates the title, a `## Changes` that just
-     lists the touched files) — markdown is fine when it makes the change clearer,
-     the problem is structure that carries no information a reviewer needs;
-   - checkboxes, emoji, agent/provider attribution, session URLs, or a filler
-     opener ("This PR…", "Summary of changes:");
-   - a file, symbol, or test inventory that repeats information visible in the
-     diff;
-   - verdict or advocacy language that substitutes emphasis for evidence, such
-     as `why this is correct`, `cleaner`, `provably`, or all-caps claims;
-   - a body that buries what-the-change-does under boilerplate instead of leading
-     with it.
+1. Inspect the pull request metadata, issue comments, inline comments, and
+   current head. Stop without commenting when the pull request is closed, a
+   draft, an automated dependency update, or too trivial to benefit from code
+   review. Still review agent-generated pull requests.
 
-   A terse, plain body for a small change is correct — do not flag mere brevity or
-   the absence of markdown. Flag descriptions that read like a filled-in form or
-   implementation report rather than a commit message.
+2. Check both issue and inline comments for
+   `<!-- marin-correctness-review -->`. Stop when a prior automated correctness
+   review is present unless a maintainer explicitly requested another review.
 
-4. Launch four sub-agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "instruction-following", "bug").
+3. Confirm that the checked-out commit and the pull request's current head both
+   match the requested head. If either differs, report the stale review and post
+   nothing.
 
-   Sub-agents 1 and 2: deep-review instruction-following reviewers. Audit changes against scoped CLAUDE.md and AGENTS.md instructions. When evaluating a file, only consider instruction files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
+4. Read the root instructions and every instruction file that scopes a changed
+   path. Read the root and scoped testing guides when tests change. Inspect the
+   complete diff and enough surrounding code to validate behavior and call-site
+   consistency.
 
-   Sub-agents 3 and 4: deep-review bug reviewers. Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
+5. Review the code against the standard above. For each finding, record its
+   changed file and line, category (`bug`, `instruction-following`, or
+   `maintainability`), concrete impact, and the evidence that makes it certain.
+   Separately record title or description problems.
 
-   **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
-   - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
-   - The code will definitely produce wrong results regardless of inputs (clear logic errors)
-   - Clear, unambiguous CLAUDE.md or AGENTS.md violations where you can quote the exact rule being broken
-
-   Do NOT flag:
-   - Code style or quality concerns
-   - Potential issues that depend on specific inputs or state
-   - Subjective suggestions or improvements
-
-   If you are not certain an issue is real, do not flag it. False positives erode trust.
-
-   Tell each sub-agent the PR title and description for author-intent context.
-
-   **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
-
-5. Review maintainability with at most four limited-attention sub-agents. Rank
-   changed, human-authored areas by design impact. Prefer public interfaces,
-   invariants, state transitions, abstraction boundaries, policy, and prose that
-   makes novel claims. Skip generated files, formatting, mechanical renames,
-   data-only changes, and repetitive call-site edits.
-
-   Give each sub-agent one selected file or cohesive hunk, with only its path and a
-   small amount of local context. Do not give it the PR description, related
-   files, or review summaries, and do not let it open more context.
-
-   Prefer shallow, concrete code that can be copied, deleted, and recombined
-   locally. Treat small duplication as useful when it keeps variants independent.
-   Flag abstractions that force unrelated variants through shared layers or
-   coordinated edits.
-
-   Ask the sub-agent to privately simulate reasonable future changes near the edited
-   code. Use the exercise to find hidden assumptions, distant coupling, or
-   unneeded abstraction and indirection that constrain future work. The final
-   finding must identify the structural obstacle and explain how it reduces
-   flexibility. Omit the hypothetical edit from the review. Do not flag
-   unfamiliar code, personal taste, or broad requests to simplify. Return only
-   the strongest finding, or no finding.
-
-6. Validate each finding from step 5 against the PR description and broader code
-   context. Confirm that it is real, impactful, introduced by the PR, and still
-   blocks a plausible future change. Omit the simulated change from the final
-   review. The high-signal review list is the issues from step 4 plus the
-   validated findings from step 5.
-
-7. Emit a stats event for this review (best-effort — never retry, never
-   surface failures to the user). This step runs unconditionally, *before*
-   any of the early-stop branches below, so we capture no-finding runs and
-   non-`--comment` runs in the dashboard. Run from the repo root:
+6. Emit one best-effort stats event before returning, including clean and
+   non-commenting reviews. Never retry or surface a telemetry failure. Run from
+   the repository root:
 
    ```bash
    cat <<'EOF' | uv run infra/codehealth/log_stats.py
@@ -129,66 +82,33 @@ Follow these steps precisely:
    EOF
    ```
 
-   - `<category>` is one of: `bug`, `instruction-following`, `maintainability`.
-   - One `findings` row per validated issue. Pass `"findings": []` if there
-     were none — the empty row in the `invocations` table is the
-     "tool ran with no signal" datapoint we want. `finding_count` is derived
-     from the `findings` array length by `log_stats.py`.
+   Use an empty `findings` array when the code review is clean.
 
-8. Output a summary of the review findings to the terminal:
-   - If issues were found, list each issue with a brief description.
-   - If no issues were found, state: "No issues found."
-   - Separately, report any PR-description problems from step 3.
+7. Print the findings or `No issues found.` and list pull-request-description
+   problems separately. Without `--comment`, stop here.
 
-   If `--comment` argument was NOT provided, stop here. Do not post any GitHub comments.
+8. With `--comment`, post one top-level comment for all title or description
+   problems. Begin with `🤖`, name each concrete problem and fix, and end with
+   `<!-- marin-correctness-review -->`.
 
-   If `--comment` IS provided and step 3 found PR-description problems, post **one**
-   top-level comment with `gh pr comment` (prefixed `🤖`, not inline) naming the
-   specific problems and the concrete fix (e.g. "drop the Testing section; lead
-   with what changed and why"). End it with `<!-- marin-correctness-review -->`.
-   This is independent of the code review — post it whether or not code issues
-   were found, but skip it when the description is fine.
+9. If the code review is clean and step 8 did not post a description comment,
+   post exactly this top-level comment. Otherwise stop after the description
+   comment.
 
-   If `--comment` argument IS provided and NO code issues were found, post the
-   no-issues summary comment using `gh pr comment` and stop.
+   ```markdown
+   🤖 Code review
 
-   If `--comment` argument IS provided and code issues were found, continue to step 9.
+   No issues found.
 
-9. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
+   <!-- marin-correctness-review -->
+   ```
 
-10. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
-    - Provide a brief description of the issue
-    - For small, self-contained fixes, include a committable suggestion block
-    - For larger fixes (6+ lines, structural changes, or changes spanning multiple locations), describe the issue and suggested fix without a suggestion block
-    - Never post a committable suggestion UNLESS committing the suggestion fixes the issue entirely. If follow up steps are required, do not leave a committable suggestion.
-    - End the body with `<!-- marin-correctness-review -->`.
+10. Otherwise, post one inline comment per unique code finding. Begin each body
+    with `🤖`, explain the defect and its impact, and end with
+    `<!-- marin-correctness-review -->`. Include a committable suggestion only
+    when that suggestion completely fixes a small, self-contained issue. Use a
+    full-SHA GitHub link with surrounding context when citing repository
+    instructions or related code.
 
-    **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
-
-Do not flag pre-existing issues or nitpicks.
-
-Notes:
-
-- Use gh CLI to interact with GitHub (e.g., fetch pull requests, create comments). Do not use web fetch.
-- Create a todo list before starting.
-- You must cite and link each issue in inline comments (e.g., if referring to a CLAUDE.md, include a link to it ideally with line number).
-- For changed tests, use root `TESTING.md` and the relevant module-specific `AGENTS.md`/`TESTING.md`/testing docs as the review checklist. Flag only concrete violations; do not use them to request broad coverage improvements.
-- If no issues are found and `--comment` argument is provided, post a comment with the following format:
-
----
-
-## Code review
-
-No issues found.
-
-<!-- marin-correctness-review -->
-
----
-
-- When linking to code in inline comments, follow the following format precisely, otherwise the Markdown preview won't render correctly: https://github.com/marin-community/marin/blob/c21d3c10bc8e898b7ac1a2d745bdc9bc4e423afe/package.json#L10-L15
-  - Requires full git sha
-  - You must provide the full sha. Commands like `https://github.com/owner/repo/blob/$(git rev-parse HEAD)/foo/bar` will not work, since your comment will be directly rendered in Markdown.
-  - Repo name must match the repo you're code reviewing
-  - # sign after the file name
-  - Line range format is L[start]-L[end]
-  - Provide at least 1 line of context before and after, centered on the line you are commenting about (eg. if you are commenting about lines 5-6, you should link to `L4-7`)
+Use `gh` for GitHub reads and top-level comments. Post inline comments with the
+GitHub inline-comment tool and `confirmed: true`.

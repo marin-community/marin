@@ -27,7 +27,8 @@ unfocused.
 - Describe current behavior, not aspiration.
 - Include exact commands and paths for operational procedures.
 - Remove or correct stale instructions rather than adding caveats around them.
-- Keep broad docs concise; put detailed run notes in logbooks or issue comments.
+- Keep broad docs concise; put detailed run notes in the existing issue, W&B
+  report, or durable session channel.
 
 ## Done Criteria
 

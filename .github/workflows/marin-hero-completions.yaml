@@ -1,0 +1,85 @@
+name: "Marin - Hero Completions"
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      submission:
+        description: Submit the next checkpoint or all unfinished checkpoints
+        type: choice
+        default: next
+        options:
+          - next
+          - all
+      priority:
+        description: Priority for all currently discovered checkpoints
+        type: choice
+        default: batch
+        options:
+          - batch
+          - interactive
+          - production
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+concurrency:
+  group: hero-checkpoint-completions
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      WANDB_MODE: disabled
+      JAX_PLATFORMS: cpu
+    steps:
+      - name: Check storage credentials
+        run: |
+          : "${CW_KEY_ID:?CW_ACCESS_KEY_ID repository secret is required}"
+          : "${CW_KEY_SECRET:?CW_SECRET_ACCESS_KEY repository secret is required}"
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # Retry requests from their original source commit.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install controller dependencies
+        # The shared hero recipe imports tokenization, which currently requires the dedup extra.
+        run: uv sync --locked --package marin-core --extra cpu --extra dedup --no-default-groups
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - name: Reconcile every permanent checkpoint
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SAMPLING_SUBMISSION: ${{ inputs.submission || 'next' }}
+          SAMPLING_PRIORITY: ${{ inputs.priority }}
+        run: |
+          args=()
+          if [[ -n "$SAMPLING_PRIORITY" ]]; then
+            args+=(--priority "$SAMPLING_PRIORITY")
+          fi
+          uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile \
+            --submission "$SAMPLING_SUBMISSION" "${args[@]}"
+      - name: Publish current completions and a daily snapshot
+        if: always() && steps.auth.outcome == 'success'
+        run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check report
+      - name: Write the sampling summary
+        if: always() && steps.auth.outcome == 'success'
+        run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check status

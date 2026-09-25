@@ -12,10 +12,13 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from pydantic import ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
+from marin.evaluation.records import BenchmarkMetadataRef
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
 
@@ -27,6 +30,8 @@ _BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
+    # Harbor downloads gated Hugging Face datasets in preflight and on workers.
+    "HF_TOKEN",
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -66,7 +71,7 @@ _DRIVER_STORAGE_ENV_KEYS = (
     "GOOGLE_CLOUD_PROJECT",
 )
 
-HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
+HARBOR_PACKAGES = (HARBOR.requirement(("archive",)), *HARBOR.runtime_requirements)
 HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 
 # The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
@@ -94,6 +99,17 @@ class HarborDatasetKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class HarborErrorTaxonomy:
+    """Harbor exception names grouped by their published scoring semantics."""
+
+    infrastructure: frozenset[str]
+    agent: frozenset[str]
+    passthrough: frozenset[str]
+    undecided: frozenset[str]
+    commit: str
+
+
+@dataclass(frozen=True)
 class ValidatedHarborConfig:
     """An opaque validated policy plus Marin-owned launch metadata."""
 
@@ -105,6 +121,12 @@ class ValidatedHarborConfig:
     workspace_dataset_path: Path | None
     agent: str
     environment: str
+    error_taxonomy: HarborErrorTaxonomy
+    max_input_tokens: int
+    max_output_tokens: int
+    benchmark: BenchmarkMetadataRef
+    trials_per_task: int
+    verifier_env_keys: tuple[str, ...] = ()
 
     @property
     def record_dataset(self) -> str:
@@ -115,6 +137,18 @@ class ValidatedHarborConfig:
     @property
     def record_revision(self) -> str:
         return self.dataset_revision or "unversioned"
+
+    def benchmark_for(self, task_limit: int | None, task: str | None = None) -> BenchmarkMetadataRef:
+        """Return the benchmark descriptor Harbor will emit after Marin's runtime overlay."""
+        attempted = self.benchmark.n_attempted
+        if task_limit is not None and self.benchmark.n_benchmark is not None:
+            attempted = min(task_limit, self.benchmark.n_benchmark)
+        return self.benchmark.model_copy(
+            update={
+                "task": task or self.benchmark.task,
+                "n_attempted": attempted,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -128,6 +162,8 @@ class HarborRuntimeOverlay:
     served_model: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    archive_root: str
+    archive_dataset: str
 
 
 def _driver_command(command: str, *paths: Path) -> list[str]:
@@ -217,14 +253,65 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
             raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
         return value
 
+    def required_int(name: str) -> int:
+        value = payload.get(name)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
+        return value
+
+    def required_positive_int(name: str) -> int:
+        value = payload.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
+        return value
+
     revision = payload.get("dataset_revision")
     if revision is not None and not isinstance(revision, str):
         raise ValueError(f"Harbor preflight returned invalid dataset revision metadata for {path}")
+    verifier_env_keys = payload.get("verifier_env_keys")
+    if not isinstance(verifier_env_keys, list) or any(not isinstance(key, str) or not key for key in verifier_env_keys):
+        raise ValueError(f"Harbor preflight returned invalid verifier environment metadata for {path}")
     try:
         dataset_kind = HarborDatasetKind(required_string("dataset_kind"))
     except ValueError as exc:
         raise ValueError(f"Harbor preflight returned an unknown dataset kind for {path}") from exc
     dataset_selector = required_string("dataset_selector")
+    taxonomy_payload = payload.get("error_taxonomy")
+    if not isinstance(taxonomy_payload, Mapping):
+        raise ValueError(f"Harbor preflight returned invalid error taxonomy metadata for {path}")
+
+    def taxonomy_names(category: str) -> frozenset[str]:
+        values = taxonomy_payload.get(category)
+        if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+            raise ValueError(f"Harbor preflight returned invalid {category!r} error taxonomy for {path}")
+        return frozenset(values)
+
+    taxonomy_commit = taxonomy_payload.get("commit")
+    if (
+        not isinstance(taxonomy_commit, str)
+        or len(taxonomy_commit) != FULL_GIT_COMMIT_LENGTH
+        or any(character not in "0123456789abcdef" for character in taxonomy_commit)
+    ):
+        raise ValueError(f"Harbor preflight returned invalid error taxonomy commit for {path}")
+    error_taxonomy = HarborErrorTaxonomy(
+        infrastructure=taxonomy_names("infrastructure"),
+        agent=taxonomy_names("agent"),
+        passthrough=taxonomy_names("passthrough"),
+        undecided=taxonomy_names("undecided"),
+        commit=taxonomy_commit,
+    )
+    categories = (
+        error_taxonomy.infrastructure,
+        error_taxonomy.agent,
+        error_taxonomy.passthrough,
+        error_taxonomy.undecided,
+    )
+    if any(left & right for index, left in enumerate(categories) for right in categories[index + 1 :]):
+        raise ValueError(f"Harbor preflight returned overlapping error taxonomy categories for {path}")
+    try:
+        benchmark = BenchmarkMetadataRef.model_validate(payload.get("benchmark_metadata"))
+    except ValidationError as exc:
+        raise ValueError(f"Harbor preflight returned invalid benchmark metadata for {path}") from exc
     workspace_dataset_path = None
     if dataset_kind == HarborDatasetKind.LOCAL:
         workspace_root = find_project_root(path)
@@ -247,6 +334,12 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         workspace_dataset_path=workspace_dataset_path,
         agent=required_string("agent"),
         environment=required_string("environment"),
+        verifier_env_keys=tuple(verifier_env_keys),
+        error_taxonomy=error_taxonomy,
+        max_input_tokens=required_int("max_input_tokens"),
+        max_output_tokens=required_int("max_output_tokens"),
+        benchmark=benchmark,
+        trials_per_task=required_positive_int("trials_per_task"),
     )
 
 

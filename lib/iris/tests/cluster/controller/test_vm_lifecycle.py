@@ -101,10 +101,6 @@ class FakeWorkerHandle:
         return f"http://{self._internal_address}:10001"
 
     @property
-    def bootstrap_log(self) -> str:
-        return ""
-
-    @property
     def worker_id(self) -> str:
         return self._vm_id
 

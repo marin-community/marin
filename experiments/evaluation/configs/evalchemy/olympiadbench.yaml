@@ -4,5 +4,6 @@ task_options:
     num_fewshot: 0
     task_alias: olympiadbench
     generation: true
-max_tokens: 32768
+# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
+# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 runtime_extras: [olympiadbench]

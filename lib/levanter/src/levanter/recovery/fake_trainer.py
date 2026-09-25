@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-import resource
+import signal
 import sys
 import time
 
@@ -56,8 +56,8 @@ def _inject(behavior: str) -> None:
         while True:
             time.sleep(3600)
     if behavior == "crash":
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        os.abort()  # SIGABRT -> negative returncode -> FaultClass.CRASH
+        # Avoid core-dumping signals: CI crash handlers can keep the child alive past the test deadman.
+        os.kill(os.getpid(), signal.SIGKILL)
     if behavior == "hard":
         sys.exit(7)  # non-sentinel nonzero -> FaultClass.HARD, not restarted
     if behavior == "complete":

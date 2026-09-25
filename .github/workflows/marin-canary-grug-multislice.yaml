@@ -84,6 +84,7 @@ jobs:
           set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
+            --timeout 21600 \
             --region "$GRUG_MULTISLICE_REGION" \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \

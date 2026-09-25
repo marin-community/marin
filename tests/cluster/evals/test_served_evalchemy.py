@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
-from marin.evaluation.evalchemy.result import EvalchemyResult
+from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -67,8 +67,8 @@ def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> N
         if not is_job_finished(job.state):
             job.cancel()
 
-    # Metrics are keyed by each task's upload dir (name_Nshot when un-aliased), not the bare task name.
-    metrics = EvalchemyResult.raw_load(out_path).task_metrics()
+    # Metrics are keyed by each task's archive source directory, not the bare task name.
+    metrics = FineStoreEvalchemyResult.raw_load(out_path).task_metrics()
     assert set(metrics) >= {"arc_easy_0shot", "gsm8k_5shot"}, metrics
     assert metrics["arc_easy_0shot"], "arc_easy produced no numeric metrics"
     assert metrics["gsm8k_5shot"], "gsm8k produced no numeric metrics"

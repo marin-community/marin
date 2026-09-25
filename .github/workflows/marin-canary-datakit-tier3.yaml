@@ -72,6 +72,7 @@ jobs:
           # once the tokenize job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --timeout 21600 \
             --region=europe-west4 \
             --memory=4G --disk=5G --cpu=1 --extra=cpu \
             --enable-extra-resources \

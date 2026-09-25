@@ -268,11 +268,6 @@ class RemoteWorkerHandle(Protocol):
         """
         ...
 
-    @property
-    def bootstrap_log(self) -> str:
-        """Most recent bootstrap output captured for this worker."""
-        ...
-
     def status(self) -> WorkerStatus:
         """Cloud-level worker status."""
         ...

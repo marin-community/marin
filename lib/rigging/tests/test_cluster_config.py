@@ -4,6 +4,8 @@
 """Tests for the cluster DataConfig: the active-config accessor, YAML loading and
 field-default parsing, and prefix resolution."""
 
+import os
+
 import pytest
 import rigging.filesystem.cluster_config as fs
 from rigging.filesystem.cluster_config import (
@@ -113,6 +115,18 @@ def test_resolved_root_strips_trailing_slash(monkeypatch):
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     config = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-na/marin/")
     assert config.resolved_root() == "s3://marin-na/marin"
+
+
+def test_resolved_root_anchors_relative_local_prefix(monkeypatch, tmp_path):
+    """A relative local prefix resolves against the working directory, so every path derived
+    from the root is absolute and cannot be re-rooted a second time."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MARIN_PREFIX", "local_store/")
+    assert DataConfig(region_buckets={}).resolved_root() == os.path.join(os.getcwd(), "local_store")
+
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    config = DataConfig(region_buckets={}, root="local_store")
+    assert config.resolved_root() == os.path.join(os.getcwd(), "local_store")
 
 
 def test_resolved_root_uses_explicit_root(monkeypatch):

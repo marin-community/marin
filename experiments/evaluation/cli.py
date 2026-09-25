@@ -63,6 +63,9 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
+    geometry = batch.accelerator.geometry
+    serving = geometry.label if geometry is not None else "worker-resolved"
+    task_count = geometry.task_count if geometry is not None else 1
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
@@ -70,12 +73,19 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"priority={priority_band_name(batch.priority_band)}"
     )
     for evaluation in batch.evaluations:
-        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
+        eval_ref = evaluation.identity.eval_ref
+        tasks = [task.name for task in eval_ref.tasks]
+        harbor = eval_ref.harbor
+        agent_context = ""
+        if harbor is not None:
+            agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
         click.echo(
-            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
+            f"{agent_context}"
             f"records={batch.records_prefix}"
         )
 
@@ -119,6 +129,7 @@ def cli() -> None:
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
+@click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
 @click.option(
     "--version",
     "version",
@@ -153,6 +164,7 @@ def launch(
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    seed: int | None,
     version: str | None,
     description: str | None,
     no_wait: bool,
@@ -191,6 +203,7 @@ def launch(
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
+        seed=seed,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,

@@ -1,7 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import cast
 
 import jax
@@ -9,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla
+from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla, config
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
@@ -631,6 +635,53 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
 
     assert block_sizes.b_block_size == 1024
     assert block_sizes.h_block_size == 512
+
+
+def test_infer_block_sizes_untuned_default_fits_the_nvidia_weight_tile_budget():
+    """The batched_xla launch check refuses a weight tile over the shared-memory budget; an
+    inferred default over it can never trace, so the autotune result is never retained and
+    every call repeats the block-size sweep (#8853)."""
+    default = BlockSizes.get_default()
+    limit = config.NVIDIA_WEIGHT_TILE_BYTES_LIMIT
+    assert default.h_block_size * default.v_block_size * 2 > limit  # the premise: default is over
+
+    # b=98304, h=4096 falls in no NVIDIA tuned bucket, so inference lands on the default entry.
+    block_sizes = infer_block_sizes(
+        b=98304,
+        h=4096,
+        v=131072,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA GH200 480GB",
+    )
+
+    assert block_sizes.h_block_size * block_sizes.v_block_size * 2 <= limit
+    # The clamp halves v first and touches nothing else.
+    assert block_sizes.b_block_size == default.b_block_size
+    assert block_sizes.h_block_size == default.h_block_size
+    assert block_sizes.v_block_size == 64
+
+    # The launch check must accept what inference produced.
+    batched_xla._validate_launch_feasibility(
+        w_dtype=jnp.dtype(jnp.bfloat16),
+        h_block_size=block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+        num_h_blocks=1,
+    )
+
+
+def test_infer_block_sizes_weight_tile_budget_ignores_non_nvidia_devices():
+    block_sizes = infer_block_sizes(
+        b=98304,
+        h=4096,
+        v=131072,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="AMD MI300X",
+    )
+    assert block_sizes == BlockSizes.get_default()
 
 
 def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
@@ -1274,7 +1325,7 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
     assert float(score) >= 0.0
 
 
-def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_autotune_selects_first_viable_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
     partition_spec = jax.sharding.PartitionSpec
     mesh = jax.sharding.Mesh(
         np.array(jax.devices()[:1]),
@@ -1295,7 +1346,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     )
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
     seen_block_sizes: list[fused_api.BlockSizes | None] = []
-    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    compiled_candidates: list[fused_api.BlockSizes] = []
     faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
     slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
 
@@ -1317,12 +1368,14 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
         lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
     )
 
-    def fake_benchmark(**kwargs):
+    def fake_compile(**kwargs):
         candidate = kwargs["candidate"]
-        benchmarked_candidates.append(candidate)
-        return 1.0 if candidate == faster else 2.0
+        compiled_candidates.append(candidate)
+        if candidate == inferred:
+            raise RuntimeError("candidate cannot compile")
+        return lambda *args: args[0]
 
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", fake_compile)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
@@ -1349,9 +1402,8 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     out = mapped(x, y, w)
     out.block_until_ready()
 
-    assert benchmarked_candidates == [inferred, slower, faster]
-    assert seen_block_sizes[-1] == faster
-    assert faster in seen_block_sizes
+    assert compiled_candidates == [inferred, slower]
+    assert seen_block_sizes[-1] == slower
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
@@ -1545,6 +1597,144 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_mean(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    candidates = [BlockSizes(128, 128, v) for v in (128, 256, 512)]
+    rank_timings = ((1.0, 2.0, 0.1), (10.0, 2.0, None))
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, dict[int, object]] = {}
+    executed: dict[int, list[BlockSizes]] = {0: [], 1: []}
+
+    @dataclass(frozen=True)
+    class Device:
+        process_index: int
+
+    mesh = jax.sharding.Mesh(np.array([Device(1), Device(2)], dtype=object), ("data",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+
+    def allgather(value, *, process_ids):
+        assert process_ids == (1, 2)
+        sequence = context.sequence
+        context.sequence += 1
+        with condition:
+            round_values = exchanged.setdefault(sequence, {})
+            round_values[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(round_values) == 2, timeout=5)
+            return [round_values[index] for index in range(2)]
+
+    def compile_candidate(*, candidate, **kwargs):
+        del kwargs
+        if rank_timings[context.rank][candidates.index(candidate)] is None:
+            raise RuntimeError("candidate failed on this rank")
+        return candidate
+
+    def run_candidate(candidate, *args):
+        del args
+        executed[context.rank].append(candidate)
+        return rank_timings[context.rank][candidates.index(candidate)]
+
+    def fake_impl(x_value, labels_value, w_value, **kwargs):
+        del labels_value, w_value, kwargs
+        return x_value, x_value
+
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank + 1)
+    monkeypatch.setattr(fused_api.autotune_utils, "named_sharding_of", lambda _value: sharding)
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
+    monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", compile_candidate)
+    monkeypatch.setattr(fused_api, "_run_block_sizes_candidate", run_candidate)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+
+    def run_rank(rank):
+        context.rank = rank
+        context.sequence = 0
+        return fused_api._autotune_block_sizes_on_miss(
+            impl_name="batched_xla",
+            fn=fake_impl,
+            x=x,
+            labels=labels,
+            w=w,
+            inferred=candidates[0],
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winners = list(executor.map(run_rank, range(2)))
+
+    assert winners == [candidates[1], candidates[1]]
+    assert executed == {0: candidates[:2], 1: candidates[:2]}
+
+
+@pytest.mark.parametrize("different_setting", ["tuned_match", "autotune_enabled"])
+def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
+    monkeypatch: pytest.MonkeyPatch, different_setting: str
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = BlockSizes(128, 128, 128)
+    faster = BlockSizes(128, 128, 256)
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, object] = {}
+
+    def allgather(value):
+        with condition:
+            exchanged[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(exchanged) == 2, timeout=5)
+            return [exchanged[index] for index in range(2)]
+
+    def fake_impl(x_value, labels_value, w_value, *, block_sizes, **kwargs):
+        del labels_value, w_value, kwargs
+        output = jnp.full((x_value.shape[0],), block_sizes.v_block_size, dtype=jnp.float32)
+        return output, jnp.zeros_like(output)
+
+    def infer_for_rank(*args, **kwargs):
+        del args, kwargs
+        return inferred, different_setting == "tuned_match" and context.rank == 0
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+    monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", infer_for_rank)
+    monkeypatch.setattr(
+        fused_api, "_autotune_enabled", lambda: different_setting != "autotune_enabled" or context.rank == 0
+    )
+    sweep_called = []
+
+    def fake_autotune(**kwargs):
+        sweep_called.append(kwargs)
+        return faster
+
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "batched_xla", fake_impl)
+
+    def run_rank(rank):
+        context.rank = rank
+        try:
+            fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x, labels, w, reduction=None, implementation="batched_xla"
+            )
+        except RuntimeError as exc:
+            return exc
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(run_rank, range(2)))
+
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert not sweep_called
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
@@ -2485,3 +2675,90 @@ def test_xla_fast_backward_emits_no_scatter():
     assert "stablehlo.scatter" not in text
     # Both backward GEMMs must stay on bf16 operands (tensor cores), not upcast to f32.
     assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text
+
+
+@pytest.mark.parametrize(
+    "rows,fast_backward,soft_cap",
+    [(17, False, None), (35, False, 1.3), (17, True, None), (35, True, 1.3), (32, False, None)],
+)
+def test_xla_ce_partial_batch_tiles_preserve_values_and_all_gradients(rows, fast_backward, soft_cap):
+    keys = jax.random.split(jax.random.PRNGKey(281), 5)
+    x = jax.random.normal(keys[0], (rows, 8)) * 0.2
+    w = jax.random.normal(keys[1], (8, 19)) * 0.3
+    labels = jax.random.randint(keys[2], (rows,), 0, 19)
+    loss_weights = jax.random.normal(keys[3], (rows,))
+    lse_weights = jax.random.normal(keys[4], (rows,))
+
+    def actual(x, w):
+        return fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=BlockSizes(b_block_size=8, h_block_size=8, v_block_size=8),
+            fast_backward=fast_backward,
+            bwd_batch_block_size=6 if fast_backward else None,
+            logit_soft_cap=soft_cap,
+        )
+
+    def reference(x, w):
+        logits = x @ w
+        if soft_cap is not None:
+            logits = jnp.tanh(logits / soft_cap) * soft_cap
+        # These small logits need no stabilization. Keep the dense oracle independent
+        # of the production reduction and TPU's approximate default logarithms.
+        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+        lse = jax.lax.log(jnp.sum(jax.lax.exp(logits, accuracy=accuracy), axis=-1), accuracy=accuracy)
+        return lse - logits[jnp.arange(rows), labels], lse
+
+    def objective(x, w, implementation):
+        loss, lse = implementation(x, w)
+        return jnp.sum(loss * loss_weights + lse * lse_weights)
+
+    actual_values = jax.jit(actual)(x, w)
+    expected_values = reference(x, w)
+    dense_values = linear_softmax_cross_entropy_loss_reference(x, labels, w, logit_soft_cap=soft_cap)
+    for value, expected in zip(dense_values, expected_values, strict=True):
+        np.testing.assert_allclose(value, expected, atol=1e-5, rtol=1e-5)
+    actual_grads = jax.jit(jax.grad(lambda x, w: objective(x, w, actual), argnums=(0, 1)))(x, w)
+    expected_grads = jax.grad(lambda x, w: objective(x, w, reference), argnums=(0, 1))(x, w)
+    for value, expected in zip((*actual_values, *actual_grads), (*expected_values, *expected_grads), strict=True):
+        np.testing.assert_allclose(value, expected, atol=1e-5, rtol=1e-5)
+    _, _, argmax = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        labels,
+        w,
+        block_sizes=BlockSizes(b_block_size=8, h_block_size=8, v_block_size=8),
+        logit_soft_cap=soft_cap,
+        return_argmax=True,
+    )
+    np.testing.assert_array_equal(argmax, jnp.argmax(x @ w, axis=-1))
+
+
+@pytest.mark.parametrize("rows,backward_tile", [(8192, None), (8519, None), (8521, None), (8519, 1217)])
+def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows, backward_tile):
+    # 8519 = 7 * 1217: divisor-sized GEMMs caused a packed-sequence performance cliff.
+    def loss(x, labels, w):
+        return fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=BlockSizes(b_block_size=256, h_block_size=8, v_block_size=16),
+            fast_backward=backward_tile is not None,
+            bwd_batch_block_size=backward_tile,
+        )
+
+    hlo = str(
+        jax.jit(loss)
+        .lower(
+            jax.ShapeDtypeStruct((rows, 8), jnp.float32),
+            jax.ShapeDtypeStruct((rows,), jnp.int32),
+            jax.ShapeDtypeStruct((8, 19), jnp.float32),
+        )
+        .compiler_ir(dialect="stablehlo")
+    )
+    gemms = [line for line in hlo.splitlines() if "stablehlo.dot_general" in line]
+    assert gemms
+    assert all("tensor<256x8xf32>, tensor<8x16xf32>" in line for line in gemms)
+
+    row_counts = [int(rows) for rows in re.findall(r"tensor<(\d+)x8xf32>", hlo)]
+    assert max(row_counts) < rows + 256

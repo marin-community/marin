@@ -206,6 +206,10 @@ curl -X POST \
   "${CAPABILITY_URL%/}/checkpoint"
 ```
 
+To write a permanent checkpoint instead, send `request-permanent-checkpoint` as the header value. It goes to the main
+checkpoint path, is never pruned, and removes the run's temporary checkpoints once it commits. The page's button saves
+only temporary checkpoints.
+
 The capability URL is a credential for one endpoint. Do not share it. Iris sets an expiration time when it creates the URL.
 
 ## Memory pressure

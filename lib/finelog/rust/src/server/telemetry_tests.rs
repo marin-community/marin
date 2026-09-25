@@ -20,7 +20,7 @@ use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
-use crate::server::{build_app_with_config, ServerConfig};
+use crate::server::{build_app_with_config, ForwardingConfig, ServerConfig};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::Store;
@@ -81,6 +81,33 @@ async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> Stri
     assert_eq!(response.status(), StatusCode::OK, "GET {path}");
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn list_relay_status_accepts_connect_json_for_independent_consumers() {
+    let (addr, _) = serve(
+        disk_store("relay-status-connect-json"),
+        AuthPolicy::allow_localhost(),
+    )
+    .await;
+    let response = http_client()
+        .request(
+            Request::post(format!(
+                "http://{addr}/finelog.stats.StatsService/ListRelayStatus"
+            ))
+            .header("connect-protocol-version", "1")
+            .header("content-type", "application/json")
+            .body(full_body(Bytes::from_static(b"{}")))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap(),
+        json!({})
+    );
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
@@ -227,6 +254,34 @@ fn training_metrics_batch(
     .unwrap()
 }
 
+fn session_discovery_batch(
+    batch_id: &str,
+    job_id: &str,
+    name: &str,
+    metric_source: &str,
+) -> Vec<u8> {
+    let records = vec![json!({
+        "timestamp_ms": 1_700_000_000_001_i64,
+        "kind": "gauge",
+        "name": name,
+        "value": 1.0,
+        "attributes": {"metric_source": metric_source}
+    })];
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {
+            "service": "marinskyrl",
+            "run_id": format!("run-{job_id}"),
+            "job_id": job_id,
+            "execution_uid": format!("execution-{job_id}"),
+            "attributes": {}
+        },
+        "records": records
+    }))
+    .unwrap()
+}
+
 async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
     let _guard = store.query_visibility().read().await;
     let providers = store.query_providers().unwrap();
@@ -350,6 +405,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "node_memory_used_bytes",
             "node_network_receive_bytes",
             "node_network_transmit_bytes",
+            "num_requests_running",
             "phase",
             "progress_time_seconds",
             "step",
@@ -375,6 +431,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "accelerator-utilization",
             "node-host-network",
             "node-host-utilization",
+            "session-discovery",
             "training-process-zero",
             "training-run-attribution",
             "training-status",
@@ -433,7 +490,7 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
         Store::new(
             Some(unique_dir("telemetry-process-zero-projection")),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Shadow,
         )
         .unwrap(),
@@ -532,6 +589,91 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
 }
 
 #[tokio::test]
+async fn session_discovery_query_uses_inference_projection() {
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir("telemetry-session-discovery-projection")),
+            String::new(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while get_text(&client, addr, "/health").await != HEALTH_OK {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("telemetry registration did not complete");
+
+    for (batch_id, job_id, name, metric_source) in [
+        (
+            "52fb9d3d-e8a8-4d2c-b0e2-413545945a02",
+            "/train",
+            "num_requests_running",
+            "vllm",
+        ),
+        (
+            "8b74a3d8-5f51-4aa6-b147-2c0e53d2c355",
+            "/foreign",
+            "num_requests_running",
+            "ray",
+        ),
+        (
+            "937ca4c1-03e8-475a-b9ed-22a139566209",
+            "/metric-only",
+            "generation_tokens_total",
+            "vllm",
+        ),
+    ] {
+        let response = post(
+            &client,
+            addr,
+            session_discovery_batch(batch_id, job_id, name, metric_source),
+            Some(batch_id),
+            Some("application/json"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+    }
+    store
+        .maintain_namespace("telemetry_v1.marinskyrl", true)
+        .await
+        .unwrap();
+
+    const SELECTOR_SQL: &str = "SELECT DISTINCT job_id AS value \
+        FROM \"telemetry_v1.marinskyrl\" \
+        WHERE service = 'marinskyrl' \
+          AND name = 'num_requests_running' \
+          AND json_get(attributes_json, 'metric_source') = 'vllm' \
+          AND timestamp_ms >= 1700000000000 \
+          AND timestamp_ms < 1700000001000 \
+          AND job_id IS NOT NULL \
+        ORDER BY 1";
+    let rows = query(&store, SELECTOR_SQL).await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 1);
+    assert_eq!(rows[0].column(0).as_string::<i32>().value(0), "/train");
+
+    let explain_batches = query(&store, &format!("EXPLAIN {SELECTOR_SQL}")).await;
+    let mut explain = String::new();
+    for batch in &explain_batches {
+        let plans = batch.column(1).as_string::<i32>();
+        for row in 0..batch.num_rows() {
+            explain.push_str(plans.value(row));
+        }
+    }
+    assert!(
+        explain.contains(".fidx.session-discovery.parquet"),
+        "{explain}"
+    );
+}
+
+#[tokio::test]
 async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info() {
     let store = disk_store("telemetry-wedged-registration");
     // A `name` column of the wrong type: no additive merge reconciles it.
@@ -591,13 +733,83 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
 }
 
 #[tokio::test]
+async fn forwarding_introspection_distinguishes_unseeded_lag_caught_up_and_unconfigured() {
+    const NAMESPACE: &str = "telemetry_v1.trainer";
+    const TARGET: &str = "https://hub.example.test";
+
+    let store = disk_store("forwarding-introspection");
+    let forwarding = ForwardingConfig {
+        target: TARGET.to_string(),
+        cluster: "source-cluster".to_string(),
+    };
+    let addr = serve_with_config(
+        Arc::clone(&store),
+        ServerConfig::default().with_forwarding(forwarding),
+    )
+    .await;
+    let client = http_client();
+    let batch_id = "c47ac10b-58cc-4372-a567-0e02b2c3d470";
+    let posted = post(
+        &client,
+        addr,
+        batch(batch_id),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::OK);
+    store
+        .await_persisted(NAMESPACE, 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let path = format!("/api/forwarding?namespace={NAMESPACE}");
+    let unseeded: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(unseeded["configured"], true);
+    assert_eq!(unseeded["cluster"], "source-cluster");
+    assert_eq!(unseeded["visibleHighWater"], 2);
+    assert_eq!(unseeded["publishedHighWater"], 0);
+    assert_eq!(unseeded["publicationLagSeqPositions"], 2);
+    assert_eq!(unseeded["target"]["target"], TARGET);
+    assert!(unseeded["target"]["settledCursor"].is_null());
+    assert!(unseeded["target"]["forwardingLagSeqPositions"].is_null());
+
+    store
+        .set_forward_cursor(TARGET, NAMESPACE, 0)
+        .await
+        .unwrap();
+    let caught_up: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(caught_up["target"]["settledCursor"], 0);
+    assert_eq!(caught_up["target"]["forwardingLagSeqPositions"], 0);
+
+    store
+        .set_forward_cursor(TARGET, NAMESPACE, 1)
+        .await
+        .unwrap();
+    let cursor_ahead: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(cursor_ahead["target"]["settledCursor"], 1);
+    assert_eq!(cursor_ahead["target"]["forwardingLagSeqPositions"], 0);
+
+    let unconfigured_addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
+    let unconfigured: Value =
+        serde_json::from_str(&get_text(&client, unconfigured_addr, &path).await).unwrap();
+    assert_eq!(unconfigured["configured"], false);
+    assert!(unconfigured["cluster"].is_null());
+    assert_eq!(unconfigured["visibleHighWater"], 2);
+    assert_eq!(unconfigured["publishedHighWater"], 0);
+    assert_eq!(unconfigured["publicationLagSeqPositions"], 2);
+    assert!(unconfigured["target"].is_null());
+}
+
+#[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let remote_dir = unique_dir("telemetry-query-remote");
     let store = Arc::new(
         Store::new(
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),
@@ -1259,4 +1471,127 @@ async fn telemetry_route_uses_existing_default_deny_auth_policy() {
 
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     assert_eq!(response.payload["error"]["code"], "unauthorized");
+}
+
+fn local_ctx() -> connectrpc::RequestContext {
+    let mut extensions = http::Extensions::new();
+    extensions.insert(crate::server::auth::AuthIdentity::Network);
+    connectrpc::RequestContext::new(HeaderMap::new()).with_extensions(extensions)
+}
+
+#[tokio::test]
+async fn a_stale_client_policy_registers_a_spec_on_a_managed_namespace() {
+    // Semantic telemetry namespaces carry a server-managed storage policy, and
+    // a legacy table's stored policy can predate the current rules. A migration
+    // client can only echo the stored policy it observes, so the spec validates
+    // against the managed policy rather than the client's copy.
+    use crate::proto::finelog::stats::{
+        OwnedRegisterTableRequestView, RegisterTableRequest, StatsService, TableSpec,
+    };
+    use crate::server::stats_service::StatsServiceImpl;
+    use crate::store::schema::schema_to_proto_owned;
+    use buffa::MessageField;
+
+    let store = disk_store("managed-policy-stale-spec");
+    let namespace = "telemetry_v1.iris";
+    let stale = StoragePolicy {
+        max_bytes: Some(20 * GIBIBYTE),
+        ..StoragePolicy::default()
+    };
+    store
+        .register_table(
+            namespace,
+            super::telemetry::telemetry_schema(),
+            stale.clone(),
+        )
+        .unwrap();
+
+    let schema_proto = schema_to_proto_owned(&store.get_table_schema(namespace).unwrap());
+    let request = RegisterTableRequest {
+        namespace: Some(namespace.to_string()),
+        schema: MessageField::some(schema_proto.clone()),
+        storage_policy: MessageField::some(stale.to_proto_owned()),
+        table_spec: MessageField::some(TableSpec {
+            version: Some(1),
+            logical_schema: MessageField::some(schema_proto),
+            ..TableSpec::default()
+        }),
+        ..RegisterTableRequest::default()
+    };
+    let service = StatsServiceImpl::new(Arc::clone(&store));
+    let response = service
+        .register_table(
+            local_ctx(),
+            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+        )
+        .await
+        .unwrap()
+        .body;
+
+    let effective = StoragePolicy::from_proto_owned(response.effective_policy.as_option().unwrap());
+    assert_eq!(effective.max_bytes, Some(2 * GIBIBYTE));
+    assert_eq!(
+        store.get_policy(namespace).unwrap().max_bytes,
+        Some(2 * GIBIBYTE),
+        "the managed policy replaces the stale stored policy",
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_local_cache_conflicting_with_the_managed_policy_is_rejected() {
+    // The managed-policy fold covers an unset local_cache; a spec that
+    // explicitly declares a conflicting cache policy is still refused even
+    // when it matches the request's storage_policy.
+    use crate::proto::finelog::stats::{
+        OperatingPolicy, OwnedRegisterTableRequestView, RegisterTableRequest, StatsService,
+        TableSpec,
+    };
+    use crate::server::stats_service::StatsServiceImpl;
+    use crate::store::schema::schema_to_proto_owned;
+    use buffa::MessageField;
+
+    let store = disk_store("managed-policy-conflicting-spec");
+    let namespace = "telemetry_v1.iris";
+    let stale = StoragePolicy {
+        max_bytes: Some(20 * GIBIBYTE),
+        ..StoragePolicy::default()
+    };
+    store
+        .register_table(
+            namespace,
+            super::telemetry::telemetry_schema(),
+            stale.clone(),
+        )
+        .unwrap();
+
+    let schema_proto = schema_to_proto_owned(&store.get_table_schema(namespace).unwrap());
+    let request = RegisterTableRequest {
+        namespace: Some(namespace.to_string()),
+        schema: MessageField::some(schema_proto.clone()),
+        storage_policy: MessageField::some(stale.to_proto_owned()),
+        table_spec: MessageField::some(TableSpec {
+            version: Some(1),
+            logical_schema: MessageField::some(schema_proto),
+            operating_policy: MessageField::some(OperatingPolicy {
+                local_cache: MessageField::some(stale.to_proto_owned()),
+                ..OperatingPolicy::default()
+            }),
+            ..TableSpec::default()
+        }),
+        ..RegisterTableRequest::default()
+    };
+    let service = StatsServiceImpl::new(Arc::clone(&store));
+    let Err(error) = service
+        .register_table(
+            local_ctx(),
+            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+        )
+        .await
+    else {
+        panic!("a conflicting explicit local_cache must be refused");
+    };
+    assert!(
+        error.to_string().contains("local_cache"),
+        "unexpected error: {error}",
+    );
 }

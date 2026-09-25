@@ -41,11 +41,11 @@ use datafusion::physical_plan::{
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use futures::TryStreamExt;
 
+use crate::indices::cache::AggregateOutcome;
+use crate::indices::group_extrema::GroupExtremaConfig;
 use crate::query::exact_aggregate::AggregateSource;
-use crate::query::index_cache::AggregateOutcome;
 use crate::query::predicate::{conjuncts, int_comparison};
 use crate::query::provider::NamespaceProvider;
-use crate::store::group_extrema::GroupExtremaConfig;
 
 const MAX_COMBINED_GROUPS: usize = 16_384;
 const INDEX_GROUP_COLUMN: &str = "__finelog_extrema_group";
@@ -108,7 +108,7 @@ impl PartialEq for GroupExtremaNode {
             && self.request.lower == other.request.lower
             && self.request.upper == other.request.upper
             && self.source.segment_paths == other.source.segment_paths
-            && Arc::ptr_eq(&self.source.index_cache, &other.source.index_cache)
+            && Arc::ptr_eq(&self.source.indices, &other.source.indices)
             && self.fallback == other.fallback
     }
 }
@@ -127,7 +127,7 @@ impl PartialOrd for GroupExtremaNode {
             self.request.lower,
             self.request.upper,
             &self.source.segment_paths,
-            Arc::as_ptr(&self.source.index_cache) as usize,
+            Arc::as_ptr(&self.source.indices) as usize,
             &self.fallback,
         )
             .partial_cmp(&(
@@ -140,7 +140,7 @@ impl PartialOrd for GroupExtremaNode {
                 other.request.lower,
                 other.request.upper,
                 &other.source.segment_paths,
-                Arc::as_ptr(&other.source.index_cache) as usize,
+                Arc::as_ptr(&other.source.indices) as usize,
                 &other.fallback,
             ))
     }
@@ -157,7 +157,7 @@ impl Hash for GroupExtremaNode {
         self.request.lower.hash(state);
         self.request.upper.hash(state);
         self.source.segment_paths.hash(state);
-        (Arc::as_ptr(&self.source.index_cache) as usize).hash(state);
+        (Arc::as_ptr(&self.source.indices) as usize).hash(state);
         self.fallback.hash(state);
     }
 }
@@ -427,7 +427,8 @@ async fn adaptive_physical_plan(
             .await
             .map_err(|error| {
                 source
-                    .index_cache
+                    .indices
+                    .cache()
                     .record_aggregate(AggregateOutcome::Fallback);
                 DataFusionError::Execution(format!("grouped-extrema coverage task failed: {error}"))
             })?;
@@ -439,7 +440,8 @@ async fn adaptive_physical_plan(
                 coverage
             } else {
                 source
-                    .index_cache
+                    .indices
+                    .cache()
                     .record_aggregate(AggregateOutcome::Declined);
                 return DefaultPhysicalPlanner::default()
                     .create_physical_plan(&fallback, session_state)
@@ -449,7 +451,8 @@ async fn adaptive_physical_plan(
         None => {
             uncovered_metric.add(source.segment_paths.len());
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Declined);
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
@@ -461,7 +464,8 @@ async fn adaptive_physical_plan(
         Ok(plan) => plan,
         Err(error) => {
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not plan grouped-extrema aggregate; using source aggregate");
             return DefaultPhysicalPlanner::default()
@@ -476,16 +480,21 @@ async fn adaptive_physical_plan(
         Ok(plan) => {
             if partial_coverage {
                 source
-                    .index_cache
+                    .indices
+                    .cache()
                     .record_aggregate(AggregateOutcome::Partial);
             } else {
-                source.index_cache.record_aggregate(AggregateOutcome::Full);
+                source
+                    .indices
+                    .cache()
+                    .record_aggregate(AggregateOutcome::Full);
             }
             Ok(plan)
         }
         Err(error) => {
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not build grouped-extrema aggregate; using source aggregate");
             DefaultPhysicalPlanner::default()
@@ -512,14 +521,11 @@ fn classify_coverage(
     let mut covered_segments = 0;
     for path in &source.segment_paths {
         let parquet = Path::new(path);
-        let Some(segment) = source.index_cache.indexed_segment(parquet) else {
+        let Some(segment) = source.indices.open_segment(parquet, &source.artifacts) else {
             uncovered_paths.push(path.clone());
             continue;
         };
-        let Some(index) = source
-            .index_cache
-            .get_group_extrema(parquet, &segment.header, &config)
-        else {
+        let Some(index) = source.indices.group_extrema(&segment, &config) else {
             uncovered_paths.push(path.clone());
             continue;
         };
@@ -594,7 +600,7 @@ fn indexed_extrema_plan(
         let provider = NamespaceProvider::build(
             Arc::clone(&source.schema),
             &coverage.uncovered_paths,
-            Arc::clone(&source.index_cache),
+            Arc::clone(&source.indices),
         )?;
         let projection = fallback_projection(request, source)?;
         let uncovered = LogicalPlanBuilder::scan(
@@ -809,10 +815,9 @@ fn string_equality(expr: &Expr) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::index_cache::IndexCache;
+    use crate::indices::{write_segment_index, SegmentIndexConfig};
     use crate::query::string_values::StringValues;
     use crate::store::segment::write_segment_to_dir;
-    use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
     use arrow::datatypes::Schema;
     use datafusion::datasource::MemTable;
 
@@ -880,7 +885,8 @@ mod tests {
             "telemetry_v1".to_string(),
             AggregateSource {
                 segment_paths: Vec::new(),
-                index_cache: Arc::new(IndexCache::new(16)),
+                indices: crate::indices::test_index_registry(),
+                artifacts: Arc::default(),
                 schema,
             },
         )]))));
@@ -924,10 +930,11 @@ mod tests {
             uncovered.to_string_lossy().into_owned(),
         ];
         let schema = source_schema();
-        let index_cache = Arc::new(IndexCache::new(16));
-        let provider =
-            NamespaceProvider::build(Arc::clone(&schema), &paths, Arc::clone(&index_cache))
-                .unwrap();
+        let indices = crate::indices::test_index_registry();
+        let artifacts = Arc::new(crate::indices::sidecar_artifacts(&paths));
+        let provider = NamespaceProvider::build(Arc::clone(&schema), &paths, Arc::clone(&indices))
+            .unwrap()
+            .with_segment_artifacts((*artifacts).clone());
         let context = crate::query::make_ctx();
         context
             .register_table("telemetry_v1", Arc::new(provider))
@@ -936,7 +943,8 @@ mod tests {
             "telemetry_v1".to_string(),
             AggregateSource {
                 segment_paths: paths,
-                index_cache,
+                indices,
+                artifacts,
                 schema,
             },
         )]))));
@@ -973,10 +981,11 @@ mod tests {
         .unwrap();
         let paths = vec![indexed.to_string_lossy().into_owned()];
         let schema = source_schema();
-        let index_cache = Arc::new(IndexCache::new(16));
-        let provider =
-            NamespaceProvider::build(Arc::clone(&schema), &paths, Arc::clone(&index_cache))
-                .unwrap();
+        let indices = crate::indices::test_index_registry();
+        let artifacts = Arc::new(crate::indices::sidecar_artifacts(&paths));
+        let provider = NamespaceProvider::build(Arc::clone(&schema), &paths, Arc::clone(&indices))
+            .unwrap()
+            .with_segment_artifacts((*artifacts).clone());
         let context = crate::query::make_ctx();
         context
             .register_table("telemetry_v1", Arc::new(provider))
@@ -985,7 +994,8 @@ mod tests {
             "telemetry_v1".to_string(),
             AggregateSource {
                 segment_paths: paths,
-                index_cache,
+                indices,
+                artifacts,
                 schema,
             },
         )]))));
@@ -1033,7 +1043,8 @@ mod tests {
         ]));
         let source = AggregateSource {
             segment_paths: Vec::new(),
-            index_cache: Arc::new(IndexCache::new(16)),
+            indices: crate::indices::test_index_registry(),
+            artifacts: Arc::default(),
             schema,
         };
         assert_eq!(

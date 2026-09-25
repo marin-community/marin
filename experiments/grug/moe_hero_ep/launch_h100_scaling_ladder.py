@@ -31,7 +31,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import data_local_temporary_checkpoint_base_path, temporary_checkpoint_base_path
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -194,7 +194,6 @@ def build_h100_ladder_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
-        data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
@@ -233,7 +232,6 @@ def build_h100_ladder_run(
             load_checkpoint_path=[
                 permanent_checkpoint_path,
                 temporary_checkpoint_path,
-                data_local_checkpoint_path,
             ],
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,

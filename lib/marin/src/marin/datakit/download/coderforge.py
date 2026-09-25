@@ -4,33 +4,44 @@
 """togethercomputer/CoderForge-Preview dataset download and transform.
 
 Downloads raw parquet files from HuggingFace, then transforms each trajectory
-into a single document by rendering the chat messages as readable text with a
-reward tag prefix so the model learns to distinguish successful and failed
-rollouts.
+into either legacy rendered text or canonical chat. The legacy path prefixes a
+reward tag; canonical chat preserves reward only as non-model-visible metadata.
 """
 
 import json
 
+import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    checked_openai_chat_document,
     render_tool_message,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("reward", pa.float64()),
+    ]
+)
+
 HF_DATASET_ID = "togethercomputer/CoderForge-Preview"
 HF_REVISION = "060fca9"
 
 SPLITS = ["SWE_Rebench", "SWE_Smith", "R2E_Gym"]
+TOOL_CALL_END = "</tool_call>"
 
 
 def reward_to_tag(reward: float | None) -> str:
@@ -60,6 +71,28 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "togethercomputer/CoderForge-Preview")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    messages_raw = row.get("messages", "")
+    if not messages_raw:
+        return []
+    messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
+    if not messages:
+        return []
+    if TOOL_CALL_END in str(messages).lower():
+        counters.pipeline.update_counter("coderforge/tool_call_end_filtered", 1)
+        return []
+    tools = row.get("tools") or []
+    if isinstance(tools, str):
+        tools = json.loads(tools)
+    return checked_openai_chat_document(
+        messages,
+        HF_DATASET_ID,
+        counter_prefix="coderforge/chat",
+        reward=row.get("reward"),
+        chat_template_kwargs={"tools": tools},
+    )
+
+
 def transform(input_path: str, output_path: str) -> None:
     # The download already filters to only the splits we want via hf_urls_glob
     pipeline = (
@@ -70,6 +103,20 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="coderforge-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    ZephyrContext(name="coderforge-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
 
 def download_coderforge_step() -> StepSpec:
@@ -98,4 +145,22 @@ def coderforge_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/coderforge", download=processed),
+    )
+
+
+def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step(
+        "raw/coderforge-preview",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=[f"trajectories/{split}-*.parquet" for split in SPLITS],
+    )
+    processed = StepSpec(
+        name="processed-chat/coderforge-preview",
+        deps=[dl],
+        fn=lambda output_path: transform_chat(dl.output_path, output_path),
+        hash_attrs={"version": "2026.09.11.review-fixes"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/coderforge", download=processed
     )

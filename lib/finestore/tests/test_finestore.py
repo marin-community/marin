@@ -736,6 +736,23 @@ def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
     assert committed["tables"]["samples"]["shards"][0]["future_shard"] == 17
 
 
+def test_read_view_reads_a_populated_archive_without_its_format_marker(tmp_path):
+    # Bucket lifecycle rules expire each object on its own clock. The write-once marker expires
+    # while HEAD, rewritten by every commit, remains. HEAD carries the format version, so the
+    # archive stays readable and the next writer open recreates the marker.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        store.flush()
+    StoragePath(FineStoreLayout(root).archive_path).rm()
+
+    assert [row["doc_id"] for row in _rows(ReadView(root), "samples")] == ["1"]
+
+    with DataStore.open(root, writer_id="w2"):
+        pass
+    assert StoragePath(FineStoreLayout(root).archive_path).exists()
+
+
 def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path):
     root = tmp_path / "run"
     root.mkdir()

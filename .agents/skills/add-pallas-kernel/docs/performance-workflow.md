@@ -1,9 +1,9 @@
 # Performance Workflow
 
 Read this file before benchmarking, profiling, roofline analysis, or
-autotuning. Use the execution-environment guidance and cadence from
-`run-research` for long-running work. For profiling capture and comparison
-details, read `reference/profiling.md`.
+autotuning. Use `research` when the user explicitly requests a long-running
+research program. For profiling capture and comparison details, read
+`reference/profiling.md`.
 
 ## Iteration Loop
 

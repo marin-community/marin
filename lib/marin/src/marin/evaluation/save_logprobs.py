@@ -27,7 +27,7 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
 from levanter.data.loader import DataLoader
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -38,7 +38,6 @@ from rigging.filesystem.factory import open_url
 from thalas.execution.types import ExecutorStep, InputName, this_output_path
 
 from marin.evaluation.model_loading import load_eval_model
-from marin.processing.tokenize.data_configs import with_pack
 from marin.training.run_environment import extras_for_resources
 
 logger = logging.getLogger(__name__)
@@ -67,7 +66,14 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    return replace(with_pack(data, True), block_cross_document_attention=True)
+    return replace(
+        data,
+        components={
+            name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
+            for name, component in data.components.items()
+        },
+        block_cross_document_attention=True,
+    )
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:

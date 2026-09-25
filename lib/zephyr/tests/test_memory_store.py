@@ -217,15 +217,14 @@ def test_memory_store_retries_actor_unavailability_and_preserves_application_err
         _fake_store(failing_actor).get("key")
 
 
-def test_memory_store_retries_lost_operation_after_actor_recovery():
-    recovering_actor = _SequencedActor(
-        [
-            _TestActorFuture(error=ConnectError(Code.NOT_FOUND, "Operation 'lost' not found")),
-            _TestActorFuture(value=MemoryTableLookup(MemoryTableStatus.READY, [(True, "value")])),
-        ]
-    )
+def test_memory_store_propagates_application_not_found():
+    application_error = ConnectError(Code.NOT_FOUND, "record was not found")
+    failing_actor = _SequencedActor([_TestActorFuture(error=application_error)])
 
-    assert _fake_store(recovering_actor).get("key") == "value"
+    with pytest.raises(ConnectError) as exc_info:
+        _fake_store(failing_actor).get("key")
+
+    assert exc_info.value is application_error
 
 
 def test_memory_store_bounds_actor_call_by_recovery_timeout():

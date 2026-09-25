@@ -18,14 +18,35 @@ config:
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
+    auth.github_organizations: "Open-Athena:188075292"
+    browser.allowed_origins: https://marina.oa.dev
     github.profile: github
     slack.effort: agent-default
     slack.profile: slack
+  marin-loom:remoteMcps:
+    - identity: /marina/api
+      label: Marina API
+      description: Search and call checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/
+      auth:
+        type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      enabled: true
+    - identity: /marina-read/api
+      label: Marina read-only API
+      description: Search and call read-only checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/read/
+      auth:
+        type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      enabled: true
   marin-loom:profiles:
     default:
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
-      model: gpt-5.6-sol
+      model: &codexModel gpt-6-sol
       effort: xhigh
       protocol: acp
       mode: auto
@@ -38,13 +59,38 @@ config:
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
+      mcpAccess: &builtinMcpAccess
+        mode: groups
+        groups:
+          - artifact
+          - channel
+          - context
+          - github
+          - issue
+          - messaging
+          - permissions
+          - session
+    marina:
+      agent: codex
+      description: Interactive questions over read-only Marina application APIs
+      model: *codexModel
+      effort: low
+      protocol: acp
+      mode: auto
+      class: interactive
+      idleArchiveSeconds: 3000
+      prelude: weaver
+      instructionsFile: profiles/marina/AGENTS.md
+      env: *loomIrisUser
+      githubRepositories: *interactiveGithubRepositories
       mcpAccess:
-        mode: all
-        groups: []
+        mode: groups
+        groups:
+          - marina-read
     github:
       agent: codex
       description: GitHub-triggered Marin issue and pull-request sessions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -53,13 +99,11 @@ config:
       instructionsFile: profiles/github/AGENTS.md
       env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     fork-ferry:
       agent: codex
       description: Refresh Marin forks and validate their pinned revisions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -82,13 +126,11 @@ config:
         - marin-community/vllm
         - marin-community/xla
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     pr-review:
       agent: codex
       description: Review trusted Marin pull requests from immutable head commits
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -96,7 +138,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 900
       maxConcurrent: 4
       turnBudget: 200
       prelude: weaver
@@ -106,13 +148,11 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     codehealth-refinement:
       agent: codex
       description: Refine agentic-lint from persisted review and lint activity
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -136,13 +176,11 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -160,13 +198,11 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: medium
       protocol: acp
       mode: auto
@@ -175,9 +211,7 @@ config:
       instructionsFile: profiles/slack/AGENTS.md
       env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
   marin-loom:workloads:
     - name: grafana-alerts
       profile: ops

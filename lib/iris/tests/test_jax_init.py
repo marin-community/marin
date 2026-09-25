@@ -467,7 +467,7 @@ def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_in
     fetches: list[tuple[str, str]] = []
     uploads: list[tuple[str, str]] = []
 
-    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
         os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
         os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
@@ -478,7 +478,10 @@ def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_in
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()
+            configured_xla_flags = os.environ["XLA_FLAGS"]
 
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/process-{process_index}"
+    assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in configured_xla_flags.split()
     assert len(fetches) == expected_fetches
     assert uploads == []
 

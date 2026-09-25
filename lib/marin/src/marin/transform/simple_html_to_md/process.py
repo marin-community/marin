@@ -10,11 +10,12 @@ containing html content, it will convert them to markdown and save them in a new
 import logging
 from dataclasses import dataclass, field
 
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
-from marin.web.convert import convert_page
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
+
+from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
+from marin.web.convert import convert_page
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "rsbuild build && node scripts/emit.mjs",
-    "build:check": "vue-tsc --noEmit && npm run build",
+    "build:check": "vue-tsc --noEmit && npm test && npm run build",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "dev": "rsbuild dev"
   },
   "dependencies": {

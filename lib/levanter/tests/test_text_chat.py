@@ -551,7 +551,7 @@ def test_trace_chat_processor_labels_multi_tool_and_interleaved_user_turns(token
     assert "The issue is in the eval callback test." in final_text
 
 
-def test_trace_chat_processor_splits_text_tool_calls(tokenizer: MarinTokenizer):
+def test_trace_chat_processor_labels_text_tool_calls(tokenizer: MarinTokenizer):
     processor = TraceChatProcessor(
         tokenizer,
         chat_template=MULTI_TOOL_TEMPLATE,

@@ -8,6 +8,8 @@ routing by severity and flushing/draining on teardown. A second group covers sta
 process without HTTP readiness and waiting once for an ordinary server.
 """
 
+import json
+import logging
 import os
 import socket
 import subprocess
@@ -28,6 +30,7 @@ from marin.inference.vllm_server import (
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_error_summary,
     _native_logs,
     _native_logs_tail,
     _prepare_vllm_compilation_cache,
@@ -215,6 +218,17 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
     pump.close()
 
 
+def test_native_error_summary_preserves_originating_exception(tmp_path):
+    (tmp_path / "stdout.log").write_text("ordinary output\nRuntimeError: engine initialization failed\n")
+    (tmp_path / "stderr.log").write_text("Ninja build stopped\nCalledProcessError: nvcc exited 1\n")
+
+    summary = _native_error_summary(str(tmp_path))
+
+    assert "RuntimeError: engine initialization failed" in summary
+    assert "CalledProcessError: nvcc exited 1" in summary
+    assert "ordinary output" not in summary
+
+
 def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
     placement = "Worker placement: process_rank=0"
     (tmp_path / "stdout.log").write_text("\n".join([placement, *(f"later line {index}" for index in range(250))]))
@@ -399,11 +413,14 @@ def test_subprocess_environment_overrides_reach_vllm():
         cache.close()
 
 
-def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
+def _environment(
+    launcher: _FakeLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
+) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         timeout_seconds=timeout_seconds,
+        extra_args=extra_args,
         launcher=launcher,
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
@@ -412,6 +429,62 @@ def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> Vll
 
 def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--enforce-eager"],
+        ["--no-enforce-eager", "--enforce-eager"],
+    ],
+)
+def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_eager"),
+    [
+        ([], False),
+        (["--no-enforce-eager"], False),
+        (["--enforce-eager", "--no-enforce-eager"], False),
+        (["--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+        (["--no-enforce-eager", "--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+    ],
+)
+def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
+    argv_path = tmp_path / "argv.json"
+    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+        _wait_until_ready(environment)
+        argv = json.loads(argv_path.read_text())
+
+    assert argv[argv.index("--port") + 2 :] == [arg for arg in args if arg != "--i-know-i-am-making-vllm-slow"]
+    assert "--i-know-i-am-making-vllm-slow" not in argv
+    assert (
+        any(record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records)
+        is expected_eager
+    )
+
+
+@pytest.mark.parametrize("arg", ["--enforce_eager", "--enf", "--no-enf", "--enforce-eager=true"])
+def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="Use the exact"):
+        with _environment(_FakeLauncher("exit"), extra_args=[arg]):
+            pass
+
+
+@pytest.mark.parametrize("args", [["--config", "vllm.yaml"], ["--config=vllm.yaml"]])
+def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+    with pytest.raises(ValueError, match="does not support --config"):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
+            pass
 
 
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):

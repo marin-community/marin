@@ -21,6 +21,7 @@ from experiments.datakit import hero_data
 PREFIX = hero_data.MANIFEST_PREFIX
 MANIFEST = hero_data.manifest_path()
 EMBED_MANIFEST = hero_data.harrier_paths_path()
+DECONTAM_MANIFEST = hero_data.decontam_paths_path()
 
 
 @pytest.fixture(autouse=True)
@@ -56,12 +57,23 @@ def test_harrier_paths_are_complete_relative_and_include_focus():
     assert hero_data.harrier("common-crawl-focus-2026-22") == expected
 
 
+def test_decontam_paths_are_complete_relative_and_pinned_to_the_v4_run():
+    paths = json.loads(DECONTAM_MANIFEST.read_text())
+
+    assert set(paths) == set(hero_data.source_names())
+    assert all("://" not in path and not path.startswith("/") for path in paths.values())
+    # Where v4-final-20260815 wrote. Current code resolves a different hash once the
+    # marking rule changes, which is why these are pinned and not recomputed.
+    expected = f"{PREFIX}/datakit/decontam/stack-v3_86eaa592"
+    assert hero_data.decontaminated("stack-v3").output_path == expected
+
+
 def test_every_registered_source_has_every_stage():
     keys = set(_relative_paths())
     missing = {
         f"{stage}/{source}"
         for source in hero_data.source_names()
-        for stage in ("normalized", "minhash", "tokenize.marin", "tokenize.nemotron")
+        for stage in ("normalized", "minhash", "decontam", "tokenize.marin", "tokenize.nemotron")
     } - keys
     assert not missing
 
@@ -73,6 +85,7 @@ def test_steps_refuse_to_run():
         hero_data.normalized("stack-v3"),
         hero_data.tokenized("stack-v3", hero_data.MARIN_TOKENIZER),
         hero_data.minhash("stack-v3"),
+        hero_data.decontaminated("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
         hero_data.domain_cluster_assignment(),

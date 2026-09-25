@@ -1,0 +1,12 @@
+tasks: [GPQADiamond]
+task_options:
+  GPQADiamond:
+    num_fewshot: 0
+    task_alias: gpqa-diamond
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
+# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
+runtime_extras: [gpqadiamond]

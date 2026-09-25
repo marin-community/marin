@@ -40,7 +40,7 @@ def _make_coordinator(
         reduce_cost=_COUNTER_TASK_RESOURCES,
     )
     coord._executions = {run.execution_id: run}
-    coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
+    coord._worker_counters = {(str(i), run.execution_id): snapshot for i, snapshot in enumerate(inflight or [])}
     for snapshot in completed:
         run.fold_counters(snapshot)
     return coord

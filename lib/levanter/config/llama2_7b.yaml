@@ -92,7 +92,6 @@ trainer:
     project: levanter
     resume: allow
     save_code: true
-    save_xla_dumps: false
     tags:
     - llama-8b-test
     - llama

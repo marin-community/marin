@@ -53,6 +53,7 @@ from iris.client.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -283,6 +284,7 @@ def _submit_callable(
     cpu: float,
     memory: str,
     disk: str,
+    timeout: Duration,
     constraints: list[Constraint] | None = None,
 ) -> None:
     """Submit a Python callable as an Iris job and stream logs until completion."""
@@ -292,6 +294,7 @@ def _submit_callable(
         resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk),
         environment=EnvironmentSpec(env_vars={}),
         constraints=constraints,
+        timeout=timeout,
     )
     print(f"Submitted {name}: {job.job_id}", file=sys.stderr)
     job.wait(stream_logs=True, timeout=float("inf"))
@@ -311,6 +314,13 @@ def _submit_callable(
     help="GCS path used for parquet segments + report.md.",
 )
 @click.option("--workers", default=128, show_default=True, type=int, help="Number of Iris worker replicas for the scan.")
+@click.option(
+    "--job-timeout",
+    default=6 * 60 * 60,
+    show_default=True,
+    type=click.IntRange(min=1, max=24 * 60 * 60),
+    help="Maximum runtime in seconds for each Iris stage.",
+)
 @click.option(
     "--dedup-shards", default=64, show_default=True, type=int, help="Number of output shards for the dedup stage."
 )
@@ -355,6 +365,7 @@ def main(
     cluster: str,
     staging_dir: str,
     workers: int,
+    job_timeout: int,
     dedup_shards: int,
     skip_scan: bool,
     skip_dedup: bool,
@@ -371,6 +382,7 @@ def main(
     report_path = f"{staging_dir}/report.md"
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     run_id = run_id or today
+    timeout = Duration.from_seconds(job_timeout)
 
     with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
         if not skip_scan:
@@ -391,6 +403,7 @@ def main(
                 cpu=1,
                 memory="12GB",
                 disk="30GB",
+                timeout=timeout,
                 constraints=[preemptible_constraint(False)],
             )
 
@@ -404,6 +417,7 @@ def main(
                 cpu=1,
                 memory="4GB",
                 disk="30GB",
+                timeout=timeout,
             )
 
         if not skip_report:
@@ -422,6 +436,7 @@ def main(
                 memory="64GB",
                 # ~10 GB deduped download + DuckDB spill headroom.
                 disk="100GB",
+                timeout=timeout,
             )
 
     if gist_visibility == "none" and not discord_channel:

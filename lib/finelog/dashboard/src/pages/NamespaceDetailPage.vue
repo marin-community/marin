@@ -3,9 +3,18 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiGet, statsRpcCall } from '@/composables/useRpc'
 import { timeZoneMode } from '@/composables/useDisplayPrefs'
-import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
-import { shortColumnType, type ProtoSchema } from '@/types/stats'
-import type { SegmentInfo, SegmentsResponse } from '@/types/introspection'
+import {
+  shortColumnType,
+  type ListNamespacesResponse,
+  type NamespaceInfo,
+  type ProtoSchema,
+} from '@/types/stats'
+import type {
+  ForwardingResponse,
+  ForwardingTargetInfo,
+  SegmentInfo,
+  SegmentsResponse,
+} from '@/types/introspection'
 import { formatBytes, formatNumber, formatTimestampMs } from '@/utils/formatting'
 import { segmentIndexSummary } from '@/utils/segmentIndexes'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -14,17 +23,34 @@ import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 const props = defineProps<{ name: string }>()
 const router = useRouter()
 
-interface QueryResponse {
-  arrowIpc?: string
-  rowCount?: string | number
+interface TableSpec {
+  version?: string | number
+  operatingPolicy?: {
+    l0Mode?: string
+  }
 }
 
-interface GetTableSchemaResponse {
-  schema?: ProtoSchema
+interface TableMigrationStatus {
+  fromVersion?: string | number
+  toVersion?: string | number
+  phase?: string
+  rowsTotal?: string | number
+  rowsCompleted?: string | number
+}
+
+interface GetTableStatusResponse {
+  activeTableSpec?: TableSpec
+  desiredTableSpec?: TableSpec
+  migration?: TableMigrationStatus
+  catalogGeneration?: string | number
+  migrationBlocked?: boolean
+  migrationError?: string
 }
 
 const schema = ref<ProtoSchema | null>(null)
-const sample = ref<ArrowResult>({ columns: [], types: {}, rows: [] })
+const table = ref<NamespaceInfo | null>(null)
+const status = ref<GetTableStatusResponse | null>(null)
+const forwarding = ref<ForwardingResponse | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -33,6 +59,11 @@ const schemaRows = computed(() =>
     column_name: c.name,
     column_type: shortColumnType(c.type),
     nullable: c.nullable ? 'YES' : 'NO',
+    indexes: [
+      c.index?.trigram ? 'trigram' : '',
+      c.index?.valueCounts ? 'value counts' : '',
+      c.index?.exactValues?.length ? `exact (${c.index.exactValues.length})` : '',
+    ].filter(Boolean).join(', ') || '—',
   })),
 )
 
@@ -40,6 +71,7 @@ const schemaColumns: Column[] = [
   { key: 'column_name', label: 'Column', mono: true },
   { key: 'column_type', label: 'Type', mono: true },
   { key: 'nullable', label: 'Nullable', align: 'center' },
+  { key: 'indexes', label: 'Indexes' },
 ]
 
 const keyColumn = computed<string | null>(() => {
@@ -53,45 +85,21 @@ const keyColumn = computed<string | null>(() => {
   return null
 })
 
-// Recent-rows window. We filter on the implicit ``seq`` column (always
-// present, monotonically increasing on insert) before sorting, so only the
-// latest segment(s) are read — a SELECT * ORDER BY <ts> DESC LIMIT 100 on a
-// multi-GB namespace would otherwise scan every segment (reading the full row
-// payload) to compute the top-N, which OOMs the server on the billion-row
-// ``log`` namespace. ``RECENT_SEQ_WINDOW`` is the rolling number of newest
-// rows considered; 10x the visible page so concurrent writers can't shrink the
-// post-filter set below LIMIT.
-//
-// The bound MUST be a literal: the seq floor is resolved with a separate
-// ``max(seq)`` query and inlined. A scalar subquery (``seq > (SELECT max(seq))
-// - W``) does NOT prune in DataFusion — the bound isn't constant at plan time,
-// so the parquet row-group pruning predicate never forms and the engine
-// full-scans every segment. A literal lets the pruning_predicate
-// (``seq_max > floor``) drop all but the newest segments.
-const RECENT_SEQ_WINDOW = 1000
-
 async function load() {
   loading.value = true
   error.value = null
   try {
     const ns = props.name
-    const schemaResp = await statsRpcCall<GetTableSchemaResponse>('GetTableSchema', { namespace: ns })
-    schema.value = schemaResp.schema ?? null
-
-    // Resolve the seq floor as a literal (see RECENT_SEQ_WINDOW note) so the
-    // sample query prunes to the newest segments instead of full-scanning.
-    const maxSeqResp = await statsRpcCall<QueryResponse>('Query', {
-      sql: `SELECT max("seq") AS m FROM "${ns}"`,
-    })
-    const maxSeqCell = (decodeArrowIpc(maxSeqResp.arrowIpc).rows[0] as { m?: number | string } | undefined)?.m
-    const maxSeq = maxSeqCell == null ? null : Number(maxSeqCell)
-    const seqFloor = maxSeq == null ? 0 : maxSeq - RECENT_SEQ_WINDOW
-
-    const orderBy = keyColumn.value ? `"${keyColumn.value}" DESC` : '"seq" DESC'
-    const rows = await statsRpcCall<QueryResponse>('Query', {
-      sql: `SELECT * FROM "${ns}" WHERE "seq" > ${seqFloor} ORDER BY ${orderBy} LIMIT 100`,
-    })
-    sample.value = decodeArrowIpc(rows.arrowIpc)
+    const [list, tableStatus, forwardingStatus] = await Promise.all([
+      statsRpcCall<ListNamespacesResponse>('ListNamespaces', {}),
+      statsRpcCall<GetTableStatusResponse>('GetTableStatus', { namespace: ns }),
+      apiGet<ForwardingResponse>('forwarding', { namespace: ns }),
+    ])
+    table.value = (list.namespaces ?? []).find((entry) => entry.namespace === ns) ?? null
+    if (!table.value) throw new Error(`Table ${ns} is not registered`)
+    schema.value = table.value.schema ?? null
+    status.value = tableStatus
+    forwarding.value = forwardingStatus
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -99,12 +107,55 @@ async function load() {
   }
 }
 
-const sampleColumns = ref<Column[]>([])
-watch(sample, (s) => {
-  sampleColumns.value = s.columns.map((c) => ({ key: c, label: c, mono: true }))
+const tableFacts = computed(() => {
+  const info = table.value
+  const current = status.value
+  if (!info || !current) return []
+  const minSeq = Number(info.minSeq ?? 0)
+  const maxSeq = Number(info.maxSeq ?? 0)
+  const activeVersion = Number(current.activeTableSpec?.version ?? 0)
+  const desiredVersion = Number(current.desiredTableSpec?.version ?? 0)
+  const migration = current.migration
+  let migrationValue = 'none'
+  if (migration?.phase) {
+    migrationValue = migration.phase.replace('MIGRATION_PHASE_', '').toLowerCase().replace(/_/g, ' ')
+    const completed = Number(migration.rowsCompleted ?? 0)
+    const total = Number(migration.rowsTotal ?? 0)
+    if (total) migrationValue += ` · ${formatNumber(completed)} of ${formatNumber(total)} rows`
+  }
+  return [
+    { label: 'Visible rows', value: formatNumber(Number(info.rowCount ?? 0)) },
+    { label: 'Stored bytes', value: formatBytes(Number(info.byteSize ?? 0)) },
+    { label: 'Sequence range', value: minSeq || maxSeq ? `${formatNumber(minSeq)}–${formatNumber(maxSeq)}` : 'empty' },
+    { label: 'Segments', value: formatNumber(info.segmentCount ?? 0) },
+    { label: 'Catalog generation', value: formatNumber(Number(current.catalogGeneration ?? 0)) },
+    { label: 'Active spec', value: activeVersion ? `v${activeVersion}` : '—' },
+    { label: 'Desired spec', value: desiredVersion ? `v${desiredVersion}` : '—' },
+    { label: 'Migration', value: current.migrationBlocked ? 'blocked' : migrationValue, danger: current.migrationBlocked },
+  ]
 })
 
-// Segments load separately from the schema and sample: asking for physical
+const policyFacts = computed(() => {
+  const policy = table.value?.storagePolicy
+  const s = schema.value
+  const l0Mode = status.value?.activeTableSpec?.operatingPolicy?.l0Mode
+  return [
+    { label: 'Event key', value: keyColumn.value ?? '—', mono: true },
+    { label: 'Sort order', value: s?.sortColumns?.join(', ') || keyColumn.value || '—', mono: true },
+    { label: 'L0 durability', value: l0Mode?.replace('L0_MODE_', '').toLowerCase().replace(/_/g, ' ') || '—' },
+    { label: 'Segment limit', value: policy?.maxSegments ? formatNumber(policy.maxSegments) : 'server default' },
+    { label: 'Byte limit', value: Number(policy?.maxBytes ?? 0) ? formatBytes(Number(policy?.maxBytes)) : 'server default' },
+    { label: 'Age limit', value: Number(policy?.maxAgeSeconds ?? 0) ? `${formatNumber(Number(policy?.maxAgeSeconds))}s` : 'disabled / server default' },
+  ]
+})
+
+function targetState(target: ForwardingTargetInfo): string {
+  if (target.settledCursor === null) return 'not seeded'
+  if (target.forwardingLagSeqPositions === 0) return 'settled through published state'
+  return `${formatNumber(target.forwardingLagSeqPositions ?? 0)} positions behind published state`
+}
+
+// Segments load separately from the table metadata: asking for physical
 // detail reads a parquet footer per segment, which on a multi-GB namespace is
 // hundreds of tail reads, and the rest of the page should not wait behind it.
 const segments = ref<SegmentInfo[]>([])
@@ -222,7 +273,7 @@ watch(() => props.name, loadAll)
   <div class="space-y-3">
     <div class="flex items-center justify-between">
       <div>
-        <RouterLink to="/" class="text-xs text-text-muted hover:text-text">← Namespaces</RouterLink>
+        <RouterLink to="/" class="text-xs text-text-muted hover:text-text">← Tables</RouterLink>
         <h2 class="text-lg font-mono mt-1">{{ name }}</h2>
         <p v-if="keyColumn" class="text-xs text-text-muted mt-0.5">
           ordered by <span class="font-mono">{{ keyColumn }}</span>
@@ -240,6 +291,80 @@ watch(() => props.name, loadAll)
     >
       {{ error }}
     </div>
+
+    <InfoCard title="Table status">
+      <div class="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div v-for="fact in tableFacts" :key="fact.label">
+          <div class="text-[10px] uppercase tracking-wider text-text-muted">{{ fact.label }}</div>
+          <div
+            class="mt-0.5 text-sm tabular-nums"
+            :class="fact.danger ? 'text-status-danger' : 'text-text'"
+          >{{ fact.value }}</div>
+        </div>
+      </div>
+      <p
+        v-if="status?.migrationBlocked && status.migrationError"
+        class="text-xs text-status-danger bg-status-danger-bg border border-status-danger-border rounded px-2.5 py-2"
+      >{{ status.migrationError }}</p>
+    </InfoCard>
+
+    <InfoCard title="Storage policy">
+      <dl class="grid gap-x-8 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-for="fact in policyFacts" :key="fact.label" class="flex gap-3 text-sm items-baseline">
+          <dt class="text-text-muted shrink-0">{{ fact.label }}</dt>
+          <dd class="min-w-0 break-all" :class="fact.mono ? 'font-mono text-xs' : ''">{{ fact.value }}</dd>
+        </div>
+      </dl>
+    </InfoCard>
+
+    <InfoCard title="Forwarding">
+      <div v-if="!forwarding" class="text-sm text-text-muted">
+        {{ loading ? 'Loading…' : 'Unavailable.' }}
+      </div>
+      <div v-else-if="!forwarding.configured" class="text-sm text-text-muted">
+        Forwarding is not configured on this server.
+      </div>
+      <template v-else>
+        <div class="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Source cluster</div>
+            <div class="mt-0.5 text-sm font-mono">{{ forwarding.cluster || '—' }}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Visible high-water</div>
+            <div class="mt-0.5 text-sm tabular-nums">{{ formatNumber(forwarding.visibleHighWater) }}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Published high-water</div>
+            <div class="mt-0.5 text-sm tabular-nums">{{ formatNumber(forwarding.publishedHighWater) }}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Publication lag</div>
+            <div
+              class="mt-0.5 text-sm tabular-nums"
+              :class="forwarding.publicationLagSeqPositions ? 'text-status-warning' : 'text-status-success'"
+            >{{ formatNumber(forwarding.publicationLagSeqPositions) }} seq positions</div>
+          </div>
+        </div>
+
+        <div
+          v-if="forwarding.target"
+          class="border-t border-surface-border-subtle"
+        >
+          <div
+            class="grid gap-2 py-2.5 text-sm md:grid-cols-[minmax(0,1fr)_10rem_minmax(13rem,auto)] md:items-baseline"
+          >
+            <div class="font-mono text-xs break-all">{{ forwarding.target.target }}</div>
+            <div class="tabular-nums text-text-secondary">
+              settled {{ forwarding.target.settledCursor === null ? '—' : formatNumber(forwarding.target.settledCursor) }}
+            </div>
+            <div
+              :class="forwarding.target.forwardingLagSeqPositions ? 'text-status-warning' : 'text-text-secondary'"
+            >{{ targetState(forwarding.target) }}</div>
+          </div>
+        </div>
+      </template>
+    </InfoCard>
 
     <InfoCard title="Schema">
       <DataTable
@@ -318,14 +443,5 @@ watch(() => props.name, loadAll)
       />
     </InfoCard>
 
-    <InfoCard :title="`Recent rows · up to 100`">
-      <DataTable
-        :columns="sampleColumns"
-        :rows="sample.rows"
-        :loading="loading && sample.rows.length === 0"
-        :page-size="25"
-        empty-message="No rows."
-      />
-    </InfoCard>
   </div>
 </template>

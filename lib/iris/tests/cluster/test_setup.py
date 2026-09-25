@@ -7,8 +7,10 @@ import os
 import subprocess
 
 import pytest
+from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
+from iris.rpc import job_pb2
 
 
 @pytest.mark.parametrize(
@@ -67,3 +69,87 @@ package = false
     )
 
     assert (venv / "bin" / "python").is_file()
+
+
+@pytest.mark.parametrize(
+    "shared_cache_fails, local_cache_fails, expected_status",
+    [(False, False, 0), (True, False, 0), (True, True, 2)],
+)
+def test_uv_install_records_only_successful_local_cache_recovery(
+    tmp_path, shared_cache_fails, local_cache_fails, expected_status
+):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "pyproject.toml").write_text("[tool.uv]\npackage = false\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        """\
+#!/bin/sh
+set -e
+if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ] && [ "$1 $2" = "pip install" ]; then
+  exit 1
+fi
+if [ "$UV_CACHE_DIR" != "$SHARED_UV_CACHE" ] && [ "$LOCAL_CACHE_FAILS" = "1" ]; then
+  exit 2
+fi
+if [ "$1" = "sync" ]; then
+  case " $* " in
+    *" --link-mode copy "*) ;;
+    *) exit 3 ;;
+  esac
+fi
+mkdir -p "$IRIS_VENV"
+printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
+"""
+    )
+    uv.chmod(0o755)
+    venv = tmp_path / "venv"
+    shared_cache = tmp_path / "shared-uv-cache"
+    shared_cache.mkdir()
+    iris_env = build_common_iris_env(
+        task_id="/setup-test/0",
+        attempt_id=1,
+        attempt_uid="attempt-uid",
+        num_tasks=1,
+        bundle_id="bundle-id",
+        controller_address=None,
+        environment=job_pb2.EnvironmentConfig(),
+        constraints=(),
+        ports=(),
+        resources=None,
+    )
+    env = {
+        **os.environ,
+        **iris_env,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "LOCAL_CACHE_FAILS": str(int(local_cache_fails)),
+        "SHARED_CACHE_FAILS": str(int(shared_cache_fails)),
+        "SHARED_UV_CACHE": str(shared_cache),
+        "UV_CACHE_DIR": str(shared_cache),
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+
+    setup = "\n".join(
+        [
+            "set -e",
+            *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
+        ]
+    )
+    completed = subprocess.run(
+        ["bash", "-c", setup],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == expected_status
+    if expected_status == 0:
+        expected_cache = str(workdir / ".uv-recovery-cache") if shared_cache_fails else str(shared_cache)
+        assert (venv / "package-cache").read_text().strip() == expected_cache
+    signals = list(shared_cache.glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"))
+    assert len(signals) == int(shared_cache_fails and not local_cache_fails)

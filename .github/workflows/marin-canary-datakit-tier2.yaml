@@ -78,6 +78,7 @@ jobs:
           set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --timeout 21600 \
             --memory=2G \
             --extra=cpu \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
