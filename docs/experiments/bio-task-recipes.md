@@ -71,6 +71,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-rnaseq-population-interaction` | TSV count matrix, TSV sample metadata, design matrix, contrast vectors | factorial count models, interaction contrasts, multiple testing, response interpretation | DESeq2 |
 | `real-rnaseq-shrinkage-enrichment-audit` | TSV count matrix, TSV sample metadata, JSON query | count filtering, effect shrinkage, multiple testing, annotation universes, GO enrichment | DESeq2 |
 | `real-singlecell-read-qc` | Matrix Market, gzip, TSV cell metadata, TSV feature metadata, JSON query | single-cell read-count QC, ERCC spike-ins, ordered cell and gene filtering, sparse matrix export | Scanpy |
+| `real-singlecell-representation-audit` | H5AD, TSV, JSON | observed read-count filtering, sparse CP10k/log1p normalization, variable genes, PCA scores and depth diagnostics | Scanpy |
 | `donor-counts` | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | csv-header | sample-joins, cohort-selection, denominators | Scanpy |
 | `transcript-tpm` | csv-header | transcript-joins, abundance-units, decoys | Salmon, kallisto |

@@ -33,6 +33,9 @@ from experiments.post_training.bio_tasks.generators.real_proteins import RECIPES
 from experiments.post_training.bio_tasks.generators.real_reads import RECIPES as REAL_READS_RECIPES
 from experiments.post_training.bio_tasks.generators.real_rnaseq import RECIPES as REAL_RNASEQ_RECIPES
 from experiments.post_training.bio_tasks.generators.real_singlecell import RECIPES as REAL_SINGLECELL_RECIPES
+from experiments.post_training.bio_tasks.generators.real_singlecell_representation import (
+    RECIPES as REAL_SINGLECELL_REPRESENTATION_RECIPES,
+)
 from experiments.post_training.bio_tasks.generators.real_structure import RECIPES as REAL_STRUCTURE_RECIPES
 from experiments.post_training.bio_tasks.generators.repo_formats import RECIPES as REPO_FORMATS_RECIPES
 from experiments.post_training.bio_tasks.generators.repo_sequences import RECIPES as REPO_SEQUENCES_RECIPES
@@ -909,6 +912,7 @@ RECIPES = (
     *REAL_INTERACTION_RECIPES,
     *REAL_ENRICHMENT_RECIPES,
     *REAL_SINGLECELL_RECIPES,
+    *REAL_SINGLECELL_REPRESENTATION_RECIPES,
     *REAL_CLINICAL_RECIPES,
     *REAL_GENOMES_RECIPES,
     *REAL_READS_RECIPES,
@@ -950,6 +954,7 @@ DOMAIN_RECIPES = {
         + REAL_INTERACTION_RECIPES
         + REAL_ENRICHMENT_RECIPES
         + REAL_SINGLECELL_RECIPES
+        + REAL_SINGLECELL_REPRESENTATION_RECIPES
     ),
     "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES,
     "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES + REAL_PHYLOGENY_RECIPES,

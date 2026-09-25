@@ -1144,7 +1144,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioSecBench-Refusal \u2014 direct framing",
+      "name": "BioSecBench-Refusal — direct framing",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "priority_score": null,
       "reason": "The reviewed release overview describes Routine and Red-Team tasks and paired public examples. Its refusal objective differs from successful analysis of observed data.",
@@ -1176,7 +1176,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "ABLE \u2014 agentic biological AI tool use",
+      "name": "ABLE — agentic biological AI tool use",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "priority_score": null,
       "reason": "The inspected primary abstract describes structure retrieval, sequence generation and design validation with biological AI tools; no task-level manifest has been inspected.",
@@ -1184,7 +1184,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioASQ \u2014 retrieval / end-to-end QA",
+      "name": "BioASQ — retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
       "reason": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",
@@ -1285,7 +1285,7 @@
     },
     {
       "proposed_recipe": "real-singlecell-representation-audit",
-      "stage": "reference-and-verifier-implementation",
+      "stage": "native reference, fresh oracle and artifact controls passed; Harbor packaging",
       "acceptance_packet": "workflow_designs/singlecell-representation.json",
       "input_source": "GSE81682 observed read counts; exact prior QC transformation retained",
       "competency_focus": [
@@ -1293,7 +1293,10 @@
         "Variable-gene selection",
         "Same-fit PCA depth and loading diagnostics"
       ],
-      "coverage_state": "candidate; source endpoint adaptations and component-only limits explicit"
+      "coverage_state": "candidate; source endpoint adaptations and component-only limits explicit; reviewed competency credit pending",
+      "native_evidence": "native_validation_runs/b1cfab727472.json",
+      "native_positive_checks": 3,
+      "native_negative_checks": 4
     },
     {
       "proposed_recipe": "real-phix-bam-read-structure",
@@ -1309,7 +1312,7 @@
     },
     {
       "proposed_recipe": "real-heme-pocket-burial",
-      "stage": "native oracle and nineteen artifact controls passed; Harbor packaging",
+      "stage": "native oracle, nineteen artifact controls and registered Harbor package passed",
       "input_source": "Observed PDB 4HHB paired mmCIF and PDB",
       "competency_focus": [
         "Structure identity and ligand resolution",
@@ -1317,7 +1320,10 @@
         "Ligand-induced solvent-accessibility changes"
       ],
       "coverage_state": "candidate; proximity does not imply hydrogen-bond identification",
-      "native_evidence": "native_validation_runs/1d21faa8f7b0.json"
+      "native_evidence": "native_validation_runs/1d21faa8f7b0.json",
+      "harbor_evidence": "container_validation.json",
+      "harbor_job_id": "/exedev/bio-heme-harbor-20260925-012615",
+      "canonical_task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407"
     }
   ],
   "authoring_policy": {

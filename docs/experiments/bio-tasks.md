@@ -1,6 +1,6 @@
 # Biology Harbor task generation
 
-The generators in `experiments/post_training/bio_tasks/` register 148
+The generators in `experiments/post_training/bio_tasks/` register 149
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -118,13 +118,13 @@ records input-file hashes so a rebuild can detect stale presentation data.
 ## Existing authoring inventory
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 148 registered recipes span 13 domains:
+format profile, and repository mapping. The 149 registered recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 24 |
 | genomic intervals | 10 |
-| expression | 20 |
+| expression | 21 |
 | sequencing reads | 19 |
 | variants | 9 |
 | phylogeny | 12 |
@@ -137,21 +137,23 @@ format profile, and repository mapping. The 148 registered recipes span 13 domai
 | workflow and identifiers | 2 |
 
 The builder defaults to one task per recipe. The registered inventory comprises
-33 real-data candidates and 115 simulated controls; these counts include candidates
+34 real-data candidates and 115 simulated controls; these counts include candidates
 awaiting execution. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
 
-Two further candidates passed native checks and are entering Harbor validation.
 `real-phix-bam-read-structure` uses 12,000 observed pairs with BWA/SAMtools and
 checks every BAM record, BAI retrieval and four read-audit tables; its fresh oracle
-passed and seven corrupted outputs failed. `real-heme-pocket-burial` uses complete
-4HHB coordinates with Biopython and an independent paired-PDB reference; two
-positive and nineteen negative checks passed. Contacts and solvent exposure do
-not imply hydrogen bonds or binding affinity. Both reuse existing biological
-lineages and have no reviewed competency credit.
+passed and seven corrupted outputs failed. Harbor validation remains pending.
+`real-heme-pocket-burial` uses complete 4HHB coordinates with Biopython and an
+independent paired-PDB reference. Two native positive and nineteen native negative
+checks passed. Its registered Harbor package passed a fresh oracle, three
+artifact-only corruptions and an empty-output control with a separate verifier;
+cleanup found no remaining sandboxes. Contacts and sampled solvent exposure do
+not establish hydrogen bonds or binding affinity. Both tasks reuse existing
+biological lineages and have no reviewed competency credit.
 
 The new `real-rnaseq-shrinkage-enrichment-audit` candidate uses GSE60450 luminal
 libraries to compare shrunken effect thresholds and two GO-enrichment specifications.

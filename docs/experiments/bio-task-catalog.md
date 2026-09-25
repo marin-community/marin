@@ -25,7 +25,7 @@ source inspection limits and context adaptations remain useful provenance.
 Previously validated benchmark mappings do not automatically become competency
 coverage; each bounded outcome needs a reviewed task/verifier assignment.
 
-The registry has **148 recipes across 13 domains**, with one task per
+The registry has **149 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -116,11 +116,11 @@ Downloads, stars, and citations remain available in the unchanged
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions`, `real-genome-promoters` | 3 reference checks passed (`fasta-indexed-regions`) |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
-| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest`, `real-cox1-tree-comparison`, `real-heme-pocket-burial` | 3 reference checks passed (`gtf-splicing`); heme-pocket two positive and nineteen negative checks passed; Harbor pending |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest`, `real-cox1-tree-comparison`, `real-heme-pocket-burial` | 3 reference checks passed (`gtf-splicing`); heme-pocket two native positive and nineteen negative checks passed; registered Harbor package passed one fresh oracle and four failing controls |
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | 3 reference checks passed (`protein-local-search`) |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | 3 reference checks passed (`vcf-sample-qc`) |
-| 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions`, `real-singlecell-read-qc` | 3 small checks and 1 full observed study passed |
+| 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions`, `real-singlecell-read-qc`, `real-singlecell-representation-audit` | 3 small checks and 2 connected tasks on 1 observed study passed native checks; representation Harbor pending |
 | 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter`, `real-rnaseq-library-qc`, `real-rnaseq-cpm-filter` | 3 reference checks passed (`bulk-cpm-filter`) |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | 3 reference checks passed (`adjusted-linear-effect`) |
@@ -230,7 +230,7 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-The 148 registered recipes include 33 using real observations and 115 simulated component
+The 149 registered recipes include 34 using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -258,8 +258,8 @@ summaries. Reference computation took 97.8 seconds, oracle computation 219.4 sec
 and artifact grading 149–151 seconds on a reserved TRC CPU host. The
 [native record](../../experiments/post_training/bio_tasks/native_validation_runs/40ed93019b52.json)
 pins inputs, packages, artifacts and resources. This checks cell/gene filtering
-and identity-preserving sparse export. Normalization, annotation, clustering and
-donor-level comparisons remain separate workflow gaps. The one-recipe package build
+and identity-preserving sparse export. Annotation, clustering and
+donor-level comparisons remain workflow gaps. The one-recipe package build
 passed its oracle and all 15 negative controls in 591 seconds with 971 MiB peak RSS.
 The fresh Harbor oracle completed in 108.2 seconds; the separate verifier took
 78.3 seconds. Changed-count and missing-feature-row controls received zero with
@@ -269,6 +269,21 @@ check found none remaining. The
 [container evidence](../../experiments/post_training/bio_tasks/container_validation.json)
 preserves both outcomes and the durable regional archive. The inspected biological
 source does not establish exact benchmark independence.
+
+The separate `real-singlecell-representation-audit` starts from those 1,422
+QC-retained cells and 40,312 endogenous genes. It keeps 35,333 genes detected
+in at least ten cells, applies one sparse CP10k/log1p transform, selects 2,000
+Seurat-dispersion genes and exports 30 centered, unscaled principal components.
+The [native record](../../experiments/post_training/bio_tasks/native_validation_runs/b1cfab727472.json)
+checks all 17,305,101 normalized nonzeros and preserved integer counts. Its
+fresh isolated oracle and full row-keyed artifact checks pass; wrong-depth and
+double-log H5ADs, one changed HVG boundary and an unmatched PCA sign fail with
+unchanged correct summaries. A jointly changed component sign passes. The
+reference took 27.2 seconds and 1.51 GiB peak RSS; the H5AD verifier took
+2.6 seconds and 111 MiB. Harbor packaging and reviewed competency assignment
+remain pending. These Smart-seq2 observations are read counts. The task does
+not supply UMI, UMAP, clustering, donor or fine cell-type outcomes, and the
+inspected benchmark links are component-level adaptations.
 
 The observed proteome clustering task runs MMseqs2 Linclust on all 4,403 proteins,
 then extracts 4,184 unchanged native representatives. All membership rows and
@@ -546,13 +561,15 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-The 33 real-data candidates use unchanged biological observations or declared observed subsets:
+The 34 real-data candidates use unchanged biological observations or declared observed subsets:
 
-The observed BAM read-structure and 4HHB heme-pocket additions are native-validated
-candidates awaiting Harbor checks. The BAM workflow grades every record and its
-coordinate index, with seven corrupted-output controls. The heme workflow grades
-290 atom contacts, 2,296 residue/HEM rows and 172 HEM atoms, including solvent
-exposure; all nineteen controls fail. Both reuse existing study lineages.
+The observed BAM read-structure candidate grades every record and its coordinate
+index; seven corrupted-output controls fail native checks, and Harbor validation
+is pending. The 4HHB heme-pocket workflow grades 290 atom contacts, 2,296
+residue/HEM rows and 172 HEM atoms, including solvent exposure. Its native
+reference passed two positive and nineteen negative controls. The registered
+Harbor package passed one fresh oracle and four failing controls with a separate
+verifier. Both tasks reuse existing study lineages.
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -669,7 +686,8 @@ answer limit. Separate contracts verify complete FASTA records, FASTQ reads,
 alignments, TSV tables, Newick trees and sparse MatrixMarket counts. Unaligned
 FASTA verification checks every identity and residue while accepting record
 reordering, line wrapping and letter-case changes. The full-study single-cell
-workflow uses sparse matrix artifacts; the older normalization controls still
+QC workflow uses a sparse matrix artifact; the representation audit uses a
+complete normalized H5AD. Older normalization controls still
 emit gene–cell pairs in JSON and must remain small. Do not silently truncate
 results or relax scientific checks.
 

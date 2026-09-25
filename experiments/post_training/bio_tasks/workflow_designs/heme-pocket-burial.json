@@ -1,7 +1,7 @@
 {
   "design_id": "heme-pocket-burial",
   "recipe_id": "real-heme-pocket-burial",
-  "status": "native-validated-Harbor-running",
+  "status": "native-and-Harbor-validated-review-pending",
   "scientific_question": "Which observed globin residues approach each of the four heme cofactors in human deoxyhemoglobin, and what sampled solvent-accessible area is buried when each cofactor is added to the complete globin complex at the deposited coordinates?",
   "source": {
     "source_id": "PDB:4HHB",
@@ -79,9 +79,12 @@
       "Changed HEM atom exposure"
     ],
     "native_status": "passed: independent reference, fresh native oracle, two positive and nineteen negative controls",
-    "harbor_status": "running: /exedev/bio-heme-harbor-20260925-011330",
+    "harbor_status": "passed: registered task, fresh oracle and four failing controls; cleanup empty",
     "validated_benchmark_credit": 0,
-    "native_evidence": "../native_validation_runs/1d21faa8f7b0.json"
+    "native_evidence": "../native_validation_runs/1d21faa8f7b0.json",
+    "harbor_evidence": "../container_validation.json",
+    "harbor_job_id": "/exedev/bio-heme-harbor-20260925-012615",
+    "canonical_task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407"
   },
   "resources": {
     "execution": "Offline after pinned environment creation; existing reserved CPU only; no model or judge calls",
@@ -94,7 +97,8 @@
       "native_seconds": 41.86980156699428,
       "independent_reference_seconds": 35.31041748801363,
       "peak_child_rss_kib": 99240,
-      "native_job_id": "/exedev/bio-heme-pocket-validation-20260925-010321"
+      "native_job_id": "/exedev/bio-heme-pocket-validation-20260925-010321",
+      "harbor_job_seconds": 207.02
     }
   }
 }

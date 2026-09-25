@@ -5,6 +5,10 @@ assignment fields and link the current acceptance packet. The
 [authoring queue](../../experiments/post_training/bio_tasks/workflow_queue.json)
 records active tasks; [the task guide](bio-tasks.md) defines the dataset contract.
 
+Launch every author with `model="gpt-6-sol"` and `reasoning_effort="high"`,
+explicitly set rather than inherited. Use this same setting for reviews and
+research assignments. Do not use Astra.
+
 ## Assignment
 
 ```text

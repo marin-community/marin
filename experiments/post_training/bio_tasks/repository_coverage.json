@@ -271,7 +271,7 @@
         "scope": "matrixmarket-log-normalization"
       },
       "scope": "Join single-cell features and apply prescribed library-size log normalization or row scaling.",
-      "limitations": "Compute joins and log1p(count / cell total \u00d7 scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation."
+      "limitations": "Compute joins and log1p(count / cell total × scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation."
     },
     {
       "index": 13,
@@ -425,7 +425,13 @@
           "recipe": "real-heme-pocket-burial",
           "evidence": "native_validation_runs/1d21faa8f7b0.json",
           "status": "passed",
-          "limits": "Paired-PDB independent arithmetic and fresh Biopython mmCIF/SASA oracle; no hydrogen-bond or affinity inference."
+          "limits": "Paired-PDB independent arithmetic and fresh Biopython mmCIF/SASA oracle; no hydrogen-bond or affinity inference.",
+          "harbor_evidence": {
+            "file": "container_validation.json",
+            "job_id": "/exedev/bio-heme-harbor-20260925-012615",
+            "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+            "status": "passed: fresh oracle plus four failing controls; cleanup empty"
+          }
         }
       ]
     },
@@ -491,7 +497,8 @@
         "matrixmarket-cell-qc",
         "donor-counts",
         "cell-fractions",
-        "real-singlecell-read-qc"
+        "real-singlecell-read-qc",
+        "real-singlecell-representation-audit"
       ],
       "source_url": "https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py",
       "tool_execution": {
@@ -510,10 +517,22 @@
           "input_features": 46170,
           "filtered_nonzeros": 17332418,
           "status": "passed-reference-and-independent-oracle"
+        },
+        "representation_observed_check": {
+          "checks_file": "native_validation_runs/b1cfab727472.json",
+          "recipe": "real-singlecell-representation-audit",
+          "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009",
+          "distinct_studies": 1,
+          "input_cells": 1422,
+          "input_features": 40312,
+          "eligible_features": 35333,
+          "normalized_nonzeros": 17305101,
+          "status": "passed-native-reference-full-contract-and-fresh-oracle; Harbor-pending",
+          "component_scope": "Observed Smart-seq2 read-count normalization, Seurat-dispersion HVGs and centered PCA depth/loading diagnostics; no UMI, UMAP, clustering or complete benchmark-endpoint claim."
         }
       },
-      "scope": "Calculate per-cell counts, detected genes, and supplied gene-set fractions; aggregate raw counts by donor.",
-      "limitations": "Direct sums and nonzero counts on fresh matrices, plus independent donor/cell ledgers. Compare IDs and denominators. Vary raw versus transformed layers; do not reuse benchmark PBMC fixtures."
+      "scope": "Calculate per-cell counts, detected genes and supplied gene-set fractions; aggregate raw counts by donor. The separate observed representation task filters genes, normalizes sparse read counts, selects HVGs and audits PCA axes against original depth.",
+      "limitations": "Direct sums and nonzero counts on fresh matrices, plus independent donor/cell ledgers. Compare IDs and denominators. Distinguish Smart-seq2 reads from UMI inputs and keep full normalized matrix/PCA artifacts; no UMAP, clustering or cell-type inference. Do not reuse benchmark PBMC fixtures."
     },
     {
       "index": 24,
@@ -553,7 +572,7 @@
         "scope": "bulk-cpm-filter"
       },
       "scope": "Normalize counts with explicitly supplied library sizes/factors and a declared expression filter.",
-      "limitations": "Check non-log CPM = count \u00d7 1e6 / effective library size and selected genes. Specify offsets and normalization factors; zero libraries need a defined error. This short recipe does not substitute for replicate-aware differential expression."
+      "limitations": "Check non-log CPM = count × 1e6 / effective library size and selected genes. Specify offsets and normalization factors; zero libraries need a defined error. This short recipe does not substitute for replicate-aware differential expression."
     },
     {
       "index": 26,
@@ -714,7 +733,7 @@
         "evidence": null
       },
       "scope": "Convert annotated transcript coverage into transcript/gene count estimates with correct exon lengths and sample joins.",
-      "limitations": "Independently compute inclusive GTF exon lengths and ceil(coverage \u00d7 length / read length), then aggregate by gene. Check annotation consistency. These are estimated counts; they are not exact observed molecule counts."
+      "limitations": "Independently compute inclusive GTF exon lengths and ceil(coverage × length / read length), then aggregate by gene. Check annotation consistency. These are estimated counts; they are not exact observed molecule counts."
     },
     {
       "index": 35,

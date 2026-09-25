@@ -38,6 +38,7 @@ PROFILES = {
     "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"),
     "real-cox1-tree-comparison": EnvironmentProfile(28, "native_validation_runs/e2f647365a6f.json", 2048),
     "real-singlecell-read-qc": EnvironmentProfile(23, "native_validation_runs/40ed93019b52.json", 4096),
+    "real-singlecell-representation-audit": EnvironmentProfile(23, "native_validation_runs/b1cfab727472.json", 8192),
     "real-proteome-domain-search": EnvironmentProfile(11, "native_validation_runs/a619ee74f5b8.json", 2048),
     "real-proteome-clustering": EnvironmentProfile(42, "native_validation_runs/9d28dd15e082.json", 2048),
     "real-phix-assembly": EnvironmentProfile(27, "native_validation_runs/cd4c5520958b.json", 4096),

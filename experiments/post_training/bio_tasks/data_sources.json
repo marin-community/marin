@@ -1410,6 +1410,23 @@
           "harbor": "pending"
         }
       },
+      "representation_preparation": {
+        "status": "native-reference-and-full-contract-passed; Harbor-pending",
+        "protocol": "sources/prepare_singlecell_representation.json",
+        "reference_manifest": "sources/singlecell-representation-reference.json",
+        "input_manifest": "sources/singlecell-representation-input-manifest.json",
+        "reference_job_id": "/exedev/bio-singlecell-representation-20260925-003432",
+        "validation_job_id": "/exedev/bio-singlecell-validation-20260925-011454",
+        "checks_file": "native_validation_runs/b1cfab727472.json",
+        "checks_sha256": "b1cfab7274724c56fbf3c0323d2a1ab55ab1f480878442975bc8b10f6ed7b756",
+        "validation_archive": "gs://marin-us-central2/bio-tasks/authoring/sha256/c250d969ce9f574b0c8f6ef9b00f95887a29a478180d38776779c12e2d8d61fe/outputs.tar.zst",
+        "validation_archive_sha256": "c250d969ce9f574b0c8f6ef9b00f95887a29a478180d38776779c12e2d8d61fe",
+        "public_cells": 1422,
+        "public_features": 40312,
+        "eligible_features": 35333,
+        "normalized_nonzeros": 17305101,
+        "limits": "Smart-seq2 reads and prior QC-retained cells only; no UMI, donor, mitochondrial, clustering, UMAP or complete benchmark-endpoint claim."
+      },
       "data_origin": "real",
       "citation": "Nestorowa et al., Blood (2016), doi:10.1182/blood-2016-05-716480; GSE81682.",
       "license": "GEO public-data use/distribution policy; no dataset-specific license identified",
@@ -1429,7 +1446,7 @@
           "vendored_bytes": 3107466,
           "content_sha256": "4538878a768f14b419178db5794c79920c3b14a6001f74fb67e4fafbb0f69804",
           "content_bytes": 13427195,
-          "transformation": "Private complete Scanpy normalization, variable-gene and PCA reference for the QC-retained observed read matrix; never supplied to solver. Native reference admission passed; fresh oracle and artifact validation remain separate."
+          "transformation": "Private complete Scanpy normalization, variable-gene and PCA reference for the QC-retained observed read matrix; never supplied to solver. Native reference, fresh isolated oracle and full deterministic artifact checks passed; Harbor remains separate."
         }
       },
       "file_inputs": {

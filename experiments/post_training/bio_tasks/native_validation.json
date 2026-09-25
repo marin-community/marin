@@ -1313,6 +1313,14 @@
       "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/003f02ea388882b3f77d10f1f7e79c7dfe97f9721f66f41fdd4ebc8194527462/outputs.tar.zst",
       "archive_storage_md5": "+MkShF9r5S2Mn/ndgzqA4Q==",
       "archive_storage_generation": "1790298694361499"
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009",
+      "environment_kind": "Checksum-locked Scanpy 1.12.4 sparse normalization/HVG/PCA on reserved TRC CPU; deterministic full H5AD/table verifier and fresh isolated oracle",
+      "checks_file": "native_validation_runs/b1cfab727472.json",
+      "checks_sha256": "b1cfab7274724c56fbf3c0323d2a1ab55ab1f480878442975bc8b10f6ed7b756",
+      "job_id": "/exedev/bio-singlecell-validation-20260925-011454"
     }
   ],
   "numerical_portability": [

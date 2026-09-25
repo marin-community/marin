@@ -6306,6 +6306,3430 @@
         }
       ],
       "limitations": "One observed luminal developmental contrast. Package execution and full artifacts passed; source-lineage and competency assignment review remain separate. No semantic GO reduction or ranked GSEA is covered."
+    },
+    {
+      "job_id": "/exedev/bio-heme-harbor-20260925-011330",
+      "source_revision": "c50a382c5ae01c108a8a5a8af96e9bab3449b009",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "validation_role": "diagnostic-metadata-incomplete",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "named oracle with Terminus terminal setup check",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "519e7e703ac13df23b8729e5ff892e5078f31b0bfe95c0099ae7bd57b76e3987",
+      "canonical_task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+      "archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/519e7e703ac13df23b8729e5ff892e5078f31b0bfe95c0099ae7bd57b76e3987/diagnostic-outputs.tar.zst",
+        "bytes": 802317,
+        "sha256": "aa78fc2f44859935d47a12e50ee058bf071d722859d2cbced7f4298871bb744f",
+        "md5_base64": "ssFz6t3amlDiusI5IlTZyw==",
+        "generation": "1790299475489033",
+        "retention": "durable regional authoring"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-9a98788d",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330",
+        "accelerators_requested": 0,
+        "worker_preflight": {
+          "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-0",
+          "healthy": true,
+          "scale_group": "tpu_v4-reserved_256-us-central2-b",
+          "tpu_name": "t1v-n-9a98788d",
+          "backend_id": "default"
+        }
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-25T01:18:02.210209+00:00",
+        "trials": [
+          "real-heme-pocket-burial-v1-20260__8ZSqQnH",
+          "real-heme-pocket-burial-v1-20260__DvznVX6",
+          "real-heme-pocket-burial-v1-20260__RE4YBM7",
+          "real-heme-pocket-burial-v1-20260__uEJsG9y",
+          "real-heme-pocket-burial-v1-20260__zchnyZ9"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-25T01:18:03.372922+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-25T01:18:03.419358+00:00"
+      },
+      "summary_identity_check": "All three artifact-only controls retain an identical answer.json byte hash and the same forty parsed summary fields as the fresh oracle; fresh output differs only in JSON serialization. Each fails exactly its intended table. Empty output fails the summary and all three tables.",
+      "cases": [
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-missing-noncontact-residue",
+          "recipe": "real-heme-pocket-burial",
+          "control": "missing-noncontact-residue",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "residues.tsv"
+          ],
+          "task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": false,
+                  "rows": 2295,
+                  "missing": [
+                    "HEM:A:142:.:HEM|protein:A:100:.:LEU"
+                  ],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": false,
+              "rows": 2295,
+              "missing": [
+                "HEM:A:142:.:HEM|protein:A:100:.:LEU"
+              ],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "solution/control/heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "solution/control/residues.tsv": "f460d47bfe355eceb0050667081b082127309352ba64b47f711c8a823438b322",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "96619cac5e12835576aa3a46892507f83579ab8adec9e0a67c25ab89f792358f",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "f460d47bfe355eceb0050667081b082127309352ba64b47f711c8a823438b322"
+          },
+          "seconds": {
+            "environment_setup": 2.34371,
+            "agent_setup": 4.297376,
+            "agent_execution": 2.084616,
+            "verifier": 5.509538
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:16:29.888832Z",
+          "finished_at": "2026-09-25T01:16:50.618357Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000",
+          "recipe": "real-heme-pocket-burial",
+          "control": "fresh-native-oracle",
+          "expected_reward": 1,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [],
+          "task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+          "repository_indices": [
+            19
+          ],
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "74784955d62399bab3f157f0e393279dd0c551e97535771eb39e73d605c249ae",
+            "task.toml": "96619cac5e12835576aa3a46892507f83579ab8adec9e0a67c25ab89f792358f",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "70f9eed4cdb7f60f3279ab02e223ff1b152b8d35ef466a115b8076e641ba1953",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 2.010662,
+            "agent_setup": 4.119536,
+            "agent_execution": 26.012743,
+            "verifier": 5.399421
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:17:14.579158Z",
+          "finished_at": "2026-09-25T01:17:58.654693Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-contact-distance",
+          "recipe": "real-heme-pocket-burial",
+          "control": "contact-distance",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "contacts.tsv"
+          ],
+          "task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": false,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
+                      "field": "distance"
+                    }
+                  ]
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": false,
+              "rows": 290,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
+                  "field": "distance"
+                }
+              ]
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "a196a14a048543c8cf220291450032154151cfae44ae40112215fe6dda214b47",
+            "solution/control/heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "solution/control/residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "96619cac5e12835576aa3a46892507f83579ab8adec9e0a67c25ab89f792358f",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "a196a14a048543c8cf220291450032154151cfae44ae40112215fe6dda214b47",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 4.971446,
+            "agent_setup": 4.001977,
+            "agent_execution": 2.294961,
+            "verifier": 6.111134
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:16:50.624978Z",
+          "finished_at": "2026-09-25T01:17:14.572918Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-heme-exposure",
+          "recipe": "real-heme-pocket-burial",
+          "control": "heme-exposure",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "heme_atoms.tsv"
+          ],
+          "task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": false,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "HEM:A:142:.:HEM:C1A",
+                      "field": "sasa_complex"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": false,
+              "rows": 172,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "HEM:A:142:.:HEM:C1A",
+                  "field": "sasa_complex"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "solution/control/heme_atoms.tsv": "957c36669106bc0f433711419968406010e4e303abbe02b723036151f903dfc6",
+            "solution/control/residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "96619cac5e12835576aa3a46892507f83579ab8adec9e0a67c25ab89f792358f",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "957c36669106bc0f433711419968406010e4e303abbe02b723036151f903dfc6",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 2.368797,
+            "agent_setup": 4.43993,
+            "agent_execution": 2.332763,
+            "verifier": 5.946657
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:16:08.555639Z",
+          "finished_at": "2026-09-25T01:16:29.882465Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-empty-output",
+          "recipe": "real-heme-pocket-burial",
+          "control": "empty-output",
+          "expected_reward": 0,
+          "summary_kind": "missing",
+          "expected_summary_reason": "missing_or_nonregular_answer",
+          "expected_artifact_failures": [
+            "contacts.tsv",
+            "heme_atoms.tsv",
+            "residues.tsv"
+          ],
+          "task_sha256": "c60a87e2c4730f6b9d1d77e5c5a7ede7a9dc335fb2ff32c0cf9beece36ae429c",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "missing_or_nonregular_answer",
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "residues.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "heme_atoms.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "residues.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "heme_atoms.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "534913239c5af4d35fb89c9c6776ab80b99b4406dabde854e347f812312f10cb",
+            "task.toml": "96619cac5e12835576aa3a46892507f83579ab8adec9e0a67c25ab89f792358f",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {},
+          "seconds": {
+            "environment_setup": 22.44843,
+            "agent_setup": 4.240431,
+            "agent_execution": 2.170744,
+            "verifier": 36.931351
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:14:30.945219Z",
+          "finished_at": "2026-09-25T01:16:08.548727Z"
+        }
+      ],
+      "limitations": "One complete observed 4HHB structure, reusing an existing biological lineage. Geometric proximity and sampled solvent exposure do not identify hydrogen bonds, binding affinity or relaxed apo/holo changes. Benchmark-lineage exclusion and reviewed competency assignment remain pending. Diagnostic package omitted central registry domain/repository metadata; canonical registration requires a separate run.",
+      "source_bundle": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/519e7e703ac13df23b8729e5ff892e5078f31b0bfe95c0099ae7bd57b76e3987/source.tar.gz",
+        "bytes": 1145176,
+        "sha256": "519e7e703ac13df23b8729e5ff892e5078f31b0bfe95c0099ae7bd57b76e3987",
+        "md5_base64": "d8FP+xqVZixk5CvV7fxBww==",
+        "generation": "1790299618110749",
+        "retention": "durable regional authoring"
+      }
+    },
+    {
+      "job_id": "/exedev/bio-heme-harbor-20260925-012615",
+      "source_revision": "2fd5ba234b269d73a79cb8b2901340fcd9dd3277",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "validation_role": "canonical-registered-task",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "named oracle with Terminus terminal setup check",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 3,
+      "bundle_sha256": "8e5b6b955eca1411188ba6dfc915a5fb52a081de0c9c4f8d9ab20194ced84923",
+      "canonical_task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+      "archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/8e5b6b955eca1411188ba6dfc915a5fb52a081de0c9c4f8d9ab20194ced84923/outputs.tar.zst",
+        "bytes": 802532,
+        "sha256": "3054126e8905edc8389e97e7c1b6f358a8bc21e382f593c661ce5a6d4fa4cec6",
+        "md5_base64": "/lHsIP2X8ykocq72EBc8GQ==",
+        "generation": "1790299908795036",
+        "retention": "durable regional authoring"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-9a98788d",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330",
+        "accelerators_requested": 0,
+        "worker_preflight": {
+          "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-0",
+          "healthy": true,
+          "scale_group": "tpu_v4-reserved_256-us-central2-b",
+          "tpu_name": "t1v-n-9a98788d",
+          "backend_id": "default"
+        }
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "checked_at": "2026-09-25T01:29:47.249129+00:00",
+        "trials": [
+          "real-heme-pocket-burial-v1-20260__QkHk23M",
+          "real-heme-pocket-burial-v1-20260__TfAapW7",
+          "real-heme-pocket-burial-v1-20260__fSroiJA",
+          "real-heme-pocket-burial-v1-20260__icoQNAM",
+          "real-heme-pocket-burial-v1-20260__ki9m5XR"
+        ],
+        "actions": [],
+        "observations": [
+          {
+            "checked_at": "2026-09-25T01:29:48.257168+00:00",
+            "remaining": []
+          }
+        ],
+        "remaining": [],
+        "finished_at": "2026-09-25T01:29:48.299724+00:00"
+      },
+      "summary_identity_check": "All three artifact-only controls retain an identical answer.json byte hash and the same forty parsed summary fields as the fresh oracle; fresh output differs only in JSON serialization. Each fails exactly its intended table. Empty output fails the summary and all three tables.",
+      "cases": [
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000",
+          "recipe": "real-heme-pocket-burial",
+          "control": "fresh-native-oracle",
+          "expected_reward": 1,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [],
+          "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+          "repository_indices": [
+            19
+          ],
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 1.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "74784955d62399bab3f157f0e393279dd0c551e97535771eb39e73d605c249ae",
+            "task.toml": "da7fa9f3ace2877c44b2447c0a630e721b49ac77fbce9068b19ccdc5bca081cc",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "70f9eed4cdb7f60f3279ab02e223ff1b152b8d35ef466a115b8076e641ba1953",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 2.187764,
+            "agent_setup": 4.283774,
+            "agent_execution": 28.058063,
+            "verifier": 5.412917
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:28:57.272914Z",
+          "finished_at": "2026-09-25T01:29:43.659814Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-missing-noncontact-residue",
+          "recipe": "real-heme-pocket-burial",
+          "control": "missing-noncontact-residue",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "residues.tsv"
+          ],
+          "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": false,
+                  "rows": 2295,
+                  "missing": [
+                    "HEM:A:142:.:HEM|protein:A:100:.:LEU"
+                  ],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": false,
+              "rows": 2295,
+              "missing": [
+                "HEM:A:142:.:HEM|protein:A:100:.:LEU"
+              ],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "solution/control/heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "solution/control/residues.tsv": "f460d47bfe355eceb0050667081b082127309352ba64b47f711c8a823438b322",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "da7fa9f3ace2877c44b2447c0a630e721b49ac77fbce9068b19ccdc5bca081cc",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "f460d47bfe355eceb0050667081b082127309352ba64b47f711c8a823438b322"
+          },
+          "seconds": {
+            "environment_setup": 1.80138,
+            "agent_setup": 4.490194,
+            "agent_execution": 2.309827,
+            "verifier": 5.441711
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:28:16.503622Z",
+          "finished_at": "2026-09-25T01:28:36.641897Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-heme-exposure",
+          "recipe": "real-heme-pocket-burial",
+          "control": "heme-exposure",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "heme_atoms.tsv"
+          ],
+          "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": true,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": []
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": false,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "HEM:A:142:.:HEM:C1A",
+                      "field": "sasa_complex"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": true,
+              "rows": 290,
+              "missing": [],
+              "failures": []
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": false,
+              "rows": 172,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "HEM:A:142:.:HEM:C1A",
+                  "field": "sasa_complex"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "solution/control/heme_atoms.tsv": "957c36669106bc0f433711419968406010e4e303abbe02b723036151f903dfc6",
+            "solution/control/residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "da7fa9f3ace2877c44b2447c0a630e721b49ac77fbce9068b19ccdc5bca081cc",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "c75f2063634a720acd3ee469e025213f230f3469116b506b9403afb5d304b2e2",
+            "heme_atoms.tsv": "957c36669106bc0f433711419968406010e4e303abbe02b723036151f903dfc6",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 1.903418,
+            "agent_setup": 4.019802,
+            "agent_execution": 2.276546,
+            "verifier": 5.630107
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:27:56.402594Z",
+          "finished_at": "2026-09-25T01:28:16.497270Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-contact-distance",
+          "recipe": "real-heme-pocket-burial",
+          "control": "contact-distance",
+          "expected_reward": 0,
+          "summary_kind": "passing",
+          "expected_artifact_failures": [
+            "contacts.tsv"
+          ],
+          "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "checks": [
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 16,
+                  "actual": 16
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 545.1325645699329,
+                  "actual": 545.132564569933
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 669.5343623214154,
+                  "actual": 669.5343623214154
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1214.6669268913483,
+                  "actual": 1214.6669268913483
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:A:87:.:HIS:NE2",
+                  "actual": "protein:A:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:A:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.1433144892898954,
+                  "actual": 2.1433144892898954
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 72,
+                  "actual": 72
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 503.58012833060405,
+                  "actual": 503.5801283306041
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 609.6157133532811,
+                  "actual": 609.6157133532812
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1113.1958416838852,
+                  "actual": 1113.1958416838852
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:B:92:.:HIS:NE2",
+                  "actual": "protein:B:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:B:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.2219072887949216,
+                  "actual": 2.221907288794921
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 15,
+                  "actual": 15
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 71,
+                  "actual": 71
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 534.8463867744912,
+                  "actual": 534.8463867744912
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 657.2230877215308,
+                  "actual": 657.2230877215309
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1192.069474496022,
+                  "actual": 1192.069474496022
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:C:87:.:HIS:NE2",
+                  "actual": "protein:C:87:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:C:142:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 2.258099422080435,
+                  "actual": 2.258099422080435
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_residues",
+                  "passed": true,
+                  "expected": 574,
+                  "actual": 574
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "pocket_residues",
+                  "passed": true,
+                  "expected": 14,
+                  "actual": 14
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contact_pairs",
+                  "passed": true,
+                  "expected": 76,
+                  "actual": 76
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "contacting_chains",
+                  "passed": true,
+                  "expected": 1,
+                  "actual": 1
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_heavy_atoms",
+                  "passed": true,
+                  "expected": 43,
+                  "actual": 43
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "protein_buried_area",
+                  "passed": true,
+                  "expected": 522.9123088055567,
+                  "actual": 522.9123088055568
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "heme_buried_area",
+                  "passed": true,
+                  "expected": 629.5157262283946,
+                  "actual": 629.5157262283947
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "total_buried_area",
+                  "passed": true,
+                  "expected": 1152.4280350339513,
+                  "actual": 1152.4280350339513
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "nearest_iron_protein_atom",
+                  "passed": true,
+                  "expected": "protein:D:92:.:HIS:NE2",
+                  "actual": "protein:D:92:.:HIS:NE2"
+                },
+                {
+                  "id": "HEM:D:148:.:HEM",
+                  "field": "iron_minimum_distance",
+                  "passed": true,
+                  "expected": 1.9817111293021494,
+                  "actual": 1.9817111293021492
+                }
+              ],
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": false,
+                  "rows": 290,
+                  "missing": [],
+                  "failures": [
+                    {
+                      "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
+                      "field": "distance"
+                    }
+                  ]
+                },
+                "residues.tsv": {
+                  "passed": true,
+                  "rows": 2296,
+                  "missing": [],
+                  "failures": []
+                },
+                "heme_atoms.tsv": {
+                  "passed": true,
+                  "rows": 172,
+                  "missing": [],
+                  "failures": []
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": false,
+              "rows": 290,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "HEM:A:142:.:HEM:C1A|protein:A:58:.:HIS:CE1",
+                  "field": "distance"
+                }
+              ]
+            },
+            "residues.tsv": {
+              "passed": true,
+              "rows": 2296,
+              "missing": [],
+              "failures": []
+            },
+            "heme_atoms.tsv": {
+              "passed": true,
+              "rows": 172,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/control/answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "solution/control/contacts.tsv": "a196a14a048543c8cf220291450032154151cfae44ae40112215fe6dda214b47",
+            "solution/control/heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "solution/control/residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "da7fa9f3ace2877c44b2447c0a630e721b49ac77fbce9068b19ccdc5bca081cc",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {
+            "answer.json": "3d587393adc3f3d3ab66a666493899a821572712a50608fe5ef50d50f4b91ab6",
+            "contacts.tsv": "a196a14a048543c8cf220291450032154151cfae44ae40112215fe6dda214b47",
+            "heme_atoms.tsv": "add0d8c2172bef48fadf3032d22b00e45d25b410b4194a1e43744ef2c8447efb",
+            "residues.tsv": "e10263145e4e0bf69dc348765f8ca469c11df69de99239df2443e0f828952473"
+          },
+          "seconds": {
+            "environment_setup": 2.005132,
+            "agent_setup": 4.477538,
+            "agent_execution": 2.323305,
+            "verifier": 5.647795
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:28:36.648945Z",
+          "finished_at": "2026-09-25T01:28:57.266202Z"
+        },
+        {
+          "task_id": "real-heme-pocket-burial-v1-20260925-00000-empty-output",
+          "recipe": "real-heme-pocket-burial",
+          "control": "empty-output",
+          "expected_reward": 0,
+          "summary_kind": "missing",
+          "expected_summary_reason": "missing_or_nonregular_answer",
+          "expected_artifact_failures": [
+            "contacts.tsv",
+            "heme_atoms.tsv",
+            "residues.tsv"
+          ],
+          "task_sha256": "ae2ddbb793dbae0bc17c7d6ad1ba05a3d1999f4c031f4d292d77f4a767301407",
+          "repository_indices": [
+            19
+          ],
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "verdict": {
+            "reward": 0.0,
+            "status": "scored",
+            "detail": {
+              "reason": "missing_or_nonregular_answer",
+              "artifact_checks": {
+                "contacts.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "residues.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                },
+                "heme_atoms.tsv": {
+                  "passed": false,
+                  "reason": "missing_or_nonregular_table"
+                }
+              }
+            }
+          },
+          "artifact_checks": {
+            "contacts.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "residues.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            },
+            "heme_atoms.tsv": {
+              "passed": false,
+              "reason": "missing_or_nonregular_table"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "7c6e4216017384e504ed85a1986eb98c8999523d84c5138bdc512ee85c567fa5",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "baf743ef7411a26110f568565cd29d3dffc0b7209ecbc6937b7d44cdf0bfa81b",
+            "instruction.md": "080b2f5ca871c7ed1e16c30982f96a3542b91d0f7937f0b2b1a7d7fef578f3fe",
+            "setup_files/inputs/query.json": "feb6cc79c45242a906cf524e360538f53a830db768b5290b162f0590a66d02a2",
+            "setup_files/inputs/structure.cif": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+            "solution/oracle.pyz": "45476173da356e31236266f0534b5af1e451fe9b20ee2da33f5b5211e31aeb5b",
+            "solution/solve.sh": "534913239c5af4d35fb89c9c6776ab80b99b4406dabde854e347f812312f10cb",
+            "task.toml": "da7fa9f3ace2877c44b2447c0a630e721b49ac77fbce9068b19ccdc5bca081cc",
+            "tests/Dockerfile": "300383dbef0bb3b6b2c0492194d1b5d96839b82579b171cf879f7a1b15eed868",
+            "tests/reference.json": "f870e7fc12ba4a0e32e1ba0f8fe0baf573c6471d555f74d229a3664e59c67804",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "ebb89901b7d1f4600a8e5933c4f66d42c57fcbca1e17fb87588ac0db616b451f"
+          },
+          "artifact_sha256": {},
+          "seconds": {
+            "environment_setup": 2.311828,
+            "agent_setup": 3.706861,
+            "agent_execution": 1.963061,
+            "verifier": 4.966049
+          },
+          "terminal": {
+            "return_code": 0,
+            "output": "/opt/bio/bin/python\n1.88 2.5.3\n",
+            "terminal": "Harbor Terminus-2 TmuxSession with bash --login",
+            "model_calls": 0
+          },
+          "started_at": "2026-09-25T01:27:11.742460Z",
+          "finished_at": "2026-09-25T01:27:56.395514Z"
+        }
+      ],
+      "limitations": "One complete observed 4HHB structure, reusing an existing biological lineage. Geometric proximity and sampled solvent exposure do not identify hydrogen bonds, binding affinity or relaxed apo/holo changes. Benchmark-lineage exclusion and reviewed competency assignment remain pending.",
+      "source_bundle": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/8e5b6b955eca1411188ba6dfc915a5fb52a081de0c9c4f8d9ab20194ced84923/source.tar.gz",
+        "bytes": 1146217,
+        "sha256": "8e5b6b955eca1411188ba6dfc915a5fb52a081de0c9c4f8d9ab20194ced84923",
+        "md5_base64": "HDkVbF6MaGBZZKtA7HZ8AA==",
+        "generation": "1790299618330682",
+        "retention": "durable regional authoring"
+      }
     }
   ]
 }

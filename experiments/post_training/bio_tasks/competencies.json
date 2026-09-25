@@ -17,6 +17,7 @@
   },
   "candidate_recipe_overrides": {
     "real-singlecell-read-qc": "bio.single-cell-qc-embedding",
+    "real-singlecell-representation-audit": "bio.single-cell-qc-embedding",
     "real-clinical-kaplan-meier": "bio.clinical-survival",
     "real-clinical-adjusted-cox": "bio.clinical-survival",
     "real-clinical-paired-visits": "bio.clinical-safety-evidence",
