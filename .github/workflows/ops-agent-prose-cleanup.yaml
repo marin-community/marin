@@ -25,14 +25,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout trusted workflow action
+      - name: Checkout trusted workflow actions
         uses: actions/checkout@v6
         with:
           ref: main
           persist-credentials: false
-          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.issue.user.login || github.event.pull_request.user.login }}
+          allowed-bots: |
+            marin-ops-agent[bot]
+            loom-oa-dev[bot]
       - name: Launch prose cleanup
+        if: steps.author.outputs.allowed == 'true'
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PROSE_CLEANUP_PROFILE }}
