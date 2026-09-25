@@ -989,6 +989,52 @@ def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, mo
     assert evalchemy.chat_template_kwargs == {"enable_thinking": False, "strict_format": False}
 
 
+@pytest.mark.parametrize(
+    ("config_name", "enable_thinking"),
+    (
+        ("aime24", True),
+        ("math500", True),
+        ("olympiadbench", True),
+        ("mmlu-pro", True),
+        ("gpqa-diamond", True),
+        ("humanevalplus", False),
+        ("mbppplus", False),
+        ("gsm8k-0shot", False),
+        ("triviaqa", False),
+        ("cruxeval", False),
+        ("financebench", False),
+        ("ifbench", False),
+        ("mrcr", False),
+    ),
+)
+def test_policy_evalchemy_configs_override_model_thinking_mode(config_name, enable_thinking, monkeypatch):
+    config_path = Path("experiments/evaluation/configs/evalchemy") / f"{config_name}.yaml"
+    model = replace(
+        models()["qwen3-8b"],
+        generation=GenerationConfig(chat_template_kwargs={"enable_thinking": not enable_thinking}),
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(EvalchemyDefinition(name=config_name, config_path=config_path),),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.chat_template_kwargs["enable_thinking"] is enable_thinking
+
+
 def test_seed_override_replaces_the_evalchemy_config_seed_in_records(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     definition = EvalchemyDefinition(
