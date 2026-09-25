@@ -6,6 +6,7 @@ import json
 from marin.datakit.chat_render import render_chat_record
 
 from experiments.post_training.curriculum_sft.generation import GenerateCurriculumSFTConfig, parse_batch
+from experiments.post_training.curriculum_sft.grug_pipeline import prepare_chat_record
 
 
 def _response(index: int, *, task: str, continuation: list[dict[str, str]]) -> dict:
@@ -65,3 +66,8 @@ def test_parse_batch_keeps_distinct_complete_conversations():
     assert task in rendered
     assert "It sold three apples." in rendered
     assert rendered.index(task) < rendered.index("It sold three apples.")
+    prepared = prepare_chat_record(chat_documents[0])
+    assert prepared["messages"] == [
+        {"role": "user", "content": task},
+        {"role": "assistant", "content": "It sold three apples."},
+    ]

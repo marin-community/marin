@@ -9,17 +9,23 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.datakit.chat_render import render_chat_to_parquet
+from marin.datakit.chat_normalize import message_text
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint
+from openai_harmony import Message, Role
 from rigging.filesystem.storage_path import prefix_join
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_parquet
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
@@ -29,6 +35,16 @@ from experiments.post_training.curriculum_sft.generation import generate_curricu
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM, TaskCurriculumCatalogArtifact
 
 GRUG_CHECKPOINTS_DIR = "checkpoints"
+SFT_CHAT_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string(), nullable=False),
+        pa.field(
+            "messages",
+            pa.list_(pa.struct([pa.field("role", pa.string()), pa.field("content", pa.string())])),
+            nullable=False,
+        ),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -41,23 +57,42 @@ class CurriculumGenerationSpec:
 
 
 @dataclass(frozen=True)
-class RenderConfig:
+class PrepareConfig:
     input_path: str
     output_path: str
 
 
-def render_generated_chat(config: RenderConfig) -> Artifact:
-    """Render Datakit Harmony rows with the Marin chat template."""
-    render_chat_to_parquet(input_path=prefix_join(config.input_path, "chat"), output_path=config.output_path)
+def prepare_chat_record(record: dict) -> dict:
+    """Project generated text-only Harmony into Levanter's OpenAI chat schema."""
+    messages = [Message.from_dict(message) for message in record["messages"]]
+    if any(message.author.role not in (Role.USER, Role.ASSISTANT) or message.recipient for message in messages):
+        raise ValueError("curriculum SFT requires text-only user/assistant conversations")
+    return {
+        "id": record["id"],
+        "messages": [{"role": message.author.role.value, "content": message_text(message)} for message in messages],
+    }
+
+
+def prepare_generated_chat(config: PrepareConfig) -> Artifact:
+    """Write OpenAI-style chat Parquet for assistant-only packed SFT."""
+    pipeline = (
+        Dataset.from_files(prefix_join(config.input_path, "chat", "*.parquet"))
+        .flat_map(load_parquet)
+        .map(prepare_chat_record)
+        .write_parquet(
+            prefix_join(config.output_path, "part-{shard:05d}-of-{total:05d}.parquet"), schema=SFT_CHAT_SCHEMA
+        )
+    )
+    ZephyrContext(name="prepare-curriculum-chat", resources=ResourceConfig(cpu=2, ram="4g"), max_workers=4).execute(
+        pipeline
+    )
     return Artifact(path=config.output_path)
 
 
-def packed_grug_data(
-    *, rendered_paths: Mapping[str, str], cache_path: str, tokenizer: str, context_length: int
-) -> LmDataConfig:
-    """Pack rendered conversations without attention across conversation boundaries."""
-    if not rendered_paths:
-        raise ValueError("at least one rendered curriculum source is required")
+def packed_grug_data(*, prepared_paths: Mapping[str, str], cache_path: str, tokenizer: str) -> LmDataConfig:
+    """Pack conversations with assistant-only loss and no cross-conversation attention."""
+    if not prepared_paths:
+        raise ValueError("at least one prepared curriculum source is required")
     return LmDataConfig(
         tokenizer=tokenizer,
         cache_dir=None,
@@ -65,13 +100,18 @@ def packed_grug_data(
             capability_id: DatasetComponent(
                 source=UrlDatasetSourceConfig(train_urls=[prefix_join(path, "*.parquet")]),
                 cache_dir=prefix_join(cache_path, capability_id),
-                format=TextLmDatasetFormat(),
-                pack=context_length,
+                format=ChatLmDatasetFormat(
+                    chat_template=MARIN_CHAT_TEMPLATE,
+                    chat_template_kwargs=None,
+                    mask_user_turns=True,
+                    slice_strategy="drop",
+                ),
+                pack=True,
                 split="train",
             )
-            for capability_id, path in rendered_paths.items()
+            for capability_id, path in prepared_paths.items()
         },
-        train_weights={capability_id: 1 / len(rendered_paths) for capability_id in rendered_paths},
+        train_weights={capability_id: 1 / len(prepared_paths) for capability_id in prepared_paths},
         auto_build_caches=True,
         shuffle=True,
         block_cross_document_attention=True,
@@ -133,7 +173,7 @@ def curriculum_grug_sft(
     steps: int,
     expert_parallel: int,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """Generate, render, and mix curriculum conversations for native Grug SFT.
+    """Generate, prepare, and mix curriculum conversations for native Grug SFT.
 
     The checkpoint and tokenizer must belong to the same Grug architecture. Pass
     a Hugging Face tokenizer ID, which Levanter can stage on each trainer rank.
@@ -147,8 +187,8 @@ def curriculum_grug_sft(
         generated = curriculum_generation_steps(ids, version=version, generation=generation)
     if set(generated) != set(ids):
         raise ValueError("generated sources must match curriculum_ids")
-    rendered = tuple(
-        _render_step(
+    prepared = tuple(
+        _prepare_step(
             generated[capability_id],
             capability_id=capability_id,
             version=version,
@@ -163,12 +203,11 @@ def curriculum_grug_sft(
         return GrugMoeSFTConfig(
             model=model,
             data=packed_grug_data(
-                rendered_paths={
-                    capability_id: ctx.artifact_path(step) for capability_id, step in zip(ids, rendered, strict=True)
+                prepared_paths={
+                    capability_id: ctx.artifact_path(step) for capability_id, step in zip(ids, prepared, strict=True)
                 },
                 cache_path=prefix_join(output_path, "token-cache"),
                 tokenizer=tokenizer,
-                context_length=context_length,
             ),
             output_path=output_path,
             run_id=f"curriculum-sft-{curriculum_key}-{version}",
@@ -195,19 +234,19 @@ def curriculum_grug_sft(
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_sft_trial,
         build_config=build_train_config,
-        deps=(*rendered, checkpoint),
+        deps=(*prepared, checkpoint),
     )
 
 
-def _render_step(generated: ArtifactStep[Artifact], *, capability_id: str, version: str) -> ArtifactStep[Artifact]:
-    def build_config(ctx: StepContext) -> RenderConfig:
-        return RenderConfig(ctx.artifact_path(generated), ctx.output_path)
+def _prepare_step(generated: ArtifactStep[Artifact], *, capability_id: str, version: str) -> ArtifactStep[Artifact]:
+    def build_config(ctx: StepContext) -> PrepareConfig:
+        return PrepareConfig(ctx.artifact_path(generated), ctx.output_path)
 
     return ArtifactStep(
-        name=user_owned_name(f"documents/curriculum-sft/{capability_id}/rendered-chat"),
+        name=user_owned_name(f"documents/curriculum-sft/{capability_id}/prepared-chat"),
         version=version,
         artifact_type=Artifact,
-        run=render_generated_chat,
+        run=prepare_generated_chat,
         build_config=build_config,
         deps=(generated,),
     )
