@@ -15,7 +15,15 @@ Recipes and instances define the generation structure:
 
 Describe the capability being tested in the recipe's scientific objective. Workflow names such as differential expression can be searchable labels; neither capabilities nor workflow families require another taxonomy level. One recipe can exercise several operations, and several recipes can share the same categories.
 
-Review one substantial instance to establish each recipe, then validate meaningful variations before scaling it. There is no task-count cap or easy/medium/hard quota. A complete task is complete relative to its starting point: a count-matrix-to-result analysis need not repeat alignment. Connected tasks should require their stages to inform one another.
+Review one substantial instance to establish each recipe, then target ten validated, meaningfully varied instances for recipes intended to scale. There is no task-count cap or easy/medium/hard quota. A complete task is complete relative to its starting point: a count-matrix-to-result analysis need not repeat alignment. Connected tasks should require their stages to inform one another.
+
+## Initial instance target
+
+The first instance establishes the scientific contract and verifier. The first ten test whether generation supports the recipe's declared variation axes without redesigning its scientific contract or verifier for each instance. Ten is an initial breadth target, not evidence that a downstream capability evaluation has enough samples.
+
+Use meaningful differences in compatible datasets, sample structures or scientific comparisons. Ten instances need not come from ten independent studies, but report the number of source studies and the variation represented. Cosmetic changes, arbitrary threshold changes or new seeds alone do not demonstrate this breadth. Focused and integrated tasks sharing observations retain shared lineage.
+
+If a recipe cannot reach ten, record the reason: limited eligible inputs, dependence on one tutorial, repeated bespoke repairs or an inherently narrow scientific use case. Useful narrow recipes may remain with a documented exception; prioritize recipes that support repeatable variation for large-scale generation. Beyond ten, expand according to scientific usefulness, available variation, validation reliability and downstream demand. Track eligible candidate inputs separately from released, validated instances.
 
 ## Focused and integrated recipes
 

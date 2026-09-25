@@ -27,6 +27,8 @@ Track operations and scientific contexts as separate descriptive axes, plus form
 
 Recipes specify how to generate and verify concrete task instances. Focused recipes can also contribute stages to integrated recipes, with explicit input/output contracts and end-to-end validation. This composition does not add a categorization level; see [task units and composition](task-authoring.md#task-units).
 
+For recipes intended to scale, establish one instance and then target [ten validated, meaningfully varied instances](task-authoring.md#initial-instance-target). Record shared study lineage and document exceptions for useful narrower recipes. This initial target does not cap later generation.
+
 The pipeline has five prompt roles: **discover → inspect → propose → build → challenge**. An independently controlled validation harness owns acceptance. Prompts, schemas, orchestration and validation rules will be version-controlled. See [authoring](task-authoring.md#prompt-and-run-versioning).
 
 Work should be public: documentation, code, prompts, task inputs, references, graders and validation evidence. Public reference solutions must remain outside solver-visible task inputs. Publication is subject to the source assets' redistribution terms; see [storage](storage.md).
