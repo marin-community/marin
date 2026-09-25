@@ -116,6 +116,8 @@ class SotopiaAgent(BaseInstalledAgent):
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         summary_path = self.logs_dir / SUMMARY_FILENAME
+        if not summary_path.exists():
+            return
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         context.metadata = {
             "sotopia": {
