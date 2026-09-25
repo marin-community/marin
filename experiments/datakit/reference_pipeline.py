@@ -48,7 +48,7 @@ Per source::
 Then:
     global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    verify_fuzzy_dups([<normalized source>], [<minhash per source>], fuzzy_dups)
+    large_clusters → cluster_text([<normalized source>], fuzzy_dups) → verify_fuzzy_clusters
     build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, verified_dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
@@ -127,6 +127,13 @@ from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerificationLimits,
+    ClusterVerifiedFuzzyDupsAttrData,
+    cluster_verify_step,
+)
 from marin.processing.classification.deduplication.fuzzy_dups import (
     FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
@@ -137,14 +144,8 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyVerificationStoreConfig,
-    VerifiedFuzzyDupsAttrData,
-    verify_fuzzy_dups,
-)
+from marin.processing.classification.deduplication.large_clusters import LargeClusterParams, large_clusters_step
+from marin.processing.classification.deduplication.materialize_cluster_text import cluster_text_step
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
@@ -195,7 +196,7 @@ from experiments.datakit.global_exact_dedup import (
     global_exact_deduplicate,
 )
 from experiments.datakit.reports.decontam import decontam_report
-from experiments.datakit.reports.dedup import dedup_report
+from experiments.datakit.reports.dedup import cluster_dedup_report
 from experiments.datakit.reports.domain import assign_report
 from experiments.datakit.reports.normalize import normalize_report
 from experiments.datakit.reports.quality import quality_report
@@ -309,6 +310,27 @@ class MinhashConfig:
     seed: int = 42
 
 
+# Source policy from PR 8405; exact dedup still applies to these sources.
+FUZZY_DEDUP_EXEMPT_SOURCES = (
+    "biocollection/free_text_stream",
+    "biocollection/instruction_stream",
+    "biocorpus",
+    "cp/data_provenance",
+    "davinci-dev/ctx-native",
+    "dna/functional-regions",
+    "massive_function_calling",
+    "nemotron_legal/globalcit",
+    "nemotron_specialized_v1_1/code_concepts",
+    "nemotron_specialized_v1_1/economics",
+    "nemotron_specialized_v1_1/formal_logic",
+    "nemotron_specialized_v1_1/multiple_choice",
+    "nemotron_specialized_v1_2/fact_seeking",
+    "nemotron_specialized_v1_2/generative",
+    "nemotron_specialized_v1_2/multiple_choice",
+    "swe-rebench-contree",
+)
+
+
 @dataclass(frozen=True)
 class StoreConfig:
     """Execution shape for the final map-only clustered store.
@@ -318,12 +340,27 @@ class StoreConfig:
     large RAM and local-disk request out of the shared upstream worker pool.
     """
 
+    fuzzy_exempt_sources: tuple[str, ...] = FUZZY_DEDUP_EXEMPT_SOURCES
     task_count: int | None = 192
     partition_processes: int = 32
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
     )
+
+
+@dataclass(frozen=True)
+class FuzzyClusterConfig:
+    """Production duplicate rule, materialization policy, and worker shapes."""
+
+    plan: LargeClusterParams = field(default_factory=LargeClusterParams)
+    text: ClusterTextParams = field(default_factory=ClusterTextParams)
+    rule: ClusterDedupParams = field(default_factory=ClusterDedupParams)
+    limits: ClusterVerificationLimits = field(default_factory=ClusterVerificationLimits)
+    worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=32, ram="192g", disk="512g"))
+    map_task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="12g", disk="48g"))
+    reduce_task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="26g", disk="48g"))
+    max_workers: int = 64
 
 
 @dataclass(frozen=True)
@@ -338,6 +375,7 @@ class PipelineScale:
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     pool: PoolConfig = field(default_factory=PoolConfig)
     minhash: MinhashConfig = field(default_factory=MinhashConfig)
+    fuzzy: FuzzyClusterConfig = field(default_factory=FuzzyClusterConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
     embed_batch_size: int = 4096
     assign_batch_size: int = 4096
@@ -355,6 +393,13 @@ DEFAULT_SCALE = PipelineScale()
 """Production full-fleet sizing (every ``all_sources()`` entry, K=5000)."""
 
 SMOKE_SCALE = PipelineScale(
+    fuzzy=FuzzyClusterConfig(
+        text=ClusterTextParams(output_shards=64),
+        worker=ResourceConfig(cpu=2, ram="8g", disk="16g"),
+        map_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        reduce_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        max_workers=16,
+    ),
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
     pool=PoolConfig(
         n_workers=16,
@@ -905,34 +950,35 @@ def reference_datakit_steps(
 
     dedup = zephyr_steps.fuzzy_dedup
 
-    verification_params = FuzzyVerificationParams()
-    verification_store_config = FuzzyVerificationStoreConfig(
-        recovery_timeout=1_800,
-        ready_timeout=1_800,
-        lookup_batch_size=128,
+    fuzzy = scale.fuzzy
+    cluster_plan = large_clusters_step(
+        name="datakit/large_fuzzy_clusters",
+        candidates=dedup,
+        params=fuzzy.plan,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        task_resources=fuzzy.map_task,
     )
-    verified_dedup = StepSpec(
-        name="datakit/verify_fuzzy_dups",
-        deps=[*sources.values(), *(stages["minhash"] for stages in per_source.values()), dedup],
-        hash_attrs={
-            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-            "verification": verification_params.model_dump(mode="json"),
-            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
-        },
-        fn=lambda op: verify_fuzzy_dups(
-            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
-            minhash_sources={
-                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
-                for name, stages in per_source.items()
-            },
-            candidates=read_artifact(dedup.output_path, FuzzyDupsAttrData),
-            output_path=op,
-            verification_params=verification_params,
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            store_config=verification_store_config,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-        ),
+    cluster_text = cluster_text_step(
+        name="datakit/fuzzy_cluster_text",
+        normalized_steps=list(sources.values()),
+        candidates=dedup,
+        plan=cluster_plan,
+        params=fuzzy.text,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        map_task_resources=fuzzy.map_task,
+        reduce_task_resources=fuzzy.reduce_task,
+    )
+    verified_dedup = cluster_verify_step(
+        name="datakit/verify_fuzzy_clusters",
+        cluster_text=cluster_text,
+        params=fuzzy.rule,
+        limits=fuzzy.limits,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        map_task_resources=fuzzy.map_task,
+        reduce_task_resources=fuzzy.reduce_task,
     )
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
@@ -945,10 +991,11 @@ def reference_datakit_steps(
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
-            dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+            dedup=read_artifact(verified_dedup.output_path, ClusterVerifiedFuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,
+            fuzzy_exempt_sources=frozenset(scale.store.fuzzy_exempt_sources) & per_source.keys(),
             worker_resources=scale.store.worker,
             max_workers=scale.pool.n_workers,
             task_count=scale.store.task_count,
@@ -970,7 +1017,8 @@ def reference_datakit_steps(
             "cluster_view": cluster.cluster_view,
             "split": SPLIT,
             "task_count": scale.store.task_count,
-            "v": 3,
+            "fuzzy_exempt_sources": sorted(scale.store.fuzzy_exempt_sources),
+            "v": 4,
         },
         fn=_store_fn,
     )
@@ -1019,10 +1067,10 @@ def reference_datakit_steps(
             name="datakit/report/dedup",
             deps=[dedup, verified_dedup],
             hash_attrs={"v": 2},
-            fn=lambda op: dedup_report(
+            fn=lambda op: cluster_dedup_report(
                 op,
                 read_artifact(dedup.output_path, FuzzyDupsAttrData),
-                read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+                read_artifact(verified_dedup.output_path, ClusterVerifiedFuzzyDupsAttrData),
             ),
         ),
         StepSpec(
@@ -1038,7 +1086,7 @@ def reference_datakit_steps(
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
-    all_steps += [dedup, verified_dedup, store, *reports]
+    all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
