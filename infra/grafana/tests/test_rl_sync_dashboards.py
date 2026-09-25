@@ -103,6 +103,7 @@ WORKER_SPANS = {
 }
 PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
 CRITICAL_RANK = "1"
+BARRIER_SPANS = ("policy_entry_barrier", "policy_final_barrier", "policy_metric_allreduce", "policy_entropy_allreduce")
 
 EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
 # The run restarts from a checkpoint and repeats RETRIED_STEP inside the same bucket, with the two
@@ -120,11 +121,12 @@ RETRY_SCALE = 1.1
 # published it as policy_training_step_other, which is absent from TIMING_PARENTS, so the sink
 # stamped an empty parent on it and it arrives looking exactly like a leaf.
 CONTAINER_SPAN = "policy_training_step_other"
-CONTAINED_SPANS = (
-    "policy_forward",
-    "policy_backward",
-    "policy_optimizer_step",
-    "policy_entropy_allreduce",
+CONTAINED_SPANS = ("policy_forward", "policy_backward", "policy_optimizer_step", "policy_entropy_allreduce")
+# The residual the slowest rank publishes, which counts the contained spans twice.
+PUBLISHED_RESIDUAL = (
+    PPO_TRAIN[CRITICAL_RANK]
+    - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
 )
 
 # policy_span_publish is the cost of shipping the PREVIOUS step's rows. It is measured after
@@ -617,20 +619,6 @@ def _our_panels() -> list[dict]:
     return mounted
 
 
-def _section_of(name: str) -> dict[str, str]:
-    """Panel title -> the row it sits under, by grid position rather than by list order."""
-    board = _dashboard(name)
-    rows = [panel for panel in board["panels"] if panel["type"] == "row"]
-    return {
-        panel["title"]: max(
-            (row for row in rows if row["gridPos"]["y"] < panel["gridPos"]["y"]),
-            key=lambda row: row["gridPos"]["y"],
-        )["title"]
-        for panel in board["panels"]
-        if panel["type"] != "row"
-    }
-
-
 def _all_panels(title: str) -> list[dict]:
     return [panel for board in _rl_dashboards().values() for panel in board["panels"] if panel["title"] == title]
 
@@ -834,13 +822,6 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
         {(t, band): seconds * BUCKET_SCALE[t] for t in BUCKET_TIMES for band, seconds in expected.items()}
     )
 
-    # Reading the published residual would put a -1949 s band in a 2000 s stack.
-    published = (
-        PPO_TRAIN[CRITICAL_RANK]
-        - sum(WORKER_SPANS[CRITICAL_RANK].values())
-        - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
-    )
-    assert published < 0, "the fixture no longer reproduces the double-count"
     # A per-phase maximum over the two ranks would sum to 2645 s inside a 2000 s span, because the
     # barrier and the compute come from different ranks.
     per_phase_max = sum(max(WORKER_SPANS["0"][phase], WORKER_SPANS["1"][phase]) for phase in WORKER_SPANS["0"])
@@ -872,24 +853,8 @@ def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
     assert ratio == [(t, pytest.approx(expected)) for t in BUCKET_TIMES]
 
     waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
-    barriers = sum(
-        WORKER_SPANS[CRITICAL_RANK][phase]
-        for phase in (
-            "policy_entry_barrier",
-            "policy_final_barrier",
-            "policy_metric_allreduce",
-            "policy_entropy_allreduce",
-        )
-    )
+    barriers = sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in BARRIER_SPANS)
     assert waiting == [(t, pytest.approx(barriers / PPO_TRAIN[CRITICAL_RANK])) for t in BUCKET_TIMES]
-
-
-BARRIER_SPANS = (
-    "policy_entry_barrier",
-    "policy_final_barrier",
-    "policy_metric_allreduce",
-    "policy_entropy_allreduce",
-)
 
 
 def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(store) -> None:
@@ -1087,15 +1052,10 @@ def test_the_residual_panel_reports_both_trees_signed(store) -> None:
 
     assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
 
-    published = (
-        PPO_TRAIN[CRITICAL_RANK]
-        - sum(WORKER_SPANS[CRITICAL_RANK].values())
-        - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
-    )
-    assert published < 0, "the fixture no longer reproduces the double-count"
+    assert PUBLISHED_RESIDUAL < 0, "the fixture no longer reproduces the double-count"
     # Signed, and read from r*. Clamping it at zero would retire the one series that can report a
     # child being counted inside its parent.
-    assert worker == [(t, pytest.approx(published * BUCKET_SCALE[t])) for t in BUCKET_TIMES]
+    assert worker == [(t, pytest.approx(PUBLISHED_RESIDUAL * BUCKET_SCALE[t])) for t in BUCKET_TIMES]
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
