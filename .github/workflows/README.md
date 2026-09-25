@@ -55,15 +55,17 @@ base revision, a matching completion marker is required.
 
 Other GitHub agent entry points use the `github-automation` Loom profile.
 
-Every Loom launcher decides who may trigger it with the
-`require-write-access` action rather than the event payload's
-`author_association`. The payload hides private organization membership, so a
-regular member with private visibility appears as `CONTRIBUTOR` and would be
-skipped. The action asks GitHub for the author's effective repository
-permission with the workflow token and allows `write`, `maintain`, or `admin`;
-any API failure denies the launch. The `marin-ops-agent[bot]` login stays on an
-explicit allowlist for pull-request launches because bot accounts do not
-resolve through that endpoint.
+Loom launchers that respond to a user-authored issue, comment, review, or pull
+request decide who may trigger them with the `check-write-access` action
+rather than the event payload's `author_association`. The payload hides
+private organization membership, so a regular member with private visibility
+appears as `CONTRIBUTOR` and would be skipped. The action asks GitHub for the
+author's effective repository permission with the workflow token and allows
+`write`, `maintain`, or `admin`; a lookup failure logs the API error and denies
+the launch. Bot accounts do not resolve through that endpoint, so the
+pull-request launchers pass `marin-ops-agent[bot]` through the action's
+`allowed-bots` input. Scheduled and label-driven launchers such as prose
+cleanup do not use the check.
 
 Canary failure workflows launch an independent triage session and continue to
 send the immediate Slack fallback notification. The Iris smoke test still

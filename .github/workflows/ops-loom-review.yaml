@@ -29,19 +29,18 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/launch-loom-run
-            .github/actions/require-write-access
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
 
       - name: Check author write access
         id: author
-        uses: ./.github/actions/require-write-access
+        uses: ./.github/actions/check-write-access
         with:
           login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: marin-ops-agent[bot]
 
       - name: Launch Loom review
-        if: >-
-          steps.author.outputs.allowed == 'true' ||
-          github.event.pull_request.user.login == 'marin-ops-agent[bot]'
+        if: steps.author.outputs.allowed == 'true'
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}

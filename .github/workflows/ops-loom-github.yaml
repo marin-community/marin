@@ -32,11 +32,11 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/launch-loom-run
-            .github/actions/require-write-access
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
       - name: Check author write access
         id: author
-        uses: ./.github/actions/require-write-access
+        uses: ./.github/actions/check-write-access
         with:
           login: ${{ github.event.comment.user.login || github.event.review.user.login || github.event.issue.user.login }}
       - name: Launch mentioned task
@@ -73,11 +73,11 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/launch-loom-run
-            .github/actions/require-write-access
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
       - name: Check author write access
         id: author
-        uses: ./.github/actions/require-write-access
+        uses: ./.github/actions/check-write-access
         with:
           login: ${{ github.event.issue.user.login }}
       - name: Launch issue triage
@@ -112,11 +112,11 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/launch-loom-run
-            .github/actions/require-write-access
+            .github/actions/check-write-access
           sparse-checkout-cone-mode: false
       - name: Check author write access
         id: author
-        uses: ./.github/actions/require-write-access
+        uses: ./.github/actions/check-write-access
         with:
           login: ${{ github.event.review.user.login }}
       - name: Launch requested autofix
