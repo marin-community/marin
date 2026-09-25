@@ -6,7 +6,7 @@
 import math
 
 import pytest
-from marin.evaluation.eval_measurements import measurement_from_record
+from marin.evaluation.eval_measurements import measurement_from_record, task_item_count
 from marin.evaluation.eval_stats import (
     AggregationProtocol,
     CohortMode,
@@ -40,6 +40,10 @@ from marin.evaluation.records import (
     RunStatus,
     TaskCoverage,
 )
+
+
+def test_task_item_count_rejects_fractional_counts():
+    assert task_item_count({"total_examples": 3.5}) is None
 
 
 def _measurement(
