@@ -11,15 +11,40 @@ Install the backend dependencies you need:
 ```sh
 uv pip install 'marin-shellbox[shellsim]'
 uv pip install 'marin-shellbox[qemu]'
+uv pip install --prerelease allow 'marin-shellbox[daytona]'
+uv pip install --prerelease allow 'marin-shellbox[iris]'
+uv pip install 'marin-shellbox[gvisor]'
 ```
 
 The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.17 or newer within the 0.1 series. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona and Iris accept registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines and their Harbor adapters live under `shellbox.backends.qemu`, `shellbox.backends.shellsim`, and `shellbox.backends.docker`. The Docker backend has no Harbor adapter yet.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+
+| Backend | Image source | Network policy | Host requirement |
+| --- | --- | --- | --- |
+| Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
+| Daytona | Registry image reference | allow or deny | Daytona credentials and service access |
+| Iris | Registry image reference | allow only | Iris controller and workers with gVisor profile support |
+
+The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its existing `CONTAINER_PROFILE_GVISOR` job profile and `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. The Iris job network is not configurable per job, so `NetworkPolicy.DENY` fails at creation. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them.
+
+```python
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineSpec
+
+machine = await DaytonaMachineFactory().create(MachineSpec(source=RegistryImage("ubuntu:24.04")))
+try:
+    result = await machine.run(Command(("/bin/sh", "-c", "printf hello")))
+finally:
+    await machine.close()
+```
+
+Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="marin")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
 
 ```python
 from shellbox.machine import Command, MachineSpec, QemuBundle

@@ -111,11 +111,13 @@ class DockerMachineFactory:
         image_cache: Path | None = None,
         authfile: Path | None = None,
         policy: Path | None = None,
+        runtime: str | None = None,
     ):
         self.skopeo = skopeo
         self.image_cache = image_cache
         self.authfile = authfile
         self.policy = policy
+        self.runtime = runtime
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
         if isinstance(spec.source, (RegistryImage, DockerfileSource)):
@@ -144,6 +146,8 @@ class DockerMachineFactory:
         ]
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
+        if self.runtime is not None:
+            args.extend(("--runtime", self.runtime))
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
         args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
