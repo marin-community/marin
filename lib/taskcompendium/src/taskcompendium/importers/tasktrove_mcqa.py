@@ -68,5 +68,4 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         source=archive.source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
-        permitted_submission_conventions=("plain", "json"),
     )
