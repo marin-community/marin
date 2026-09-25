@@ -93,7 +93,6 @@ def curriculum_generation_steps(
     generation: CurriculumGenerationSpec,
     catalog: ArtifactStep[TaskCurriculumCatalogArtifact] = TASK_CURRICULUM,
 ) -> dict[str, ArtifactStep[Artifact]]:
-    """Bind one GLM generation artifact per capability."""
     return {
         capability_id: generate_curriculum_sft(
             capability_id,
