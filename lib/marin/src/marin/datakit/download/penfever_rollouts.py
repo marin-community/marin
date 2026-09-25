@@ -1264,7 +1264,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
             "terminus_version": (
-                "2026.09.17.native-json" if dataset.cohort_name == "qwen35-122b-131k-opencode" else "2026.09.24"
+                "2026.09.17.native-json" if dataset.cohort_name == "qwen35-122b-131k-opencode" else "2026.09.25"
             ),
             **(
                 {"think_tokens": THINK_TOKENS_BY_COHORT[dataset.cohort_name]}

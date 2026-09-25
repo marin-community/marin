@@ -81,6 +81,26 @@ def test_agenttrove_merges_completion_and_handoff_prompts() -> None:
     ]
 
 
+def test_agenttrove_unwraps_command_json_inside_think_tokens() -> None:
+    row = {
+        "conversations": [
+            {"role": "user", "content": "Inspect the repository."},
+            {
+                "role": "assistant",
+                "content": '<think>{"analysis":"Inspect files.","commands":[{"keystrokes":"ls\\n"}]}</think>',
+            },
+            {"role": "user", "content": "New Terminal Output:\nREADME.md"},
+            {"role": "assistant", "content": '<think>{"commands":[],"task_complete":true}</think>'},
+        ]
+    }
+    [document] = agenttrove_row_to_chat_doc(row)
+    normalized = _normalize_chat_record(document, "messages", "id")
+    assistant = [message for message in normalized["messages"] if message["role"] == "assistant"]
+    assert [message["channel"] for message in assistant] == ["final", "final"]
+    assert json.loads(assistant[0]["content"][0]["text"])["commands"] == [{"keystrokes": "ls\n"}]
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is False
+
+
 def test_agenttrove_merges_terminal_output_with_user_followup() -> None:
     row = {
         "conversations": [

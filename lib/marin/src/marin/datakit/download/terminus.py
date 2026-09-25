@@ -20,6 +20,16 @@ def _json_command_payload_and_prefix(content: str, think_tokens: ThinkTokens | N
     decoder = json.JSONDecoder()
     search_start = 0
     if think_tokens is not None and content.lstrip().startswith(think_tokens.start):
+        stripped = content.strip()
+        if stripped.endswith(think_tokens.end):
+            wrapped = stripped[len(think_tokens.start) : -len(think_tokens.end)].strip()
+            try:
+                payload = decoder.decode(wrapped)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(payload, dict) and isinstance(payload.get("commands"), list):
+                    return payload, ""
         end = content.find(think_tokens.end)
         if end != -1:
             search_start = end + len(think_tokens.end)
@@ -40,8 +50,9 @@ def terminus_protocol_messages(conversations: list[dict], think_tokens: ThinkTok
     """Extract Terminus commands and optional leading reasoning from a conversation.
 
     The source must supply its reasoning delimiters, or None if it
-    has none. Only a nonempty leading span is retained; incidental prose before
-    the first command JSON is discarded.
+    has none. A span containing only command JSON is treated as the response.
+    Otherwise, only a nonempty leading reasoning span is retained; incidental
+    prose before the first command JSON is discarded.
     """
     messages: list[dict] = []
     pending_observation = False
