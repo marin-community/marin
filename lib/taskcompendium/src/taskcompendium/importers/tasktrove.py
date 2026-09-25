@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from taskcompendium.models import Source
 
 IMPORTER_REVISION = "taskcompendium-tasktrove-v0.1"
+TASK_MANIFEST = "task.toml"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
 
@@ -65,7 +66,7 @@ def read_archive(
             assert stream is not None
             files[name] = stream.read()
     try:
-        metadata = tomllib.loads(files["task.toml"].decode())["metadata"]
+        metadata = tomllib.loads(files[TASK_MANIFEST].decode())["metadata"]
         if not isinstance(metadata, dict):
             raise ValueError("Task archive metadata is not a table")
         if metadata.get("tasktrove_source") != tasktrove_source or metadata.get("tasktrove_path") != tasktrove_path:

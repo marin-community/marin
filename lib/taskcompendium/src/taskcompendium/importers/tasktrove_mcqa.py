@@ -9,7 +9,7 @@ import tomllib
 
 from tasktrove_verify.spec import McqSpec, parse_spec
 
-from taskcompendium.importers.tasktrove import TaskArchive
+from taskcompendium.importers.tasktrove import TASK_MANIFEST, TaskArchive
 from taskcompendium.models import AnswerFormat, AnswerKind, TaskRequirements, TaskSpec
 from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa
 
@@ -38,7 +38,7 @@ def _clean_instructions(instructions: str) -> str:
 def import_task(archive: TaskArchive) -> TaskSpec:
     """Import a cleaned Nemotron MCQA archive with its original verifier contract."""
     try:
-        metadata = tomllib.loads(archive.files["task.toml"].decode())["metadata"]
+        metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())["metadata"]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:
             raise ValueError("Unsupported TaskTrove MCQA source")
         contract = parse_spec(archive.files["tests/verifier.toml"].decode())
