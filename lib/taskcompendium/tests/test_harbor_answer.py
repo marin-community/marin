@@ -13,7 +13,13 @@ import pytest
 from harbor.models.task.task import Task
 
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
+from taskcompendium.lowering import (
+    HarborTaskBinding,
+    SelectionPolicy,
+    compatible_lowerings,
+    lower_to_harbor,
+    select_lowerings,
+)
 from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
 from taskcompendium.rendering import Rendering
 
@@ -140,6 +146,39 @@ def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specificatio
         )
 
     assert not destination.exists()
+
+
+def test_selection_exports_only_compatible_answer_format(tmp_path, specification):
+    specification = dataclasses.replace(specification, permitted_answer_formats=(AnswerFormat.PLAIN,))
+    renderings = (Rendering("json", AnswerFormat.JSON), Rendering("plain", AnswerFormat.PLAIN))
+    candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
+
+    selected = select_lowerings(candidates, SelectionPolicy.FIRST)
+    task = lower_to_harbor(specification, selected[0].rendering, selected[0].binding, tmp_path / "task")
+
+    assert len(candidates) == 1
+    assert json.loads((task / "rendering.json").read_text())["answer_format"] == "plain"
+    assert "Give your answer as plain text." in (task / "instruction.md").read_text()
+    assert (
+        compatible_lowerings(
+            dataclasses.replace(specification, requirements=TaskRequirements(capabilities=("filesystem",))),
+            renderings,
+            (HarborTaskBinding(),),
+        )
+        == ()
+    )
+
+
+def test_selection_samples_reproducibly_from_compatible_renderings(specification):
+    renderings = (Rendering("plain", AnswerFormat.PLAIN), Rendering("json", AnswerFormat.JSON))
+    candidates = compatible_lowerings(specification, renderings, (HarborTaskBinding(),))
+
+    assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
+    assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
+    assert select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) == select_lowerings(
+        candidates, SelectionPolicy.SAMPLE, rng_key=42
+    )
+    assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
 
 
 async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):

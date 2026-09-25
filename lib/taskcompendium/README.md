@@ -1,6 +1,6 @@
 # TaskCompendium direct-chat slice
 
-`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private exact-answer verifier. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. Lowering rejects renderings outside the specification's allowlist. `HarborTaskBinding` selects the direct-chat environment with no tools and must satisfy the task requirements. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
+`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, and a private exact-answer verifier. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. `compatible_lowerings` enumerates allowed rendering and environment pairs. `select_lowerings` takes all pairs, the first pair, or one reproducible keyed sample. The library order determines the first pair and the order used for sampling. This slice provides only a direct-chat binding with no tools. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
 The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
 
@@ -9,7 +9,7 @@ For an authenticated model run, pass the environment variable name as `HarborLau
 ```python
 from pathlib import Path
 
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
+from taskcompendium.lowering import HarborTaskBinding, SelectionPolicy, compatible_lowerings, lower_to_harbor, select_lowerings
 from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
 from taskcompendium.rendering import Rendering
 
@@ -21,10 +21,16 @@ spec = TaskSpec(
     requirements=TaskRequirements(),
     permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
 )
-binding = HarborTaskBinding()
-lower_to_harbor(spec, Rendering("plain", AnswerFormat.PLAIN), binding, Path("/tmp/arithmetic-plain"))
-lower_to_harbor(spec, Rendering("json", AnswerFormat.JSON), binding, Path("/tmp/arithmetic-json"))
+renderings = (Rendering("plain", AnswerFormat.PLAIN), Rendering("json", AnswerFormat.JSON))
+candidates = compatible_lowerings(spec, renderings, (HarborTaskBinding(),))
+for candidate in select_lowerings(candidates, SelectionPolicy.ALL):
+    lower_to_harbor(spec, candidate.rendering, candidate.binding, Path(f"/tmp/arithmetic-{candidate.rendering.id}"))
+
+# A training caller can choose one variant reproducibly instead:
+sampled = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)
 ```
+
+The caller records the selection policy, RNG key, and library revision in its dataset or rollout manifest. Each exported Harbor package records the chosen rendering and binding. An arbitrary source prompt does not become format-agnostic automatically: the importer must allow only rewrites that preserve its instructions.
 
 Run the Python-only package tests from the repository root:
 
