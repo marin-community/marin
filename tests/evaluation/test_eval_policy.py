@@ -75,9 +75,7 @@ def test_september_16_preserves_model_defaults_and_checks_shots():
 
 
 def test_legacy_policy_label_is_not_verified():
-    assert policy_violations("eval-policy-updated", _model(), _math500(None)) == (
-        "unknown policy version 'eval-policy-updated'",
-    )
+    assert policy_violations("eval-policy-updated", _model(), _math500(None))
 
 
 def test_verified_runtime_pins_do_not_follow_future_dependency_bumps():

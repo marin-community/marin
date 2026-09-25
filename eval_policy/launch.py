@@ -10,9 +10,11 @@ from tempfile import TemporaryDirectory
 
 import yaml
 from marin.evaluation.eval_policy import (
+    DEFAULT_SEED,
     FIXED_MAX_TOKENS,
     NUPA_SEED,
     POLICIES,
+    SEPTEMBER_16_IFBENCH_MAX_TOKENS,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     ThinkingMode,
@@ -49,11 +51,11 @@ def _evalchemy_config(version: str, name: str, artifact_dir: Path | None, output
     if name == "aime24" and version == SEPTEMBER_24_VERSION:
         config.pop("seed", None)
     else:
-        config["seed"] = NUPA_SEED if name == "nupa" else 42
+        config["seed"] = NUPA_SEED if name == "nupa" else DEFAULT_SEED
     if name in FIXED_MAX_TOKENS:
         config["max_tokens"] = FIXED_MAX_TOKENS[name]
     if version == SEPTEMBER_16_VERSION and name == "ifbench":
-        config["max_tokens"] = 1024
+        config["max_tokens"] = SEPTEMBER_16_IFBENCH_MAX_TOKENS
     output.write_text(yaml.safe_dump(config, sort_keys=False))
     return output
 

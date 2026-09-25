@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, cohortWarning, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -74,15 +74,9 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
-const comparabilityWarning = computed(() => {
-  if (!meta.value) return null
-  const selected = cohort.value || meta.value.default_cohort
-  if (selected === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
-  if (!meta.value.verified_cohorts.includes(selected)) {
-    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
-  }
-  return null
-})
+const comparabilityWarning = computed(() =>
+  meta.value ? cohortWarning(cohort.value || meta.value.default_cohort, meta.value) : null,
+)
 
 onMounted(() => {
   refresh()

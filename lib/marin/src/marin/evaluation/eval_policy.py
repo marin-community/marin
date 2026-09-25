@@ -22,6 +22,8 @@ SEPTEMBER_24_VERSION = "eval-policy-2026-09-24-verified"
 EVALCHEMY_COMMIT = "64033bff876764f5e4123e76bd7e44c857b5f053"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
 NUPA_SEED = 20222943
+DEFAULT_SEED = 42
+SEPTEMBER_16_IFBENCH_MAX_TOKENS = 1024
 
 
 def source_config_digest(path: Path) -> str:
@@ -199,7 +201,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
                 problems.append("capped Evalchemy runs are not canonical")
             if model.config is not None:
                 fixed_limit = (
-                    1024
+                    SEPTEMBER_16_IFBENCH_MAX_TOKENS
                     if policy is SEPTEMBER_16 and evaluation.name == "ifbench"
                     else FIXED_MAX_TOKENS.get(evaluation.name)
                 )
@@ -216,7 +218,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
             if evaluation.name == "mrcr" and config.max_length not in {32768, 65536, 73728}:
                 problems.append("MRCR max_length must match a published context bin")
             if evaluation.name != "aime24":
-                expected_seed = NUPA_SEED if policy is SEPTEMBER_24 and evaluation.name == "nupa" else 42
+                expected_seed = NUPA_SEED if policy is SEPTEMBER_24 and evaluation.name == "nupa" else DEFAULT_SEED
                 if config.seed != expected_seed:
                     problems.append(f"seed must be {expected_seed}")
             if policy is SEPTEMBER_24:
@@ -228,7 +230,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
                         problems.append(f"explicit enable_thinking={required} required")
                 if evaluation.name == "aime24" and config.seed is not None:
                     problems.append("AIME24 outer seed must be unset")
-            elif evaluation.name == "aime24" and config.seed not in range(42, 52):
+            elif evaluation.name == "aime24" and config.seed not in range(DEFAULT_SEED, DEFAULT_SEED + 10):
                 problems.append("September 16 AIME24 seed must be in 42..51")
     elif evaluation.harbor is None:
         problems.append("missing Harbor configuration")
