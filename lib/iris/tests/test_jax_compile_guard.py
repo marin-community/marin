@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from threading import Condition
 
 import pytest
-from iris.runtime.jax_compile_guard import check_distributed_compile_fingerprint
+from iris.jax.compile_guard import check_distributed_compile_fingerprint
 
 
 @dataclass
