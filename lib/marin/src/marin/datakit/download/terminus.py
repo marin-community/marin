@@ -13,17 +13,17 @@ from marin.datakit.download.rollout_transforms import (
     normalize_reasoning_tokens,
 )
 
-SOURCE_THINK_START = "<think>"
-SOURCE_THINK_END = "</think>"
+MODEL_THINK_START = "<think>"
+MODEL_THINK_END = "</think>"
 
 
 def _json_command_payload_and_prefix(content: str) -> tuple[dict, str] | None:
     decoder = json.JSONDecoder()
     search_start = 0
-    if content.lstrip().lower().startswith(SOURCE_THINK_START):
-        end = content.lower().find(SOURCE_THINK_END)
+    if content.lstrip().lower().startswith(MODEL_THINK_START):
+        end = content.lower().find(MODEL_THINK_END)
         if end != -1:
-            search_start = end + len(SOURCE_THINK_END)
+            search_start = end + len(MODEL_THINK_END)
     elif content.lstrip().startswith(REASONING_START):
         end = content.find(REASONING_END)
         if end != -1:
@@ -42,7 +42,7 @@ def _json_command_payload_and_prefix(content: str) -> tuple[dict, str] | None:
 
 
 def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
-    """Retain Terminus JSON responses and terminal observations as chat turns."""
+    """Retain optional model reasoning, Terminus JSON responses, and terminal observations."""
     messages: list[dict] = []
     pending_observation = False
     for message in conversations:
@@ -65,7 +65,7 @@ def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
             return None
         payload, prefix = parsed
         response = {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)}
-        if prefix.lower().startswith((SOURCE_THINK_START, REASONING_START)):
+        if prefix.lower().startswith((MODEL_THINK_START, REASONING_START)):
             try:
                 normalized_prefix = normalize_reasoning_tokens(prefix)
             except ReasoningFormatError:

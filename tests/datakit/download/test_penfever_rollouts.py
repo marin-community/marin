@@ -32,7 +32,7 @@ def test_opencode_filters_rows_without_recorded_initial_prompt(prompts):
     assert transform(row) == []
 
 
-@pytest.mark.parametrize("cohort", ["glm52-terminus2", "minimax-m27-131k", "qwen35-122b-32k"])
+@pytest.mark.parametrize("cohort", ["minimax-m27-131k", "qwen35-122b-32k"])
 def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
     transform = row_to_chat_doc(_dataset(cohort))
     [document] = transform(
@@ -113,6 +113,23 @@ def test_terminal_protocol_quarantines_malformed_thinking(prefix):
         )
         == []
     )
+
+
+def test_terminal_protocol_without_thinking_keeps_thinking_disabled():
+    [document] = row_to_chat_doc(_dataset("glm52-terminus2"))(
+        {
+            "conversations": [
+                {"role": "user", "content": "Write the answer file."},
+                {
+                    "role": "assistant",
+                    "content": '{"analysis":"The answer is ready.","commands":[],"task_complete":true}',
+                },
+            ]
+        }
+    )
+    normalized = _normalize_chat_record(document, "messages", "id")
+    assert [message["channel"] for message in normalized["messages"] if message["role"] == "assistant"] == ["final"]
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is False
 
 
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
