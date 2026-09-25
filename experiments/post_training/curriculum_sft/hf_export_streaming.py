@@ -28,7 +28,7 @@ from levanter.compat.hf_checkpoints import (
 from levanter.tensorstore_serialization import ARRAY_DRIVER, KVSTORE_DRIVER, _create_ocdbt_spec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, grugmoe_hf_tensor_specs
 
 logger = logging.getLogger(__name__)
 
@@ -56,40 +56,6 @@ class _ShardFiles:
 
 
 def _weights(config: GrugModelConfig, arrays: dict[str, CheckpointArray]) -> list[_Weight]:
-    root = (
-        ("model.embed_tokens.weight", "token_embed", False),
-        ("model.embed_norm.weight", "embed_norm/weight", False),
-        ("model.embed_gated_norm.down_proj.weight", "embed_gated_norm/w_down", True),
-        ("model.embed_gated_norm.up_proj.weight", "embed_gated_norm/w_up", True),
-        ("model.norm.weight", "final_norm/weight", False),
-        ("model.final_gated_norm.down_proj.weight", "final_gated_norm/w_down", True),
-        ("model.final_gated_norm.up_proj.weight", "final_gated_norm/w_up", True),
-        ("lm_head.weight", "output_proj", True),
-    )
-    block = (
-        ("input_layernorm.weight", "rms_attn/weight", False),
-        ("attn_gated_norm.down_proj.weight", "attn_gated_norm/w_down", True),
-        ("attn_gated_norm.up_proj.weight", "attn_gated_norm/w_up", True),
-        ("self_attn.q_proj.weight", "attn/w_q", True),
-        ("self_attn.k_proj.weight", "attn/w_k", True),
-        ("self_attn.v_proj.weight", "attn/w_v", True),
-        ("self_attn.o_proj.weight", "attn/w_o", True),
-        ("self_attn.attn_gate.weight", "attn/attn_gate", True),
-        ("post_attention_layernorm.weight", "rms_mlp/weight", False),
-        ("mlp_gated_norm.down_proj.weight", "mlp_gated_norm/w_down", True),
-        ("mlp_gated_norm.up_proj.weight", "mlp_gated_norm/w_up", True),
-        ("mlp.router.weight", "mlp/router", True),
-        ("mlp.router.bias", "mlp/router_bias", False),
-        ("mlp.experts.gate_proj.weight", "mlp/expert_mlp/w_gate", True),
-        ("mlp.experts.up_proj.weight", "mlp/expert_mlp/w_up", True),
-        ("mlp.experts.down_proj.weight", "mlp/expert_mlp/w_down", True),
-    )
-    shared = (
-        ("shared_expert.gate_proj.weight", "shared/w_gate", True),
-        ("shared_expert.up_proj.weight", "shared/w_up", True),
-        ("shared_expert.down_proj.weight", "shared/w_down", True),
-    )
-
     def weight(name: str, source: str, layer: int | None, transpose: bool, router_bias: bool = False) -> _Weight:
         entry = arrays[source]
         shape = entry.shape if layer is None else entry.shape[1:]
@@ -99,12 +65,16 @@ def _weights(config: GrugModelConfig, arrays: dict[str, CheckpointArray]) -> lis
             shape = (*shape[:-2], shape[-1], shape[-2])
         return _Weight(name, source, shape, layer, transpose, router_bias)
 
-    weights = [weight(name, f"params/{path}", None, transpose) for name, path, transpose in root]
-    for layer in range(config.num_layers):
-        for name, path, transpose in (*block, *(shared if config.shared_expert_intermediate_dim > 0 else ())):
-            router_bias = name == "mlp.router.bias"
-            source = "pending_qb_betas" if router_bias else f"params/stacked_blocks/stacked/{path}"
-            weights.append(weight(f"model.layers.{layer}.{name}", source, layer, transpose, router_bias))
+    weights = []
+    for spec in grugmoe_hf_tensor_specs(config.num_layers, has_shared_expert=config.shared_expert_intermediate_dim > 0):
+        router_bias = spec.path == "mlp.router_bias"
+        if router_bias:
+            source = "pending_qb_betas"
+        elif spec.layer is None:
+            source = f"params/{spec.path.replace('.', '/')}"
+        else:
+            source = f"params/stacked_blocks/stacked/{spec.path.replace('.', '/')}"
+        weights.append(weight(spec.name, source, spec.layer, spec.transpose, router_bias))
     return weights
 
 
