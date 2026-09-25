@@ -7,6 +7,7 @@ Headline numbers and histograms come from the artifact's aggregated counters.
 The per-source table comes from bounded attribute samples.
 """
 
+from marin.processing.classification.deduplication.cluster_verify import ClusterVerifiedFuzzyDupsAttrData
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     PERCENT_HISTOGRAM_METRICS,
@@ -188,4 +189,35 @@ def dedup_report(
         ),
     }
     page = render_template("dedup.html", title="Datakit dedup", data=data)
+    return StageReport(html_path=write_report(output_path, page), stats=stats)
+
+
+def cluster_dedup_report(
+    output_path: str,
+    candidates: FuzzyDupsAttrData,
+    verified: ClusterVerifiedFuzzyDupsAttrData,
+) -> StageReport:
+    """Report measured cluster-verification counts and its recorded rule."""
+    prefix = "fuzzy/cluster_verify"
+    members = int(verified.counters[f"{prefix}/documents"])
+    removed = int(verified.counters[f"{prefix}/markers"])
+    stats = {
+        "cluster_members": members,
+        "verified_duplicates": removed,
+        "retained_members": members - removed,
+        "n_sources": len(verified.sources),
+        "mid_cluster_flushes": int(verified.counters.get(f"{prefix}/mid_cluster_flushes", 0)),
+        "truncated_documents": int(verified.counters.get(f"{prefix}/truncated_documents", 0)),
+    }
+    data = {
+        "params": candidates.params.model_dump(mode="json"),
+        "rule": verified.rule.model_dump(mode="json"),
+        "limits": verified.limits.model_dump(mode="json"),
+        "stats": stats,
+        "sources": [
+            {"source": key, "removed": int(verified.counters.get(f"{prefix}/source/{entry.source_tag}/markers", 0))}
+            for key, entry in sorted(verified.sources.items())
+        ],
+    }
+    page = render_template("cluster_dedup.html", title="Datakit cluster verification", data=data)
     return StageReport(html_path=write_report(output_path, page), stats=stats)

@@ -232,3 +232,31 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+@pytest.mark.parametrize("parameter", ["plan", "text", "rule", "limits"])
+def test_cluster_parameters_rekey_verification_and_store(parameter):
+    base = _steps_by_name(_build())
+    fuzzy = SMOKE_SCALE.fuzzy
+    updates = {
+        "plan": {"stride": 128},
+        "text": {"split_subdivisions": 8},
+        "rule": {"minimum_containment": 0.8},
+        "limits": {"maximum_document_chars": 1024},
+    }
+    changed_params = getattr(fuzzy, parameter).model_copy(update=updates[parameter])
+    changed_scale = dataclasses.replace(SMOKE_SCALE, fuzzy=dataclasses.replace(fuzzy, **{parameter: changed_params}))
+    changed = _steps_by_name(_build(scale=changed_scale))
+
+    assert changed["datakit/dedup"].hash_id == base["datakit/dedup"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id != base["datakit/verify_fuzzy_clusters"].hash_id
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+
+
+def test_fuzzy_source_exemptions_rekey_only_the_store():
+    base = _steps_by_name(_build())
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("a",))
+    changed = _steps_by_name(_build(scale=dataclasses.replace(SMOKE_SCALE, store=store)))
+
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id == base["datakit/verify_fuzzy_clusters"].hash_id
