@@ -191,18 +191,21 @@ def scale_with_grug_muonh(
             muon_state, second_moment = state
             muon_updates, muon_state = muon_transform.update(updates, muon_state, params)
 
-            def neuron_normalize(u, v):
-                if v is None:
-                    return u, v
-                v = neuron_norm_beta2 * v + (1 - neuron_norm_beta2) * jnp.mean(
-                    jnp.square(u.astype(jnp.float32)), axis=-2
-                )
-                return (u / (jnp.sqrt(v)[..., None, :] + 1e-10)).astype(u.dtype), v
+            def second_moment_update(u, v):
+                if u is None or v is None:
+                    return v
+                mean_sq = jnp.mean(jnp.square(u.astype(jnp.float32)), axis=-2)
+                return neuron_norm_beta2 * v + (1 - neuron_norm_beta2) * mean_sq
 
-            pairs = jax.tree.map(neuron_normalize, muon_updates, second_moment, is_leaf=lambda x: x is None)
-            is_pair = lambda x: isinstance(x, tuple) and len(x) == 2  # noqa: E731
-            muon_updates = jax.tree.map(lambda t: t[0], pairs, is_leaf=is_pair)
-            next_state = (muon_state, jax.tree.map(lambda t: t[1], pairs, is_leaf=is_pair))
+            def normalize(u, v):
+                if u is None or v is None:
+                    return u
+                return (u / (jnp.sqrt(v)[..., None, :] + 1e-10)).astype(u.dtype)
+
+            none_leaf = lambda x: x is None  # noqa: E731
+            second_moment = jax.tree.map(second_moment_update, muon_updates, second_moment, is_leaf=none_leaf)
+            muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
+            next_state = (muon_state, second_moment)
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
         return muonh_updates, next_state
 
