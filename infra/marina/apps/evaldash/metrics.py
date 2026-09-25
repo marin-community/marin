@@ -487,7 +487,7 @@ def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricP
 
 
 def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> list[dict]:
-    """Every run for the model, newest first, each with its headline score when it scored."""
+    """Every run for the model, newest first, with grades only for admitted runs."""
     runs = []
     for record in records:
         violations = record_policy_violations(record)

@@ -207,13 +207,19 @@ class MetricProtocolResponse(BaseModel):
     kind: str
 
 
+class PolicyRejectionResponse(BaseModel):
+    run_id: str
+    model: str
+    reasons: list[str]
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
     protocols: dict[str, MetricProtocolResponse]
     panel: list[str]
     families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
-    policy_rejections: list[dict[str, object]]
+    policy_rejections: list[PolicyRejectionResponse]
     request: PanelRequestResponse
 
 
@@ -1079,9 +1085,7 @@ def _status_rollup(statuses: set[str]) -> str:
 
 
 def _run_headline(record: EvalRunRecord) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
-    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
-    metrics)."""
+    """Return an admitted run's primary grade, or None when it scored nothing or violates policy."""
     if record_policy_violations(record):
         return None
     return record_headline(record)

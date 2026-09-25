@@ -5,40 +5,47 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 
-from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
 
 SEPTEMBER_16_VERSION = "eval-policy-2026-09-16-verified"
 SEPTEMBER_24_VERSION = "eval-policy-2026-09-24-verified"
 EVALCHEMY_COMMIT = "64033bff876764f5e4123e76bd7e44c857b5f053"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+NUPA_SEED = 20222943
 
 
 def source_config_digest(path: Path) -> str:
     """Identify a policy YAML by its parsed content, independent of comments and key order."""
     payload = json.dumps(yaml.safe_load(path.read_text()), sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
-FIXED_MAX_TOKENS = {
-    "mmlu-pro": 32768,
-    "gpqa-diamond": 32768,
-    "cruxeval": 2048,
-    "financebench": 4096,
-    "mrcr": 4096,
-    "nupa": 256,
-    "mmlu": 256,
-    "piqa": 256,
-    "winogrande": 256,
-    "openbookqa": 256,
-    "boolq": 256,
-    "truthfulqa": 256,
-}
+
+
+FIXED_MAX_TOKENS: Mapping[str, int] = MappingProxyType(
+    {
+        "mmlu-pro": 32768,
+        "gpqa-diamond": 32768,
+        "cruxeval": 2048,
+        "financebench": 4096,
+        "mrcr": 4096,
+        "nupa": 256,
+        "mmlu": 256,
+        "piqa": 256,
+        "winogrande": 256,
+        "openbookqa": 256,
+        "boolq": 256,
+        "truthfulqa": 256,
+    }
+)
 COMPLETION_TASKS = frozenset({"mmlu", "piqa", "winogrande", "openbookqa", "boolq", "truthfulqa"})
 UNSAFE_CODE_TASKS = frozenset({"humanevalplus", "mbppplus"})
 
@@ -66,66 +73,72 @@ def _harbor() -> PolicyEval:
     return PolicyEval(None, None, "harbor")
 
 
-SEPTEMBER_16: dict[str, PolicyEval] = {
-    "math500": _evalchemy("MATH500", 0),
-    "aime24": _evalchemy("AIME24", 0),
-    "humanevalplus": _evalchemy("HumanEvalPlus", 0),
-    "mbppplus": _evalchemy("MBPPPlus", 3),
-    "olympiadbench": _evalchemy("OlympiadBench", 0),
-    "mmlu-pro": _evalchemy("MMLUPro", 0),
-    "gpqa-diamond": _evalchemy("GPQADiamond", 0),
-    "cruxeval": _evalchemy("CruxEval", 1),
-    "financebench": _evalchemy("FinanceBench", 0),
-    "ifbench": _evalchemy("IFBench", 0),
-    "mrcr": _evalchemy("MRCR", 0),
-    "gsm8k-0shot": _evalchemy("gsm8k", 0),
-    "mmlu": _evalchemy("mmlu", 5),
-    "piqa": _evalchemy("piqa", 0),
-    "winogrande": _evalchemy("winogrande", 5),
-    "openbookqa": _evalchemy("openbookqa", 0),
-    "boolq": _evalchemy("boolq", 0),
-    "truthfulqa": _evalchemy("truthfulqa_mc2", 0),
-    "triviaqa": _evalchemy("triviaqa", 5),
-    "swebench-recovery": _harbor(),
-    "ot-tblite-recovery": _harbor(),
-    "tb2-recovery": _harbor(),
-    "simpleqa-recovery": _harbor(),
-    "ds-1000-local": _harbor(),
-}
+SEPTEMBER_16: Mapping[str, PolicyEval] = MappingProxyType(
+    {
+        "math500": _evalchemy("MATH500", 0),
+        "aime24": _evalchemy("AIME24", 0),
+        "humanevalplus": _evalchemy("HumanEvalPlus", 0),
+        "mbppplus": _evalchemy("MBPPPlus", 3),
+        "olympiadbench": _evalchemy("OlympiadBench", 0),
+        "mmlu-pro": _evalchemy("MMLUPro", 0),
+        "gpqa-diamond": _evalchemy("GPQADiamond", 0),
+        "cruxeval": _evalchemy("CruxEval", 1),
+        "financebench": _evalchemy("FinanceBench", 0),
+        "ifbench": _evalchemy("IFBench", 0),
+        "mrcr": _evalchemy("MRCR", 0),
+        "gsm8k-0shot": _evalchemy("gsm8k", 0),
+        "mmlu": _evalchemy("mmlu", 5),
+        "piqa": _evalchemy("piqa", 0),
+        "winogrande": _evalchemy("winogrande", 5),
+        "openbookqa": _evalchemy("openbookqa", 0),
+        "boolq": _evalchemy("boolq", 0),
+        "truthfulqa": _evalchemy("truthfulqa_mc2", 0),
+        "triviaqa": _evalchemy("triviaqa", 5),
+        "swebench-recovery": _harbor(),
+        "ot-tblite-recovery": _harbor(),
+        "tb2-recovery": _harbor(),
+        "simpleqa-recovery": _harbor(),
+        "ds-1000-local": _harbor(),
+    }
+)
 
-SEPTEMBER_24: dict[str, PolicyEval] = {
-    "math500": _evalchemy("MATH500", 0, ThinkingMode.ON),
-    "humanevalplus": _evalchemy("HumanEvalPlus", 0, ThinkingMode.OFF),
-    "mbppplus": _evalchemy("MBPPPlus", 0, ThinkingMode.OFF),
-    "olympiadbench": _evalchemy("OlympiadBench", 0, ThinkingMode.ON),
-    "gsm8k-0shot": _evalchemy("gsm8k", 0, ThinkingMode.OFF),
-    "piqa": _evalchemy("piqa", 0, ThinkingMode.NOT_APPLICABLE),
-    "winogrande": _evalchemy("winogrande", 5, ThinkingMode.NOT_APPLICABLE),
-    "boolq": _evalchemy("boolq", 0, ThinkingMode.NOT_APPLICABLE),
-    "truthfulqa": _evalchemy("truthfulqa_mc2", 0, ThinkingMode.NOT_APPLICABLE),
-    "triviaqa": _evalchemy("triviaqa", 5, ThinkingMode.OFF),
-    "aime24": _evalchemy("AIME24", 0, ThinkingMode.ON),
-    "mmlu-pro": _evalchemy("MMLUPro", 0, ThinkingMode.ON),
-    "gpqa-diamond": _evalchemy("GPQADiamond", 0, ThinkingMode.ON),
-    "cruxeval": _evalchemy("CruxEval", 0, ThinkingMode.OFF),
-    "financebench": _evalchemy("FinanceBench", 0, ThinkingMode.OFF),
-    "ifbench": _evalchemy("IFBench", 0, ThinkingMode.OFF),
-    "mrcr": _evalchemy("MRCR", 0, ThinkingMode.OFF),
-    "nupa": _evalchemy("NUPA", 0),
-    "swebench-recovery": _harbor(),
-    "ot-tblite-recovery": _harbor(),
-    "tb2-recovery": _harbor(),
-    "ds-1000-local": _harbor(),
-    "bfclparity-pi": _harbor(),
-    "bixbench-pi": _harbor(),
-    "tau3-pi": _harbor(),
-    "sotopia-hard": _harbor(),
-}
+SEPTEMBER_24: Mapping[str, PolicyEval] = MappingProxyType(
+    {
+        "math500": _evalchemy("MATH500", 0, ThinkingMode.ON),
+        "humanevalplus": _evalchemy("HumanEvalPlus", 0, ThinkingMode.OFF),
+        "mbppplus": _evalchemy("MBPPPlus", 0, ThinkingMode.OFF),
+        "olympiadbench": _evalchemy("OlympiadBench", 0, ThinkingMode.ON),
+        "gsm8k-0shot": _evalchemy("gsm8k", 0, ThinkingMode.OFF),
+        "piqa": _evalchemy("piqa", 0, ThinkingMode.NOT_APPLICABLE),
+        "winogrande": _evalchemy("winogrande", 5, ThinkingMode.NOT_APPLICABLE),
+        "boolq": _evalchemy("boolq", 0, ThinkingMode.NOT_APPLICABLE),
+        "truthfulqa": _evalchemy("truthfulqa_mc2", 0, ThinkingMode.NOT_APPLICABLE),
+        "triviaqa": _evalchemy("triviaqa", 5, ThinkingMode.OFF),
+        "aime24": _evalchemy("AIME24", 0, ThinkingMode.ON),
+        "mmlu-pro": _evalchemy("MMLUPro", 0, ThinkingMode.ON),
+        "gpqa-diamond": _evalchemy("GPQADiamond", 0, ThinkingMode.ON),
+        "cruxeval": _evalchemy("CruxEval", 0, ThinkingMode.OFF),
+        "financebench": _evalchemy("FinanceBench", 0, ThinkingMode.OFF),
+        "ifbench": _evalchemy("IFBench", 0, ThinkingMode.OFF),
+        "mrcr": _evalchemy("MRCR", 0, ThinkingMode.OFF),
+        "nupa": _evalchemy("NUPA", 0),
+        "swebench-recovery": _harbor(),
+        "ot-tblite-recovery": _harbor(),
+        "tb2-recovery": _harbor(),
+        "ds-1000-local": _harbor(),
+        "bfclparity-pi": _harbor(),
+        "bixbench-pi": _harbor(),
+        "tau3-pi": _harbor(),
+        "sotopia-hard": _harbor(),
+    }
+)
 
-POLICIES: dict[str, dict[str, PolicyEval]] = {
-    SEPTEMBER_16_VERSION: SEPTEMBER_16,
-    SEPTEMBER_24_VERSION: SEPTEMBER_24,
-}
+POLICIES: Mapping[str, Mapping[str, PolicyEval]] = MappingProxyType(
+    {
+        SEPTEMBER_16_VERSION: SEPTEMBER_16,
+        SEPTEMBER_24_VERSION: SEPTEMBER_24,
+    }
+)
 
 
 def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
@@ -179,10 +192,16 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
             if config.max_eval_instances is not None:
                 problems.append("capped Evalchemy runs are not canonical")
             if model.config is not None:
-                fixed_limit = 1024 if policy is SEPTEMBER_16 and evaluation.name == "ifbench" else FIXED_MAX_TOKENS.get(evaluation.name)
+                fixed_limit = (
+                    1024
+                    if policy is SEPTEMBER_16 and evaluation.name == "ifbench"
+                    else FIXED_MAX_TOKENS.get(evaluation.name)
+                )
                 model_limit = model.config.generation.max_gen_toks
-                expected_limit = min(fixed_limit, model_limit) if fixed_limit is not None and model_limit is not None else (
-                    fixed_limit if fixed_limit is not None else model_limit
+                expected_limit = (
+                    min(fixed_limit, model_limit)
+                    if fixed_limit is not None and model_limit is not None
+                    else (fixed_limit if fixed_limit is not None else model_limit)
                 )
                 if config.max_gen_toks != expected_limit:
                     problems.append(f"max_gen_toks must be {expected_limit}")
@@ -191,7 +210,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
             if evaluation.name == "mrcr" and config.max_length not in {32768, 65536, 73728}:
                 problems.append("MRCR max_length must match a published context bin")
             if evaluation.name != "aime24":
-                expected_seed = 20222943 if policy is SEPTEMBER_24 and evaluation.name == "nupa" else 42
+                expected_seed = NUPA_SEED if policy is SEPTEMBER_24 and evaluation.name == "nupa" else 42
                 if config.seed != expected_seed:
                     problems.append(f"seed must be {expected_seed}")
             if policy is SEPTEMBER_24:
