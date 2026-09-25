@@ -42,17 +42,19 @@ the `marin-prose-cleanup` marker skips the launch entirely.
 
 ## Agentic lint
 
-`agentic-lint.yaml` launches a Loom lint review on each eligible PR head,
-including PRs opened by `marin-ops-agent[bot]`. The Loom session runs the
-read-only lint catalog review, reports findings, checks that the PR head still
-matches, then posts a completion marker with that SHA and refreshes the
-`agentic-lint` label. The `pull_request` policy job requires both the label and
-the matching marker from the Loom GitHub App, so an old label cannot pass a new
-head. Loom's `agentic-lint` profile and the workflow's OIDC federation are
-declared in `infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is
-published from `infra/pulumi/github`. A PR whose base revision predates the
-trusted launcher uses the local review label. Once the launcher exists on the
-base revision, a matching completion marker is required.
+`agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
+lacks the `agentic-lint` label. The label records that the PR has had a lint
+pass: the `commit` skill applies it at PR creation after the author's local
+`./infra/pre-commit.py --review`, and the Loom session adds it after reporting
+its findings. The launcher runs when a non-draft PR from this repository opens,
+reopens, or becomes ready for review, and only when its author has write access
+or is `marin-ops-agent[bot]`. Pushes to a PR do not launch another review;
+removing the label requests a fresh review of the current head. The idempotency
+key is the PR number and head SHA, so repeated events on one commit reuse a run.
+The review is not a required check, so a failed Loom run does not block merging.
+Loom's `agentic-lint` profile and the workflow's OIDC federation are declared in
+`infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is published
+from `infra/pulumi/github`.
 
 Other GitHub agent entry points use the `github-automation` Loom profile.
 

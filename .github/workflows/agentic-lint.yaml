@@ -1,63 +1,21 @@
-name: Agentic lint policy
+name: Agentic lint
 
+# Best-effort Loom lint review. The `agentic-lint` label records that a PR has
+# had a lint pass, either from the author's local `--review` run (the commit
+# skill applies the label at PR creation) or from this workflow. Reviews start
+# only while the label is absent, so pushes to a reviewed PR do not trigger
+# another pass; removing the label requests a fresh review of the current head.
 on:
-  pull_request:
-    types: [opened, ready_for_review, reopened, synchronize, labeled, unlabeled]
   pull_request_target:
-    types: [opened, ready_for_review, reopened, synchronize]
+    types: [opened, ready_for_review, reopened, unlabeled]
 
 jobs:
-  agentic-lint:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: read
-    steps:
-      - name: Require lint review of this head
-        env:
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          case "$AUTHOR" in
-            "dependabot[bot]"|"marin-external-runtime-updater[bot]")
-              echo "Automated dependency PRs do not use the agent commit workflow."
-              exit 0
-              ;;
-          esac
-          if ! jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
-            echo "::error::Agentic lint is pending or failed. Check the Loom launch and review result."
-            exit 1
-          fi
-          base_workflow=$(gh api \
-            "repos/$GITHUB_REPOSITORY/contents/.github/workflows/agentic-lint.yaml?ref=$BASE_SHA" \
-            --jq .content | base64 --decode)
-          if ! grep -Fq 'launch-review:' <<< "$base_workflow"; then
-            echo "The base revision predates the Loom lint launcher; accepting the local review label."
-            exit 0
-          fi
-          marker="<!-- marin-agentic-lint:$HEAD_SHA -->"
-          comments=$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
-            --jq '.[] | select(.user.login == "loom-oa-dev[bot]") | .body')
-          if grep -Fq "$marker" <<< "$comments"; then
-            echo "Agentic lint completed for $HEAD_SHA."
-            exit 0
-          fi
-          echo "::error::No completed Loom lint review for PR head $HEAD_SHA."
-          exit 1
-
   launch-review:
     if: >-
-      github.event_name == 'pull_request_target' &&
-      vars.LOOM_AGENTIC_LINT_PROFILE != '' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'agentic-lint') &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'agentic-lint')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -91,9 +49,8 @@ jobs:
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
             ${{ github.event.pull_request.head.sha }}. Follow the agentic-lint
-            profile instructions. Run the lint catalog review, report every
-            finding, publish a completion marker for this head, and refresh the
-            agentic-lint label only after the review succeeds.
-            Append a typed result to the Loom channel.
+            profile instructions: run the lint catalog review, report every
+            finding on the PR, and add the agentic-lint label once the review
+            completes. Append a typed result to the Loom channel.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}
