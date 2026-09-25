@@ -49,12 +49,12 @@ def _math500(thinking: bool | None, *, shots: int = 0, version: str = SEPTEMBER_
 def test_september_24_requires_explicit_benchmark_thinking_mode():
     model = _model({"enable_thinking": False})
     assert policy_violations(SEPTEMBER_24_VERSION, model, _math500(True)) == ()
-    assert any("enable_thinking=True" in problem for problem in policy_violations(
-        SEPTEMBER_24_VERSION, model, _math500(False)
-    ))
-    assert any("enable_thinking=True" in problem for problem in policy_violations(
-        SEPTEMBER_24_VERSION, model, _math500(None)
-    ))
+    assert any(
+        "enable_thinking=True" in problem for problem in policy_violations(SEPTEMBER_24_VERSION, model, _math500(False))
+    )
+    assert any(
+        "enable_thinking=True" in problem for problem in policy_violations(SEPTEMBER_24_VERSION, model, _math500(None))
+    )
 
 
 def test_september_16_preserves_model_defaults_and_checks_shots():
@@ -65,7 +65,9 @@ def test_september_16_preserves_model_defaults_and_checks_shots():
     original_null = _math500(None, version=SEPTEMBER_16_VERSION)
     assert original_null.evalchemy is not None
     original_null = original_null.model_copy(
-        update={"evalchemy": original_null.evalchemy.model_copy(update={"chat_template_kwargs": {"enable_thinking": None}})}
+        update={
+            "evalchemy": original_null.evalchemy.model_copy(update={"chat_template_kwargs": {"enable_thinking": None}})
+        }
     )
     assert policy_violations(SEPTEMBER_16_VERSION, _model({"enable_thinking": None}), original_null) == ()
 

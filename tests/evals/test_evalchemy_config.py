@@ -98,7 +98,7 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert model_args["max_length"] == "32768"
 
 
-def test_explicit_thinking_mode_reaches_chat_request():
+def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
     config = _payload(
         _config(
             tasks=(EvalTaskConfig("MATH500", 0, generation=True),),
@@ -108,8 +108,9 @@ def test_explicit_thinking_mode_reaches_chat_request():
     )
 
     command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
-    model_args = command[command.index("--model_args") + 1]
-    assert 'chat_template_kwargs={"enable_thinking":true}' in model_args
+    assert command[command.index("--model") + 1] == "local-chat-completions"
+    model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
+    assert json.loads(model_args["chat_template_kwargs"]) == {"enable_thinking": True}
 
 
 def test_parent_rejects_endpoint_model_arg_overrides():

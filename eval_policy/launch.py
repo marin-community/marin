@@ -11,19 +11,18 @@ from tempfile import TemporaryDirectory
 import yaml
 from marin.evaluation.eval_policy import (
     FIXED_MAX_TOKENS,
+    NUPA_SEED,
     POLICIES,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     ThinkingMode,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EVALCHEMY_CONFIGS = ROOT / "experiments/evaluation/configs/evalchemy"
 HARBOR_CONFIGS = ROOT / "experiments/evaluation/configs/harbor"
 HARBOR_REGISTRY_16 = (
-    "https://raw.githubusercontent.com/marin-community/harbor/"
-    "7b18505a56e5624f55887e3b20f4de452f698a7a/registry.json"
+    "https://raw.githubusercontent.com/marin-community/harbor/" "7b18505a56e5624f55887e3b20f4de452f698a7a/registry.json"
 )
 POLICY_CONFIGS_24 = frozenset({"mmlu-pro", "gpqa-diamond", "cruxeval", "ifbench", "mrcr", "nupa"})
 
@@ -50,7 +49,7 @@ def _evalchemy_config(version: str, name: str, artifact_dir: Path | None, output
     if name == "aime24" and version == SEPTEMBER_24_VERSION:
         config.pop("seed", None)
     else:
-        config["seed"] = 20222943 if name == "nupa" else 42
+        config["seed"] = NUPA_SEED if name == "nupa" else 42
     if name in FIXED_MAX_TOKENS:
         config["max_tokens"] = FIXED_MAX_TOKENS[name]
     if version == SEPTEMBER_16_VERSION and name == "ifbench":
@@ -101,7 +100,9 @@ def launch_policy(
     unknown = set(selected_evals or ()) - POLICIES[version].keys()
     if unknown:
         raise ValueError(f"evaluations not in {version}: {sorted(unknown)}")
-    evaluations = [(name, policy) for name, policy in POLICIES[version].items() if selected_evals is None or name in selected_evals]
+    evaluations = [
+        (name, policy) for name, policy in POLICIES[version].items() if selected_evals is None or name in selected_evals
+    ]
     if not evaluations:
         raise ValueError("select at least one evaluation")
     needs_artifact = version == SEPTEMBER_24_VERSION and any(
@@ -135,18 +136,30 @@ def launch_policy(
             else:
                 config = _harbor_config(version, name, artifact_dir, sotopia_dataset_dir, config)
                 selector = ("--harbor-config", str(config))
-            seeds = range(42, 52) if version == SEPTEMBER_16_VERSION and name == "aime24" else (None,) * (
-                10 if version == SEPTEMBER_24_VERSION and name == "aime24" else 1
+            seeds = (
+                range(42, 52)
+                if version == SEPTEMBER_16_VERSION and name == "aime24"
+                else (None,) * (10 if version == SEPTEMBER_24_VERSION and name == "aime24" else 1)
             )
             for seed in seeds:
                 command = [
-                    "uv", "run", "python", "-m", "experiments.evaluation.cli", "launch",
-                    "--model-config", str(model_config),
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "experiments.evaluation.cli",
+                    "launch",
+                    "--model-config",
+                    str(model_config),
                     *selector,
-                    "--accelerator", "H100x8",
-                    "--federated_cluster", cluster,
-                    "--priority", "interactive",
-                    "--version", version,
+                    "--accelerator",
+                    "H100x8",
+                    "--federated_cluster",
+                    cluster,
+                    "--priority",
+                    "interactive",
+                    "--version",
+                    version,
                     "--no-wait",
                 ]
                 if seed is not None:
