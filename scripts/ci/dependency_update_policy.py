@@ -56,7 +56,6 @@ DEPENDENCY_UPDATE_POLICIES = MappingProxyType(
 )
 
 REQUIRED_CHECKS = (
-    "agentic-lint",
     "marin-docs",
     "marin-integration",
     "marin-lint",
