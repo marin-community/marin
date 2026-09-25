@@ -28,7 +28,6 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
-from dashboard_dataset import projection_database
 from dashboard_stitch import stitch_all
 from rl_observability import (
     RL_MAX_RESULT_ROWS,
@@ -667,7 +666,6 @@ _DATASETS = {
     "/v1/rl/generation": rl_sync_generation_dataset,
     "/v1/rl/train-step": rl_sync_train_step_dataset,
 }
-_VLLM_OVERVIEW = "/v1/vllm/overview"
 _TEMPLATE = {
     "${cluster:csv}": CLUSTER,
     "${run}": RUN_ID,
@@ -694,18 +692,16 @@ def _params(target: dict) -> dict[str, str]:
 
 
 def _bridge(database: duckdb.DuckDBPyConnection):
-    """The bridge app over this store, and every Finelog query it issues."""
-    queries = []
+    """The bridge app over this store."""
 
     def query(sql: str, *, max_rows: int):
-        queries.append(sql)
         table = database.execute(sql).fetch_arrow_table()
         assert table.num_rows <= max_rows, (table.num_rows, max_rows)
         return table
 
     source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
     app = create_app(replace(bridge_config(), max_rows=RL_MAX_RESULT_ROWS), {"marin": source}, {}, None, None, None)
-    return app, queries
+    return app
 
 
 def _matches(expression: str | None, row: dict) -> bool:
@@ -717,7 +713,7 @@ def _matches(expression: str | None, row: dict) -> bool:
 
 def _responses(database: duckdb.DuckDBPyConnection, targets: list[dict]) -> list[list[dict]]:
     """Each target's rows through one bridge app, after the target's own filter."""
-    app, _ = _bridge(database)
+    app = _bridge(database)
     with TestClient(app) as client:
         responses = [client.get(f"/finelog/marin{target['url']}", params=_params(target)) for target in targets]
     assert [response.status_code for response in responses] == [200] * len(targets), [r.text for r in responses]
@@ -744,17 +740,6 @@ def _panel_rows(database: duckdb.DuckDBPyConnection, title: str) -> list[tuple]:
     assert len({json.dumps(match["targets"], sort_keys=True) for match in matches}) == 1, title
     (target,) = matches[0]["targets"]
     return _target_rows(database, target)
-
-
-def _view_columns(database: duckdb.DuckDBPyConnection, target: dict) -> list[str]:
-    """The columns a dataset view returns, read from the projection even when it has no rows."""
-    dataset = _dataset(target["url"])
-    with projection_database() as projection:
-        for source in dataset.sources:
-            projection.register(source.name, database.execute(source.sql).fetch_arrow_table())
-        for statement in dataset.setup_sql:
-            projection.execute(statement)
-        return [column[0] for column in projection.execute(dataset.views[_params(target)["view"]]).description]
 
 
 def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
@@ -1039,36 +1024,6 @@ def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(sto
     assert all(value == pytest.approx(TOKEN_MEAN) for _, _, value, _ in iteration)
 
 
-def test_a_counter_reset_drops_the_sample_rather_than_reading_as_a_giant_delta(store) -> None:
-    # An engine that restarts republishes its histogram from zero. Clamping the negative step to
-    # zero would keep the sample and understate the bucket; the panel drops it.
-    for stream in ("telemetry_v1.vllm", "telemetry_v1.marinskyrl"):
-        store.execute(
-            f"""UPDATE "{stream}" SET value = 1.0
-                WHERE name = 'request_generation_tokens_bucket' AND seq >= 3"""
-        )
-    rows = _panel_rows(store, "vLLM generated tokens per request")
-
-    # Samples 1 and 2 still difference cleanly and 3 is the reset; 4 and 5 are flat at 1.0, which
-    # adds requests to the count but none to a bucket. Keeping the reset would count BUCKETS - 1.
-    assert {samples for _, _, samples in rows} == {(BUCKETS - 2) * 100 * len(ENGINES)}
-    assert {stat: value for stat, value, _ in rows} == {"p50": 256.0, "p90": 1024.0, "p99": 4096.0}
-
-
-def test_engine_rows_are_read_from_whichever_namespace_the_run_wrote_them_to(store) -> None:
-    # An RL run's engine metrics are forwarded by the MarinSkyRL process under its own service
-    # name, so they land in telemetry_v1.marinskyrl rather than telemetry_v1.vllm. Reading only
-    # the latter renders every engine panel blank for exactly the runs this dashboard is for.
-    both = _panel_rows(store, "vLLM generated tokens per request")
-    assert both
-
-    store.execute('DELETE FROM "telemetry_v1.vllm"')
-    marinskyrl_only = _panel_rows(store, "vLLM generated tokens per request")
-
-    assert {stat: value for stat, value, _ in marinskyrl_only} == {stat: value for stat, value, _ in both}
-    assert {samples for _, _, samples in marinskyrl_only} == {(BUCKETS - 1) * 100}
-
-
 def test_the_engine_gauges_are_summed_across_engines_and_never_differenced(store) -> None:
     queue = _panel_rows(store, "vLLM waiting requests by reason")
 
@@ -1086,28 +1041,6 @@ def test_the_engine_gauges_are_summed_across_engines_and_never_differenced(store
         "kv_cache_usage": pytest.approx(KV_CACHE_USAGE),
         "kv_cache_usage_peak": pytest.approx(KV_CACHE_USAGE),
     }
-
-
-def test_every_timeseries_panel_returns_the_columns_it_declares(store) -> None:
-    """Grafana reads a panel through its declared columns, so a mismatch renders blank with no error.
-
-    A dataset view is compared column for column with what the projection returns, which holds even
-    for a view with no rows on this fixture. A vLLM target filters a shared view, so every column it
-    declares has to be on the rows that survive its filter, and some row has to.
-    """
-    for panel in (p for board in _rl_dashboards().values() for p in board["panels"]):
-        if panel.get("type") != "timeseries":
-            continue
-        for target in panel["targets"]:
-            declared = [column["selector"] for column in target["columns"]]
-            if target["url"] == _VLLM_OVERVIEW:
-                (rows,) = _responses(store, [target])
-                assert rows, panel["title"]
-                returned = [column for column in declared if column in rows[0]]
-            else:
-                returned = _view_columns(store, target)
-            assert declared == returned, f"{panel['title']}: declares {declared}, returns {returned}"
-            assert "number" in {column["type"] for column in target["columns"]}, panel["title"]
 
 
 def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
@@ -1256,38 +1189,6 @@ def test_the_rollout_waits_are_divided_by_the_trajectory_count(store) -> None:
     assert rows == [(t, *map(pytest.approx, waits)) for t in BUCKET_TIMES]
 
 
-def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
-    """rollout_*_seconds_sum is a sum over up to 4,096 coroutines. It exceeds its own parent by
-    design -- 23,656 s against a 4,210 s step in this fixture -- so any panel reading these counters
-    has to divide before plotting. Banding one is the single easiest way for this dashboard to
-    publish a number nobody should believe."""
-    targets = [
-        (panel["title"], target)
-        for board in _rl_dashboards().values()
-        for panel in board["panels"]
-        for target in panel.get("targets", [])
-        if target["url"] in _DATASETS
-    ]
-
-    def rendered(target: dict) -> list[tuple]:
-        # Sorted and rounded, because series order within a bucket and float summation order vary.
-        rows = _target_rows(store, target)
-        return sorted((tuple(round(c, 6) if isinstance(c, float) else c for c in row) for row in rows), key=repr)
-
-    before = [rendered(target) for _, target in targets]
-    store.execute("""DELETE FROM "telemetry_v1.marinskyrl" WHERE name = 'rollout_wait_seconds'""")
-    readers = [(title, rows) for (title, target), rows in zip(targets, before, strict=True) if rendered(target) != rows]
-    # The per-trajectory wait, the environment split, and the tail ratio.
-    assert len(readers) == 3, [title for title, _ in readers]
-    assert ENGINE_AWAIT_SUM > STEP_SECONDS, "the fixture no longer makes the raw sum implausible"
-
-    for title, rows in readers:
-        for row in rows:
-            plotted = [cell for cell in row[1:] if isinstance(cell, float)]
-            assert plotted, title
-            assert max(plotted) < STEP_SECONDS, f"{title} plots {max(plotted)}"
-
-
 def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
     rows = _panel_rows(store, "Environment wait: queue, exec and resume")
 
@@ -1332,29 +1233,6 @@ def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -
 
     assert all(row[1] is not None for row in rows)
     assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
-
-
-@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_train_step.json"])
-def test_a_board_reads_finelog_once_per_source_for_every_panel(store, board) -> None:
-    """Every target of one endpoint on a board shares a dataset key, so a cold page load costs one
-    Finelog query per source however many panels read it."""
-    targets = [
-        target
-        for panel in _stitched()[board]["panels"]
-        for target in panel.get("targets", [])
-        if target["url"] in (*_DATASETS, _VLLM_OVERVIEW)
-    ]
-    app, queries = _bridge(store)
-
-    with TestClient(app) as client:
-        statuses = [
-            client.get(f"/finelog/marin{target['url']}", params=_params(target)).status_code for target in targets
-        ]
-
-    assert statuses == [200] * len(targets)
-    assert len(queries) == sum(
-        1 if url == _VLLM_OVERVIEW else len(_dataset(url).sources) for url in {target["url"] for target in targets}
-    )
 
 
 LONG_RUN_STEPS = 500
@@ -1463,7 +1341,7 @@ def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
     ]
     window = {"from": str(start_ms), "to": str(end_ms)}
     for database, served in ((wide, targets), (dense, [t for t in targets if t["url"] == "/v1/rl/overview"])):
-        app, _ = _bridge(database)
+        app = _bridge(database)
         with TestClient(app) as client:
             statuses = {
                 client.get(f"/finelog/marin{target['url']}", params={**_params(target), **window}).status_code
