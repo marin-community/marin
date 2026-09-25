@@ -4,30 +4,25 @@
 """Parse the Terminus JSON-command conversation protocol."""
 
 import json
+from typing import NamedTuple
 
-from marin.datakit.download.rollout_transforms import (
-    REASONING_END,
-    REASONING_START,
-    TOOL_WRAPPER,
-    ReasoningFormatError,
-    normalize_reasoning_tokens,
-)
-
-MODEL_THINK_START = "<think>"
-MODEL_THINK_END = "</think>"
+from marin.datakit.download.rollout_transforms import TOOL_WRAPPER
 
 
-def _json_command_payload_and_prefix(content: str) -> tuple[dict, str] | None:
+class ThinkTokens(NamedTuple):
+    """The leading reasoning delimiters used by a source's Terminus responses."""
+
+    start: str
+    end: str
+
+
+def _json_command_payload_and_prefix(content: str, think_tokens: ThinkTokens | None) -> tuple[dict, str] | None:
     decoder = json.JSONDecoder()
     search_start = 0
-    if content.lstrip().lower().startswith(MODEL_THINK_START):
-        end = content.lower().find(MODEL_THINK_END)
+    if think_tokens is not None and content.lstrip().startswith(think_tokens.start):
+        end = content.find(think_tokens.end)
         if end != -1:
-            search_start = end + len(MODEL_THINK_END)
-    elif content.lstrip().startswith(REASONING_START):
-        end = content.find(REASONING_END)
-        if end != -1:
-            search_start = end + len(REASONING_END)
+            search_start = end + len(think_tokens.end)
     for index in range(search_start, len(content)):
         char = content[index]
         if char != "{":
@@ -41,8 +36,13 @@ def _json_command_payload_and_prefix(content: str) -> tuple[dict, str] | None:
     return None
 
 
-def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
-    """Retain optional model reasoning, Terminus JSON responses, and terminal observations."""
+def terminus_protocol_messages(conversations: list[dict], think_tokens: ThinkTokens | None) -> list[dict] | None:
+    """Extract Terminus commands and optional leading reasoning from a conversation.
+
+    The source must supply its reasoning delimiters, or None if it
+    has none. Only a nonempty leading span is retained; incidental prose before
+    the first command JSON is discarded.
+    """
     messages: list[dict] = []
     pending_observation = False
     for message in conversations:
@@ -60,18 +60,19 @@ def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
             messages.append(dict(message))
             continue
 
-        parsed = _json_command_payload_and_prefix(content)
+        parsed = _json_command_payload_and_prefix(content, think_tokens)
         if parsed is None:
             return None
         payload, prefix = parsed
         response = {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)}
-        if prefix.lower().startswith((MODEL_THINK_START, REASONING_START)):
-            try:
-                normalized_prefix = normalize_reasoning_tokens(prefix)
-            except ReasoningFormatError:
-                return None
-            reasoning, separator, _ = normalized_prefix.removeprefix(REASONING_START).partition(REASONING_END)
-            if not normalized_prefix.startswith(REASONING_START) or not separator or not reasoning.strip():
+        if think_tokens is not None and prefix.startswith(think_tokens.start):
+            reasoning, separator, _ = prefix.removeprefix(think_tokens.start).partition(think_tokens.end)
+            if (
+                not separator
+                or not reasoning.strip()
+                or prefix.count(think_tokens.start) != 1
+                or prefix.count(think_tokens.end) != 1
+            ):
                 return None
             response["reasoning_content"] = reasoning.strip()
         messages.append(response)

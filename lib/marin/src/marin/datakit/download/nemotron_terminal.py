@@ -23,12 +23,13 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import terminus_protocol_messages
+from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Nemotron-Terminal-Corpus"
 HF_REVISION = "a1667c4"
+TERMINUS_THINK_TOKENS = ThinkTokens("<think>", "</think>")
 
 
 def row_to_doc(row: dict) -> list[dict]:
@@ -57,7 +58,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             return []
         messages, metadata = converted
     else:
-        messages = terminus_protocol_messages(conversations)
+        messages = terminus_protocol_messages(conversations, TERMINUS_THINK_TOKENS)
         if messages is None:
             return []
         metadata = {}

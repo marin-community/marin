@@ -9,6 +9,7 @@ from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.penfever_rollouts import PenfeverRollout, row_to_chat_doc
 from marin.datakit.download.rollout_transforms import openai_chat_document, openai_chat_messages
+from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
 
 
 def _dataset(cohort: str) -> PenfeverRollout:
@@ -130,6 +131,16 @@ def test_terminal_protocol_without_thinking_keeps_thinking_disabled():
     normalized = _normalize_chat_record(document, "messages", "id")
     assert [message["channel"] for message in normalized["messages"] if message["role"] == "assistant"] == ["final"]
     assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is False
+
+
+def test_terminal_protocol_uses_source_thinking_delimiters():
+    conversation = [
+        {"role": "user", "content": "Inspect the file."},
+        {"role": "assistant", "content": '[reasoning]Inspect first.[/reasoning]{"commands":[],"task_complete":true}'},
+    ]
+    messages = terminus_protocol_messages(conversation, ThinkTokens("[reasoning]", "[/reasoning]"))
+    assert messages is not None
+    assert messages[-1]["reasoning_content"] == "Inspect first."
 
 
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
