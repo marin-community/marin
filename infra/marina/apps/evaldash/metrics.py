@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -186,10 +186,23 @@ def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
     ]
 
 
-def _policy_rejections(records: list[EvalRunRecord]) -> list[dict[str, object]]:
+def _policy_rejections(
+    records: list[EvalRunRecord], request: SelectionRequest, models: tuple[str, ...] | None = None
+) -> list[dict[str, object]]:
+    metadata = run_metadata(records)
     return [
-        {"run_id": record.run_id, "model": comparison_model_name(record.model), "reasons": list(violations)}
+        {
+            "run_id": record.run_id,
+            "model": comparison_model_name(record.model),
+            "benchmark": record.evaluation.name,
+            "reasons": list(violations),
+        }
         for record in records
+        if not record.evaluation.name.endswith(SMOKE_SUFFIX)
+        if request.cohort_version is None or record.version == request.cohort_version
+        if request.panel is None or record.evaluation.name in request.panel
+        if models is None or comparison_model_name(record.model) in models
+        if matches_filters(comparison_model_name(record.model), metadata[record.run_id], request)
         if (violations := record_policy_violations(record))
     ]
 
@@ -350,7 +363,7 @@ def build_panel(
             for column in families
         ],
         "rows": rows,
-        "policy_rejections": _policy_rejections(records),
+        "policy_rejections": _policy_rejections(records, request),
         "request": {
             "min_coverage": request.min_coverage,
             "min_benchmark_coverage": request.min_benchmark_coverage,
@@ -386,8 +399,16 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
     measurements = measurements_from_records(eligible)
-    selection = select(measurements, request, metadata, declared_protocols(measurements))
+    selection = select(
+        measurements,
+        replace(request, completeness=Completeness.ANY),
+        metadata,
+        declared_protocols(measurements),
+    )
     chosen = {model: dict(selection.cells.get(model, {})) for model in models}
+    if request.completeness is Completeness.COMPLETE_PANEL:
+        selected_panel = request.panel or tuple(sorted({name for cells in chosen.values() for name in cells}))
+        chosen = {model: cells if covers_panel(cells, selected_panel) else {} for model, cells in chosen.items()}
 
     union = [name for name in selection.benchmarks if any(name in cells for cells in chosen.values())]
     shared = [name for name in union if all(name in cells for cells in chosen.values())]
@@ -415,7 +436,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
         "benchmarks": union,
         "shared": shared,
         "rows": rows,
-        "policy_rejections": _policy_rejections(records),
+        "policy_rejections": _policy_rejections(records, request, models),
         "aggregates": {model: _aggregate_payload(panel_aggregate(cells, protocol)) for model, cells in chosen.items()},
     }
 
@@ -433,12 +454,13 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     return {
         "models": all_models,
         "default_cohort": SEPTEMBER_24_VERSION,
+        "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({r.status.value for r in records}),
-        "versions": sorted({r.version for r in records if r.version}),
+        "versions": sorted(set(POLICIES) | {r.version for r in records if r.version}),
         "facets": facets,
         "archived_models": sorted(archived_models),
     }

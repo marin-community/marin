@@ -74,6 +74,15 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+const comparabilityWarning = computed(() => {
+  if (!meta.value) return null
+  const selected = cohort.value || meta.value.default_cohort
+  if (selected === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (!meta.value.verified_cohorts.includes(selected)) {
+    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
+  }
+  return null
+})
 
 onMounted(() => {
   refresh()
@@ -428,12 +437,13 @@ function goToModel(model: string) {
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Panel</h2>
+      <h2 class="text-lg font-semibold">Panel{{ comparabilityWarning ? '*' : '' }}</h2>
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
         the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
+      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
     </div>
 
     <!-- Fleet readout -->
@@ -483,8 +493,10 @@ function goToModel(model: string) {
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
           <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
-          <option value="all">Newest per benchmark (all cohorts)</option>
-          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">{{ version }}</option>
+          <option value="all">Newest per benchmark (all cohorts)*</option>
+          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
+            {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
+          </option>
         </select>
       </label>
       <label class="flex flex-col text-xs text-text-secondary gap-1">
@@ -569,6 +581,20 @@ function goToModel(model: string) {
     >
       {{ error }}
     </div>
+
+    <details v-if="data?.policy_rejections.length" class="rounded border border-status-warning-border bg-status-warning-bg text-sm p-3 mb-4">
+      <summary class="cursor-pointer text-status-warning">
+        {{ data.policy_rejections.length }} run(s) excluded from this cohort
+      </summary>
+      <ul class="mt-2 space-y-1 text-text-secondary">
+        <li v-for="rejection in data.policy_rejections" :key="rejection.run_id">
+          <button class="font-mono text-accent hover:underline" @click="goToRun(rejection.run_id)">
+            {{ rejection.model }} · {{ rejection.benchmark }}
+          </button>
+          — {{ rejection.reasons.join('; ') }}
+        </li>
+      </ul>
+    </details>
 
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 

@@ -39,6 +39,16 @@ const { data, error, refresh } = useApi<Comparison>(() => {
   return `api/compare?${params.toString()}`
 })
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+const comparabilityWarning = computed(() => {
+  if (!meta.value) return null
+  const raw = route.query.cohort
+  const selected = (Array.isArray(raw) ? raw[0] : raw) || meta.value.default_cohort
+  if (selected === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (!meta.value.verified_cohorts.includes(selected)) {
+    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
+  }
+  return null
+})
 
 function fromQuery(): string[] {
   const raw = route.query.models
@@ -128,11 +138,12 @@ const chartSeries = computed(() =>
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Compare</h2>
+      <h2 class="text-lg font-semibold">Compare{{ comparabilityWarning ? '*' : '' }}</h2>
       <p class="text-xs text-text-muted mt-0.5">
         Pick 2–{{ MAX_COMPARE }} models. The ranking scores them on their shared benchmarks only, and every gap comes
         with an interval, so neither a coverage difference nor sampling noise reads as a lead.
       </p>
+      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
     </div>
 
     <!-- model picker -->
@@ -170,6 +181,19 @@ const chartSeries = computed(() =>
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
     <div v-else-if="data" class="space-y-6">
+      <details v-if="data.policy_rejections.length" class="rounded border border-status-warning-border bg-status-warning-bg text-sm p-3">
+        <summary class="cursor-pointer text-status-warning">
+          {{ data.policy_rejections.length }} run(s) excluded from this comparison
+        </summary>
+        <ul class="mt-2 space-y-1 text-text-secondary">
+          <li v-for="rejection in data.policy_rejections" :key="rejection.run_id">
+            <button class="font-mono text-accent hover:underline" @click="router.push(`/runs/${rejection.run_id}`)">
+              {{ rejection.model }} · {{ rejection.benchmark }}
+            </button>
+            — {{ rejection.reasons.join('; ') }}
+          </li>
+        </ul>
+      </details>
       <!-- shared-benchmark ranking -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">

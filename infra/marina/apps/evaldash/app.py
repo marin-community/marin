@@ -210,6 +210,7 @@ class MetricProtocolResponse(BaseModel):
 class PolicyRejectionResponse(BaseModel):
     run_id: str
     model: str
+    benchmark: str
     reasons: list[str]
 
 
@@ -1304,7 +1305,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort", SEPTEMBER_24_VERSION)
+    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
         cohort_version=None if cohort == "all" else cohort,

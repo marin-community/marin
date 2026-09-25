@@ -709,12 +709,12 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
 
 def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
-    def policy_run(thinking: bool, config_thinking: bool, created_at: str) -> EvalRunRecord:
-        record = _record("same-name", "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+    def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
+        record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
         model_config = ModelConfigRef.model_validate(
             asdict(
                 ModelConfig(
-                    name="same-name",
+                    name=name,
                     location="org/model",
                     generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
                 )
@@ -722,7 +722,7 @@ def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
         )
         return record.model_copy(
             update={
-                "model": ModelRef(name="same-name", location="org/model", backend="vllm", config=model_config),
+                "model": ModelRef(name=name, location="org/model", backend="vllm", config=model_config),
                 "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
                 "evaluation": record.evaluation.model_copy(
                     update={
@@ -745,16 +745,55 @@ def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
     first = policy_run(True, False, "2026-09-25T01:00:00+00:00")
     second = policy_run(True, True, "2026-09-25T02:00:00+00:00")
     invalid = policy_run(False, False, "2026-09-25T03:00:00+00:00")
-    panel = build_panel([first, second, invalid], panel_request(cohort_version="eval-policy-2026-09-24-verified"))
+    other_invalid = policy_run(False, False, "2026-09-25T04:00:00+00:00", "other-model")
+    previous_cohort = invalid.model_copy(
+        update={"run_id": "previous-cohort", "version": "eval-policy-2026-09-16-verified"}
+    )
+    smoke = invalid.model_copy(
+        update={
+            "run_id": "smoke-run",
+            "evaluation": invalid.evaluation.model_copy(update={"name": "math500-smoke"}),
+        }
+    )
+    records = [first, second, invalid, other_invalid, previous_cohort, smoke]
+    request = panel_request(cohort_version="eval-policy-2026-09-24-verified", model_query="same-name")
+    panel = build_panel(records, request)
 
     assert len(panel["rows"]) == 2
     assert {row["model"] for row in panel["rows"]} == {
         comparison_model_name(first.model),
         comparison_model_name(second.model),
     }
-    assert panel["policy_rejections"][0]["run_id"] == invalid.run_id
+    assert [(item["run_id"], item["benchmark"]) for item in panel["policy_rejections"]] == [(invalid.run_id, "math500")]
+    comparison = build_comparison(
+        records, request, (comparison_model_name(first.model), comparison_model_name(second.model))
+    )
+    assert [item["run_id"] for item in comparison["policy_rejections"]] == [invalid.run_id]
     detail = build_model_detail([first, second, invalid], comparison_model_name(first.model))
     assert detail is not None
     rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
     assert rejected_run["headline"] is None
     assert "enable_thinking=True" in rejected_run["gap_reason"]
+
+
+def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models():
+    records = [
+        _record("a", "mmlu", "v1", "2026-09-25T01:00:00+00:00", 0.6),
+        _record("b", "mmlu", "v1", "2026-09-25T01:00:00+00:00", 0.5),
+        _record("c", "math500", "v1", "2026-09-25T01:00:00+00:00", 0.4),
+    ]
+    request = panel_request(completeness=Completeness.COMPLETE_PANEL)
+
+    comparison = build_comparison(records, request, ("a", "b"))
+
+    assert comparison["shared"] == ["mmlu"]
+    assert set(comparison["rows"][0]["cells"]) == {"a", "b"}
+
+
+def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
+    historical = _record("a", "mmlu", "eval-policy-updated", "2026-09-25T01:00:00+00:00", 0.6)
+
+    panel = build_panel([historical], panel_request(cohort_version="eval-policy-updated"))
+
+    assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
+    assert panel["policy_rejections"] == []
