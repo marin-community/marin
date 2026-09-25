@@ -29,7 +29,8 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_dedup import (
     ClusterDedupParams,
-    find_duplicates,
+    find_candidate_duplicates,
+    resolve_duplicate_clusters,
 )
 from marin.processing.classification.deduplication.cluster_text import (
     CLUSTER_TEXT_SUBDIRECTORY,
@@ -163,7 +164,8 @@ def solve_text_shard(
             return
         cluster = [row["text"] for row in members]
         shards: dict[int, ClusterTextShard] = zephyr_worker_ctx().get_shared(_SHARED_SHARDS_KEY)
-        for removal in find_duplicates(cluster, params):
+        candidate_groups = find_candidate_duplicates(cluster, params)
+        for removal in resolve_duplicate_clusters(cluster, candidate_groups, params):
             member = members[removal.member_index]
             representative = members[removal.representative_index]
             duplicates += 1
