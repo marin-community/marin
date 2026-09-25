@@ -465,7 +465,7 @@ def _load_safe_tensors(
 def _load_safetensor_shards(
     paths: list[str], dtype: Optional[jnp.dtype], fs: AbstractFileSystem | None = None
 ) -> dict:
-    """Read shards concurrently with one staging budget per host process."""
+    """Read one checkpoint's shards concurrently with a shared staging budget."""
     budget = StagingByteBudget()
     mesh = get_concrete_mesh()  # Mesh contexts are thread-local.
 
