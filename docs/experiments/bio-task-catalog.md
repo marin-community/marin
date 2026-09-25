@@ -17,7 +17,8 @@ define the draft and separate planned, candidate and validated evidence.
 Benchmarks supply derivation sources rather than generation quotas. Repository and
 format inventories remain supporting axes. The [authoring queue](bio-task-queue.md)
 preserves prior endpoint research; its historical benchmark gains no longer rank
-new work. Task generation has resumed while categorization and weighting remain undecided.
+new work. As of 2026-09-25, authoring is paused for a review of categorization,
+weighting and the next coverage targets.
 
 The existing [workstream plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
 contains 147 proposed questions across 52 workstreams. Exact benchmark task IDs,
@@ -25,7 +26,7 @@ source inspection limits and context adaptations remain useful provenance.
 Previously validated benchmark mappings do not automatically become competency
 coverage; each bounded outcome needs a reviewed task/verifier assignment.
 
-The registry has **149 recipes across 13 domains**, with one task per
+The registry has **154 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -230,8 +231,8 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-The 149 registered recipes include 34 using real observations and 115 simulated component
-controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
+The 154 registered recipes include 39 using real observations and 115 simulated component
+controls. Registration alone does **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
 inspection; it is a qualitative gap analysis, not a benchmark coverage score.
@@ -350,9 +351,12 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 stems reviewed; 553 possible quantitative components and 898 open synthesis/strategy requests; full synthesis contracts unresolved | — |
 | [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json) | 801 public IDs/hashes; 520 database schemas link to 7 existing cards, 58 supplementary targets to 16 cards; 199 literature stems reviewed across 14 patterns; 223 endpoint contracts and source evidence remain open | Private subset not enumerated |
 
-Of these 5,133 ID task/protocol/definition records, 47 have manually assessed component mappings,
-5,084 are unmapped, one assembly-contiguity workflow is validated on independent
-observed PhiX reads, and one is excluded from authoring. Other eligible sources
+Of these 5,133 ID task/protocol/definition records, 10 have validated workflow mappings,
+50 have component mappings, 5,072 are unmapped, and one is excluded from authoring.
+The validated records include overlapping original and Verified BixBench questions,
+so they do not represent 10 independent workflows. Six distinct Verified question
+IDs map to three observed-data tasks; one other validated record is the independent
+PhiX assembly-contiguity workflow. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.

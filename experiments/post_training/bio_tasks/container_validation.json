@@ -6474,6 +6474,211 @@
       "limitations": "Independent brown-anole red-blood-cell GEO input, 37 age-joined animals and 14 longest AnoSag2.1 scaffolds replace Jackdaw/Zebra Finch Dryad inputs. Strict extreme threshold, unique CpG identity, nonzero-only scaffold-density mean, all-age-site density argmax and removed measurement-row count match Verified q52-q2/q6/q7 output semantics; no direct avian numerical-answer reproduction. Original q52-q2 has an ambiguous genome-wide denominator and original q52-q7 asks removed sites, not rows; these remain component-only. Broad release-level lineage/weighting review is separate.",
       "harbor_version": "0.8.1",
       "daytona_version": "0.203.0"
+    },
+    {
+      "job_id": "/exedev/bio-cd14-gene-length-harbor-20260925-134258",
+      "source_revision": "cd431fbc50954aef18ff202a9688d32cff451a36; frozen committed source bundle",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "passed",
+      "validation_role": "canonical registered CD14 task; adapted Verified bix-22-q4 workflow, original q22-q4 component-only, no source numerical-answer credit",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "task-only exact native-tested SciPy solver with terminal package check",
+      "agent_and_verifier_backend": "Daytona",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 6,
+      "discriminating_negative_cases": 5,
+      "source_bundle_sha256": "4852e364a43dc11e0bd4266def885af35a83bc31f75d963c8c5c48f2ff0b30fc",
+      "environment_lock_sha256": "ef8c7bfc2ed4b37f3c3ca076a7a10b45a24e726048d03760ecac4c98dbce7772",
+      "private_reference_sha256": "44422b1ffba0ccf1fb108d07b8f43766025d16cd4242f8f3cac26e79092cf21d",
+      "canonical_task_id": "real-cd14-gene-length-association-v1-20260925-00000",
+      "canonical_task_sha256": "799bf0d9dddd541a03b1e3d93c7766149f4bf0b5284d8c16229b2c6bcfd9bb01",
+      "instruction_sha256": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+      "task_toml_sha256": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748",
+      "private_oracle_sha256": "05ea454657a958b9dd49e9e8f90da3b516bdb4cbded84eee8f654f0fe9caaa7a",
+      "canonical_corpus_location": "inside the recorded restricted durable canonical archive, corpus/harbor/train/real-cd14-gene-length-association-v1-20260925-00000",
+      "private_oracle_location": "inside the recorded restricted durable canonical archive, corpus/oracles/real-cd14-gene-length-association-v1-20260925-00000",
+      "canonical_archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/afccf40f06f82b11eb64dd8273c47722aa49ee9fd6f7be8b67886ab77fa2b2f3/cd14-canonical-outputs.tar.zst",
+        "bytes": 34269653,
+        "sha256": "afccf40f06f82b11eb64dd8273c47722aa49ee9fd6f7be8b67886ab77fa2b2f3",
+        "source_iris_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-cd14-canonical-20260925-132052/0/09e1f2fd99e30ad8/outputs.tar.zst",
+        "source_sha256_verified": "afccf40f06f82b11eb64dd8273c47722aa49ee9fd6f7be8b67886ab77fa2b2f3",
+        "destination_sha256_verified": "afccf40f06f82b11eb64dd8273c47722aa49ee9fd6f7be8b67886ab77fa2b2f3",
+        "restricted": true
+      },
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-cd14-gene-length-harbor-20260925-134258/0/7af7dbd5ab4447b4/outputs.tar.zst",
+        "bytes": 39181241,
+        "sha256": "b110749de5968e3fb2676a5083276e3bb85020ba1a74ab2add885d018d740948",
+        "retention": "Iris regional temporary seven-day output"
+      },
+      "evidence": {
+        "local_sanitized_file": "/tmp/bio-cd14-harbor-20260925-v5/harbor-evidence.json",
+        "sha256": "7854da8a006e2c99be4429166c5ba850d5b39acd5ee9da9c9d3b68e1c28a308a",
+        "preservation_file": "/tmp/bio-cd14-harbor-20260925-v5/preservation.json",
+        "preservation_sha256": "c1340b3a9227074e7e5252ec34240de7321fad0ee9f4c5a7fcd5810cf7a4ee64"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-f2cbfd93",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-0"
+      },
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 24,
+        "timeout_seconds": 7200,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "cleanup": {
+        "trials": 7,
+        "actions": 0,
+        "remaining": 0
+      },
+      "summary_identity_check": "Each of five scientific table corruptions retained all eight passing summary fields while only its intended table failed. Empty output failed all three tables.",
+      "cases": [
+        {
+          "control": "fresh-native-oracle",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000",
+          "task_sha256": "799bf0d9dddd541a03b1e3d93c7766149f4bf0b5284d8c16229b2c6bcfd9bb01",
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 1,
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "changed_gene_span",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-changed_gene_span",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "genes.tsv"
+          ],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "changed_count_eligibility",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-changed_count_eligibility",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "genes.tsv"
+          ],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "changed_mean_expression",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-changed_mean_expression",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "genes.tsv"
+          ],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "changed_cell_population",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-changed_cell_population",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "cell_assignments.tsv"
+          ],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "changed_donor_library",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-changed_donor_library",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "donor_qc.tsv"
+          ],
+          "summary_checks_passed": 8,
+          "summary_checks_total": 8,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        },
+        {
+          "control": "empty-output",
+          "task_id": "real-cd14-gene-length-association-v1-20260925-00000-empty-output",
+          "task_sha256": null,
+          "task_file_hashes": {
+            "instruction.md": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+            "task.toml": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748"
+          },
+          "expected_reward": 0,
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "cell_assignments.tsv",
+            "donor_qc.tsv",
+            "genes.tsv"
+          ],
+          "summary_checks_passed": 0,
+          "summary_checks_total": 0,
+          "terminal_validated": true,
+          "terminal_model_calls": 0
+        }
+      ],
+      "limitations": "Independent, CC BY 4.0 Parse PBMC single-cell UMI observations were classified by frozen markers and aggregated into four CD14 donor pseudobulks. CPM is the declared expression unit; Ensembl release-111 inclusive gene spans and total CD14 count >=10 define the untransformed Pearson coefficient. Verified q22-q4 explicitly requires that filter. Original q22-q4 does not, so its scalar remains unvalidated and has component-only credit. Neither source numerical answer nor q22-q1 is reproduced; broad benchmark-lineage review and training weighting remain separate."
     }
   ]
 }

@@ -700,6 +700,74 @@
       ],
       "source_snapshot_revision": "4a634229b73497ddc57ada1adcc193a61236e519",
       "source_bundle_sha256": "dad39d8e98d96155c37c6251f1460f8c3752f1129687d5e209667135adacf6f7"
+    },
+    {
+      "recipe": "real-cd14-gene-length-association",
+      "task_id": "real-cd14-gene-length-association-v1-20260925-00000",
+      "instruction": "Analyze the observed Parse Evercode WT Mini v3 human PBMCs from four healthy donors. The dataset is CC BY 4.0; the cells are author-filtered but have no supplied cell-type label. All inputs are in /app/inputs. matrix.mtx.gz is a gzip-compressed MatrixMarket integer coordinate matrix with 4,861 cells as rows and 62,710 genes as columns; genes.csv and cells.csv list matching rows in order. An explicit zero coordinate is legal and contributes nothing. annotations.tsv.gz is a compact release-111 Ensembl GTF gene-feature export with gene_id, chromosome, start, end and gene_biotype. First verify matrix row totals against cells.csv tscp_count. For marker assignment only, compute log1p(10000 * marker count / cell total) and average the marker values within each panel: T {CD3D,CD3E,TRAC,CD2}, B {MS4A1,CD79A,CD79B,BANK1}, monocyte {LYZ,FCN1,S100A8,S100A9,CTSS}, NK exclusion {NKG7,GNLY,KLRD1,FCGR3A}. Assign the highest lineage only at score >=0.55 and margin >=0.20, with a detected anchor: T one of CD3D/CD3E/TRAC; B one of MS4A1/CD79A; monocyte LYZ plus one of FCN1/S100A8/S100A9. Otherwise label ambiguous; highest NK becomes other. Within T cells, compare CD4 {IL7R,CCR7,LTB,MAL} and CD8 {CD8A,GZMK,CCL5,GZMA}; require subtype score >=0.45, margin >=0.15 and an anchor (CD4 IL7R/CCR7/MAL; CD8 CD8A/GZMK), else ambiguous_T. Exclude other/ambiguous cells from the CD14 association. CD14 is held out from classification. Preserve each cell's label and reason in cell_assignments.tsv and write donor_qc.tsv with group counts, all-gene CD14 library totals and CD14 held-out CPM enrichment versus the maximum other classified group; use 0.1 CPM pseudocount for the ratio. Require at least 25 CD14 cells per donor, at most 65% other/ambiguous cells overall, and CD14 enrichment >=1.5 in at least three donors. Sum raw UMI counts for CD14-like cells separately within each donor across all 62,710 genes. Normalize each donor gene count to CPM using its all-gene CD14 pseudobulk total. Join Parse gene IDs to GTF genes after stripping only Ensembl version suffixes; retain unique protein-coding genes on chromosomes 1 through 22, X and Y, and compute inclusive gene span=end-start+1 base pairs. A gene is eligible only when its total observed CD14 count across donors is >=10. For every joined coding gene, write genes.tsv with span, four donor counts and CPMs, total count, mean CPM, CPM-prevalence QC and eligibility. The CPM >=1 in at least two donors prevalence is reported only as QC; it does not filter the coefficient. Compute untransformed arithmetic mean donor CPM and Pearson r plus two-sided p-value against untransformed gene span over precisely the eligible genes. Report the summary in answer.json. Marker-defined single-cell pseudobulks are an adaptation to sorted-cell bulk data, and CPM normalization defines the expression unit; do not claim equivalence to the original study's numerical answer.\n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nAll fields belong together in each record; field names are not separate record IDs.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\nExample of one record in the array: repeat the record for every requested ID. Replace all angle-bracket placeholders with the requested IDs and computed values.\n```json\n[\n  {\n    \"id\": \"<requested record id>\",\n    \"input_cells\": \"<integer>\",\n    \"selected_cells\": \"<integer>\",\n    \"donors\": \"<integer>\",\n    \"joined_coding_genes\": \"<integer>\",\n    \"eligible_genes\": \"<integer>\",\n    \"cpm_prevalence_qc\": \"<integer>\",\n    \"pearson_r\": \"<number>\",\n    \"pearson_p\": \"<number>\"\n  }\n]\n```\n- input_cells: integer (cells); all author-filtered observed PBMC cells.\n- selected_cells: integer (cells); marker-defined CD14-like cells in all donors.\n- donors: integer (donors); independent donor pseudobulks.\n- joined_coding_genes: integer (genes); stable-ID matched canonical protein-coding genes.\n- eligible_genes: integer (genes); joined coding genes with total CD14 count at least ten.\n- cpm_prevalence_qc: integer (genes); eligible genes with CPM at least one in two donors; QC only.\n- pearson_r: number (correlation); Pearson r of raw gene span against mean donor CPM; absolute tolerance 1e-10, relative tolerance 1e-08.\n- pearson_p: number (two-sided p-value); SciPy Pearson two-sided p-value; absolute tolerance 1e-300, relative tolerance 1e-05.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\nAlso write /app/cell_assignments.tsv as UTF-8 TSV, with an id column and exactly these columns: donor, label, reason, lineage_score, lineage_margin. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- cell_assignments.tsv.donor: text (donor); Parse sample donor; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_assignments.tsv.label: text (marker-defined group); frozen marker assignment; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_assignments.tsv.reason: text (assignment reason); frozen assignment or exclusion reason; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_assignments.tsv.lineage_score: number (score); highest log-normalized lineage marker mean; absolute tolerance 1e-06, relative tolerance 1e-07.\n- cell_assignments.tsv.lineage_margin: number (score); highest minus runner-up lineage score; absolute tolerance 1e-06, relative tolerance 1e-07.\nAlso write /app/donor_qc.tsv as UTF-8 TSV, with an id column and exactly these columns: cd14_cells, cd4_cells, cd8_cells, b_cells, other_ambiguous_cells, cd14_total_umi, cd14_marker_cpm, max_other_cd14_marker_cpm, held_out_enrichment. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- donor_qc.tsv.cd14_cells: integer (cells); CD14-like cells in this donor; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.cd4_cells: integer (cells); CD4-like comparison cells; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.cd8_cells: integer (cells); CD8-like comparison cells; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.b_cells: integer (cells); B-like comparison cells; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.other_ambiguous_cells: integer (cells); all other or ambiguous cells; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.cd14_total_umi: integer (UMIs); all-gene CD14 donor pseudobulk library size; absolute tolerance 0.0, relative tolerance 0.0.\n- donor_qc.tsv.cd14_marker_cpm: number (CPM); CD14 held-out marker CPM in CD14 pseudobulk; absolute tolerance 1e-09, relative tolerance 1e-08.\n- donor_qc.tsv.max_other_cd14_marker_cpm: number (CPM); largest comparison-group CD14 CPM; absolute tolerance 1e-09, relative tolerance 1e-08.\n- donor_qc.tsv.held_out_enrichment: number (ratio); CD14 CPM enrichment with 0.1 pseudocount; absolute tolerance 1e-09, relative tolerance 1e-08.\nAlso write /app/genes.tsv as UTF-8 TSV, with an id column and exactly these columns: gene_name, span_bp, total_cd14_count, count_Donor_1, count_Donor_2, count_Donor_3, count_Donor_4, cpm_Donor_1, cpm_Donor_2, cpm_Donor_3, cpm_Donor_4, cpm_prevalence, mean_cpm, eligible. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- genes.tsv.gene_name: text (symbol); Parse gene symbol; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.span_bp: integer (base pairs); inclusive canonical release-111 GTF gene span; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.total_cd14_count: integer (UMIs); sum across four donor pseudobulks; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.count_Donor_1: integer (UMIs); observed CD14 donor 1 pseudobulk count; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.count_Donor_2: integer (UMIs); observed CD14 donor 2 pseudobulk count; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.count_Donor_3: integer (UMIs); observed CD14 donor 3 pseudobulk count; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.count_Donor_4: integer (UMIs); observed CD14 donor 4 pseudobulk count; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.cpm_Donor_1: number (CPM); donor 1 count divided by all-gene library total; absolute tolerance 1e-09, relative tolerance 1e-08.\n- genes.tsv.cpm_Donor_2: number (CPM); donor 2 count divided by all-gene library total; absolute tolerance 1e-09, relative tolerance 1e-08.\n- genes.tsv.cpm_Donor_3: number (CPM); donor 3 count divided by all-gene library total; absolute tolerance 1e-09, relative tolerance 1e-08.\n- genes.tsv.cpm_Donor_4: number (CPM); donor 4 count divided by all-gene library total; absolute tolerance 1e-09, relative tolerance 1e-08.\n- genes.tsv.cpm_prevalence: integer (donors); donors with CPM at least one; QC only; absolute tolerance 0.0, relative tolerance 0.0.\n- genes.tsv.mean_cpm: number (CPM); untransformed arithmetic mean of four donor CPM values; absolute tolerance 1e-09, relative tolerance 1e-08.\n- genes.tsv.eligible: integer (indicator); one when total CD14 count is at least ten; absolute tolerance 0.0, relative tolerance 0.0.\n",
+      "instruction_sha256": "3079ddb150036a6f97b5ca19ce9ffe9b7a45b38d088cf9da1ea3d5038d8a7f35",
+      "task_metadata_sha256": "b3f1e649b7d75cc73e8f4e782701e87e5c51de76c475de1a0e09eaed1bf4c748",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 4096,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 60,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "Parse:WT-Mini-v3-PBMC"
+      ],
+      "derivation": "Unchanged observed Parse single-cell UMI coordinates and donor metadata; release-111 GTF gene features exported without changing coordinates; frozen marker-defined CD14 donor pseudobulks and exact total-count filter.",
+      "workflow_scope": "connected",
+      "inputs": [
+        {
+          "name": "matrix.mtx.gz",
+          "bytes": 31458838,
+          "sha256": "ced2e6e6bfbd33cc1954407f81a61324fa494fe7c6966da9337fcb86feede5ec",
+          "preview": "Binary observed input; preview omitted."
+        },
+        {
+          "name": "genes.csv",
+          "bytes": 1974562,
+          "sha256": "8efea9061252bf0e5c021fc6125e576cead0ad5621a337cb655fde6403820f33",
+          "preview": "Observed tabular input; preview omitted."
+        },
+        {
+          "name": "cells.csv",
+          "bytes": 266304,
+          "sha256": "d5fb16e0a7ef1533127569989ec18bda38f41dc4b366bca0e8f2f24fa88acf8a",
+          "preview": "Observed tabular input; preview omitted."
+        },
+        {
+          "name": "annotations.tsv.gz",
+          "bytes": 874207,
+          "sha256": "d6984edb8b69e76af4dfdb320384a16a35bbe4e8d23306c10703a65ab7f99938",
+          "preview": "Binary observed input; preview omitted."
+        },
+        {
+          "name": "query.json",
+          "bytes": 139,
+          "sha256": "6eb48528d4c0cf225405250ee153301c1e37a5a106fb8bd14b71b2479a3f7af8",
+          "preview": "{\"minimum_cd14_cells_per_donor\": 25, \"minimum_coding_gene_overlap\": 15000, \"minimum_eligible_genes\": 5000, \"minimum_total_gene_count\": 10}\n"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json",
+        "/app/cell_assignments.tsv",
+        "/app/donor_qc.tsv",
+        "/app/genes.tsv"
+      ],
+      "source_snapshot_revision": "cd431fbc50954aef18ff202a9688d32cff451a36",
+      "source_bundle_sha256": "4852e364a43dc11e0bd4266def885af35a83bc31f75d963c8c5c48f2ff0b30fc",
+      "benchmark_scope": "Independent observed-data workflow validation of BixBench-Verified bix-22-q4 with its explicit total-count >=10 filter. Original bix-22-q4 lacks that filter and has component-only evidence; no original numeric-answer reproduction or bix-22-q1 coverage."
     }
   ]
 }

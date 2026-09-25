@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-25T12:15:00Z",
+  "updated_at": "2026-09-25T14:00:00Z",
   "benchmark": "BixBench-Verified-50",
   "inventory": "bixbench-verified-50.json",
   "purpose": "Choose the next realistic Harbor tasks for a Verified-first MVP. This is an authoring queue, not a coverage ledger.",
@@ -38,7 +38,7 @@
     {
       "workstream": "gene-length-expression-association",
       "owner": "bam_harbor_sol_high",
-      "state": "independent CD14 source gate passed; exact-question task authoring, no endpoint credit",
+      "state": "independent CD14 native and seven-case Harbor workflow validated for q22-q4 only; single-cell donor-CPM adaptation, no source-answer credit",
       "candidate": "cd14-gene-length-expression",
       "endpoint_ids": [
         "bix-22-q4"
@@ -98,7 +98,13 @@
         "bix-22-q4"
       ],
       "capsule_count": 1,
-      "state": "task-authoring"
+      "state": "partial-workflow-validated",
+      "validated_question_ids": [
+        "bix-22-q4"
+      ],
+      "open_question_ids": [
+        "bix-22-q1"
+      ]
     },
     {
       "rank": 5,

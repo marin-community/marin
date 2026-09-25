@@ -57,6 +57,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `bed-complement` | bed4, chrom-sizes | interval-complement, chromosome-boundaries | BEDTools |
 | `bedgraph-weighted-signal` | bedgraph, bed4 | weighted-signal, uncovered-bases | deepTools, UCSC Kent utilities |
 | `bedgraph-threshold-peaks` | bedgraph | signal-threshold, peak-merging, boundary-semantics | MACS2 / MACS3 |
+| `real-anole-age-cpg-density` | observed methylation TSV gzip, scaffold lengths TSV, sample metadata TSV | age-associated CpG selection, dyad deduplication, strict extreme thresholds, scaffold density | SciPy |
 
 ## Expression
 
@@ -72,6 +73,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-rnaseq-shrinkage-enrichment-audit` | TSV count matrix, TSV sample metadata, JSON query | count filtering, effect shrinkage, multiple testing, annotation universes, GO enrichment | DESeq2 |
 | `real-singlecell-read-qc` | Matrix Market, gzip, TSV cell metadata, TSV feature metadata, JSON query | single-cell read-count QC, ERCC spike-ins, ordered cell and gene filtering, sparse matrix export | Scanpy |
 | `real-singlecell-representation-audit` | H5AD, TSV, JSON | observed read-count filtering, sparse CP10k/log1p normalization, variable genes, PCA scores and depth diagnostics | Scanpy |
+| `real-cd14-gene-length-association` | MatrixMarket gzip, CSV, GTF-derived TSV gzip | marker-defined CD14 cells, donor pseudobulk CPM, protein-coding gene spans, Pearson association | SciPy |
 | `donor-counts` | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | csv-header | sample-joins, cohort-selection, denominators | Scanpy |
 | `transcript-tpm` | csv-header | transcript-joins, abundance-units, decoys | Salmon, kallisto |
@@ -172,6 +174,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-clinical-kaplan-meier` | clinical TSV, survival TSV | patient joins, randomized cohort, censoring, tied events | Additional domain coverage |
 | `real-clinical-adjusted-cox` | clinical TSV, survival TSV | complete cases, Cox regression, Breslow ties, adjusted uncertainty | Additional domain coverage |
 | `real-clinical-paired-visits` | clinical TSV, longitudinal TSV | patient joins, nearest visits, missingness, paired changes | Additional domain coverage |
+| `real-clinical-univariable-logit-audit` | observed trial TSV, JSON | complete-case cohort, age-only and BMI-only logistic models, AIC, Wald uncertainty | statsmodels |
 | `enrichment-universe` | gmt, gene-lists | background-universe, hypergeometric-tail, multiple-testing | Additional domain coverage |
 | `design-estimability` | csv-header | model-rank, confounding, valid-stopping | DESeq2 |
 | `paired-treatment-effect` | csv-header | paired-design, technical-replicates, missing-visits | limma |

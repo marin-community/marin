@@ -2263,18 +2263,24 @@
       "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
       "source_question_sha256": "d835f729dcd6b7e0b15b6df32b528cbd843733913eaf37fee2ebc6ab1be552a7",
       "source_eval_mode": "range_verifier",
-      "status": "unmapped",
-      "assessment": "Every revised or unchanged question endpoint inspected. Family prerequisites are shared with the original BixBench inventory; current protocols retain separate provenance. Capsule data, reference notebooks and expected answers are excluded from training authoring.",
+      "status": "workflow-validated",
+      "assessment": "The independent observed CD14 task joins stable Parse gene IDs to Ensembl release-111 protein-coding inclusive gene spans, retains genes with total observed CD14 count >=10, takes the arithmetic mean of four donor CPM pseudobulks without a log transform, and grades the Pearson coefficient and all gene-level intermediates. Native and seven-case Harbor oracle/artifact checks passed. Marker-defined single-cell donor pseudobulks and CPM are a declared modality/unit adaptation to the source sorted-cell bulk expression.",
       "scientific_decisions": [
         "Join expressed protein-coding genes to lengths, apply the total-count filter, and correlate length with sample-mean expression."
       ],
-      "recipes": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "recipes": [
+        "real-cd14-gene-length-association"
+      ],
+      "independent_data_sources": [
+        "Parse:WT-Mini-v3-PBMC"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/8aba016940bf.json",
+        "container_validation.json: /exedev/bio-cd14-gene-length-harbor-20260925-134258"
+      ],
       "runtime_seconds": null,
       "remaining_gaps": [
-        "Join expressed protein-coding genes to lengths, apply the total-count filter, and correlate length with sample-mean expression.",
-        "Validate independent real-data artifacts for this protocol before assigning recipe coverage; source LLM grading cannot supply the acceptance rule."
+        "Independent, CC BY 4.0 Parse PBMC single-cell UMI observations were classified by frozen markers and aggregated into four CD14 donor pseudobulks. CPM is the declared expression unit; Ensembl release-111 inclusive gene spans and total CD14 count >=10 define the untransformed Pearson coefficient. This validates the question workflow on independent observations, not the original sorted-cell bulk numerical answer. The four-group q22-q1 endpoint remains uncovered; broad benchmark-lineage review and training weighting remain separate."
       ]
     },
     {

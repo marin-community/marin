@@ -28,11 +28,11 @@ uses **scientific area → family → competency**, with reusable operations and
 independent resolution, spatiality, process and integration facets. The explorer
 uses nested circles, with equal-sized leaves and filters across branches. Its tree
 is a primary navigation/allocation view; biological topics can overlap. Its curriculum field uses the existing task-curriculum schema.
-The revised draft has 11 areas, 26 families and 54 competencies. It separates
+The revised draft has 11 areas, 26 families and 56 competencies. It separates
 genetics from genomics and phylogenetics from ecological analysis. Single-cell,
 spatial, gene regulation, evolution and multiomics are cross-cutting facets. Generic
 data preparation has no separate biology quota. Definitions draw on 51 scientific
-workstreams plus three recipe-derived abilities; the remaining workstream supplies
+workstreams plus five recipe-derived abilities; the remaining workstream supplies
 cross-cutting data-handling research. The taxonomy records EDAM, NHGRI and Gene
 Ontology references and the remaining categorization questions.
 Definitions and primary candidate assignments remain provisional. None has yet
@@ -50,7 +50,7 @@ Scaling can reuse a recipe with distinct real studies, designs or scientific
 questions. Reject duplicate and cosmetic variants; no fixed instance count or
 dataset-size ceiling applies. The current builder defaults to one example per
 recipe and does not yet automate balanced generation or source acquisition.
-Task generation has resumed; taxonomy and weighting review will continue separately.
+As of 2026-09-25, authoring is paused for taxonomy and weighting review.
 
 The [author handoff prompt](bio-task-authoring-prompt.md) assigns each author one
 complete task, including its remote CPU jobs, Harbor validation and public example.

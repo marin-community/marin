@@ -2385,9 +2385,11 @@
         "RNA-seq",
         "Transcriptomics"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The observed CD14 task validates the stable gene-ID/Ensembl span join, protein-coding selection, donor mean CPM and Pearson computation, but grades the Verified question’s total observed count >=10 filter. The original q22-q4 question does not specify that filter and asks for the coefficient over protein-coding CD14 genes; this changes the eligible set and coefficient. Its exact final scalar remains unvalidated.",
+      "recipes": [
+        "real-cd14-gene-length-association"
+      ],
       "required_stages": [
         "join gene lengths and biotypes by stable identifier",
         "select protein-coding genes and cell-type expression columns",
@@ -2395,8 +2397,8 @@
         "estimate gene-length versus expression association"
       ],
       "remaining_gaps": [
-        "Use real length annotations from the matching release; gene length is not an expression column and expression transformation changes the estimand.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Grade the original q22-q4 Pearson coefficient on its unrestricted protein-coding CD14 gene set, with an explicit expressed-gene policy if required by its original data context; the Verified total-count >=10 scalar is not interchangeable.",
+        "Independent Parse marker-classified single-cell donor CPM pseudobulks adapt the source sorted-cell bulk expression. No source numerical-answer reproduction; broad benchmark-lineage review and training weighting remain separate."
       ],
       "required_formats": [
         "gene-length/biotype annotations",
@@ -2404,8 +2406,13 @@
         "sample metadata"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
+      "independent_data_sources": [
+        "Parse:WT-Mini-v3-PBMC"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/8aba016940bf.json",
+        "container_validation.json: /exedev/bio-cd14-gene-length-harbor-20260925-134258"
+      ],
       "runtime_seconds": null,
       "workflow_family": "gene-length-expression-association",
       "endpoint_review": {
@@ -2413,7 +2420,7 @@
         "question_sha256": "3ffd8d82127a82e2c50533d058195e981fc40a48c62ae248d29b7253ba641a97",
         "proposed_design_id": "bix-design-gene-length-expression",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "related-verified-workflow-component-only"
       }
     },
     {
