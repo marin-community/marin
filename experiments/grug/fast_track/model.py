@@ -189,6 +189,28 @@ def _embedding_gather_bwd(residuals, g: jax.Array):
 _embedding_gather.defvjp(_embedding_gather_fwd, _embedding_gather_bwd)
 
 
+# Pair-combine multiplier and murmur3 finalizer constants for the (previous, current) bigram hash.
+_BIGRAM_HASH_PAIR = 0x9E3779B1
+_MURMUR_C1 = 0x85EBCA6B
+_MURMUR_C2 = 0xC2B2AE35
+
+
+def _bigram_hash_ids(
+    token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None, num_buckets: int
+) -> Int[Array, "B S"]:
+    """Hash each (previous token, token) pair into ``num_buckets`` rows. At position 0 and at every
+    document start the previous token is replaced by the sentinel ``num_buckets`` (never a real id)."""
+    prev = jnp.pad(token_ids[:, :-1], ((0, 0), (1, 0)), constant_values=num_buckets)
+    if segment_ids is not None:
+        starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+        prev = jnp.where(starts, num_buckets, prev)
+    x = prev.astype(jnp.uint32) * jnp.uint32(_BIGRAM_HASH_PAIR) + token_ids.astype(jnp.uint32)
+    x = (x ^ (x >> 16)) * jnp.uint32(_MURMUR_C1)
+    x = (x ^ (x >> 13)) * jnp.uint32(_MURMUR_C2)
+    x = x ^ (x >> 16)
+    return (x % jnp.uint32(num_buckets)).astype(jnp.int32)
+
+
 def _partition_spec_of(x: jax.Array) -> P | None:
     sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
     if isinstance(sharding, NamedSharding):
@@ -275,6 +297,9 @@ class GrugModelConfig:
     """Weight of the auxiliary loss at step 0; annealed linearly to 0 at ``aux_lm_steps``."""
     aux_lm_steps: int = 500
     second_embed: bool = False
+    second_embed_bigram: bool = False
+    """Index the second table by a hash of (previous token, token) instead of the token: a bigram
+    embedding with ``vocab_size`` hashed rows (the previous token is a sentinel at document starts)."""
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
@@ -1457,7 +1482,11 @@ class Transformer(eqx.Module):
             extra_sources = ()
             if self.token_embed2 is not None:
                 assert self.embed2_norm is not None
-                extra_sources = (self.embed2_norm(_embedding_gather(self.token_embed2, token_ids)),)
+                ids2 = token_ids
+                if cfg.second_embed_bigram:
+                    doc_start = None if segment_ids is None else segment_ids[0]
+                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.vocab_size)
+                extra_sources = (self.embed2_norm(_embedding_gather(self.token_embed2, ids2)),)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
