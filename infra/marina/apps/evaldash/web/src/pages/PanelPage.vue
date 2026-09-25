@@ -27,6 +27,7 @@ import {
   type PanelRow,
 } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
@@ -576,19 +577,7 @@ function goToModel(model: string) {
       {{ error }}
     </div>
 
-    <details v-if="data?.policy_rejections.length" class="rounded border border-status-warning-border bg-status-warning-bg text-sm p-3 mb-4">
-      <summary class="cursor-pointer text-status-warning">
-        {{ data.policy_rejections.length }} run(s) excluded from this cohort
-      </summary>
-      <ul class="mt-2 space-y-1 text-text-secondary">
-        <li v-for="rejection in data.policy_rejections" :key="rejection.run_id">
-          <button class="font-mono text-accent hover:underline" @click="goToRun(rejection.run_id)">
-            {{ rejection.model }} · {{ rejection.benchmark }}
-          </button>
-          — {{ rejection.reasons.join('; ') }}
-        </li>
-      </ul>
-    </details>
+    <PolicyRejections v-if="data" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
 
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 

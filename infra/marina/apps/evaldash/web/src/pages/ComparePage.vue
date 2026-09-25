@@ -17,6 +17,7 @@ import { cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 
 const route = useRoute()
@@ -177,19 +178,7 @@ const chartSeries = computed(() =>
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
     <div v-else-if="data" class="space-y-6">
-      <details v-if="data.policy_rejections.length" class="rounded border border-status-warning-border bg-status-warning-bg text-sm p-3">
-        <summary class="cursor-pointer text-status-warning">
-          {{ data.policy_rejections.length }} run(s) excluded from this comparison
-        </summary>
-        <ul class="mt-2 space-y-1 text-text-secondary">
-          <li v-for="rejection in data.policy_rejections" :key="rejection.run_id">
-            <button class="font-mono text-accent hover:underline" @click="router.push(`/runs/${rejection.run_id}`)">
-              {{ rejection.model }} · {{ rejection.benchmark }}
-            </button>
-            — {{ rejection.reasons.join('; ') }}
-          </li>
-        </ul>
-      </details>
+      <PolicyRejections :rejections="data.policy_rejections" scope="this comparison" />
       <!-- shared-benchmark ranking -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">

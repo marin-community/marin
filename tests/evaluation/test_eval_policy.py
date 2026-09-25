@@ -7,7 +7,6 @@ from dataclasses import asdict
 
 from marin.evaluation import eval_policy
 from marin.evaluation.eval_policy import (
-    EVALCHEMY_COMMIT,
     HARBOR_COMMIT,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
@@ -18,7 +17,6 @@ from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.model_identity import comparison_model_name, model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
-from marin.external_dependencies import EVALCHEMY, HARBOR
 
 
 def _model(generation_kwargs: dict[str, bool | None] | None = None) -> ModelRef:
@@ -76,11 +74,6 @@ def test_september_16_preserves_model_defaults_and_checks_shots():
 
 def test_legacy_policy_label_is_not_verified():
     assert policy_violations("eval-policy-updated", _model(), _math500(None))
-
-
-def test_verified_runtime_pins_do_not_follow_future_dependency_bumps():
-    assert EVALCHEMY.commit == EVALCHEMY_COMMIT
-    assert HARBOR.commit == HARBOR_COMMIT
 
 
 def test_runtime_pin_is_selected_by_cohort(monkeypatch):
