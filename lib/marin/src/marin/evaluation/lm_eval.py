@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from marin.execution.artifact import Artifact
 from marin.inference.types import RunningModel
@@ -84,6 +86,27 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun, output_path: str) -> None:
     if run.batch_size is not None:
         command.extend(["--batch_size", str(run.batch_size)])
     subprocess.run(command, check=True)
+    if run.num_fewshot is not None:
+        _check_effective_fewshot(output_path, run.num_fewshot)
+
+
+def _check_effective_fewshot(output_path: str, requested: int) -> None:
+    """Reject results when a task silently ignores an explicit shot-count override."""
+    result_files = list(Path(output_path).rglob("results_*.json"))
+    if not result_files:
+        raise ValueError(
+            f"lm-eval wrote no results under {output_path} to verify the requested {requested}-shot setting"
+        )
+    for result_file in result_files:
+        configs = json.loads(result_file.read_text()).get("configs")
+        if not configs:
+            raise ValueError(f"lm-eval results at {result_file} lack task configs for shot-count verification")
+        for task, config in configs.items():
+            effective = config.get("num_fewshot")
+            if effective != requested:
+                raise ValueError(
+                    f"lm-eval task {task} used {effective} shots; requested {requested} (see {result_file})"
+                )
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
