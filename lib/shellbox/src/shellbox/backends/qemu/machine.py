@@ -249,7 +249,6 @@ class QemuMachine:
         self.active_acceleration = await query_acceleration(qmp_socket)
 
     async def open_shell(self) -> QemuShellSession:
-        """Open the guest's persistent Bash session."""
         if self._shell is not None:
             return self._shell
         check = await self.run(Command(("/bin/sh", "-c", "test -x /bin/bash && test -x /harbor/pty-agent")))

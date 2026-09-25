@@ -101,7 +101,6 @@ class ImageCache:
 
 @cache
 def process_image_cache(directory: Path, skopeo: Path, authfile: Path | None, policy: Path | None) -> ImageCache:
-    """Share preparation across machine factories created by Harbor trials."""
     return ImageCache(directory.resolve(), skopeo=skopeo, authfile=authfile, policy=policy)
 
 
