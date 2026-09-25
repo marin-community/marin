@@ -123,7 +123,7 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.24"},
+        hash_attrs={"version": "2026.09.24", "think_tokens": TERMINUS_THINK_TOKENS},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed
