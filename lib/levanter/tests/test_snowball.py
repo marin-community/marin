@@ -336,14 +336,16 @@ def test_snowball_load_path_multidevice_sharding():
 
 
 def test_snowball_fresh_process_hf_discovery(tmp_path):
-    """grug_moe must resolve via ``from_hf`` in a fresh interpreter with nothing pre-imported."""
+    """HF config loading must leave the JAX backend uninitialized for distributed setup."""
     cfg = _tiny_config()
     hf = cfg.to_hf_config(cfg.vocab_size)
     (tmp_path / "config.json").write_text(__import__("json").dumps(hf.to_dict()))
 
     script = textwrap.dedent(
         """
+        import socket
         import sys
+        import jax
         # Deliberately do NOT import levanter.models.snowball.
         from transformers import AutoConfig
         from levanter.models.lm_model import LmConfig
@@ -354,6 +356,14 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
         cfg = AutoConfig.from_pretrained(sys.argv[1])
         assert type(cfg).__name__ == "GrugMoeHfConfig", type(cfg).__name__
         assert cfg.model_type == "grug_moe"
+        from levanter.models.snowball import SnowballConfig
+        SnowballConfig.from_hf_config(cfg)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        jax.distributed.initialize(coordinator_address=f"127.0.0.1:{port}", num_processes=1, process_id=0)
+        assert jax.distributed.is_initialized()
+        jax.distributed.shutdown()
         print("OK")
         """
     )
