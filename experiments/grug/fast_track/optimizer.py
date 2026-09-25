@@ -154,8 +154,14 @@ def scale_with_grug_muonh(
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
     head_dim: int | None = None,
+    neuron_norm_beta2: float | None = None,
 ) -> optax.GradientTransformation:
-    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step."""
+    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
+
+    ``neuron_norm_beta2`` adds NorMuon's (arXiv 2510.05491) neuron-wise normalization between the two:
+    each output column of the orthogonalized direction is divided by the root of an EMA of its mean
+    square (over the input axis); the hyperball step then sets the overall magnitude.
+    """
     muon_transform = _grug_scale_with_muon(
         momentum=momentum,
         nesterov=nesterov,
@@ -165,13 +171,38 @@ def scale_with_grug_muonh(
         head_dim=head_dim,
     )
 
+    def _neuron_second_moment(x):
+        if x is None or not hasattr(x, "ndim") or x.ndim < 2:
+            return None
+        return jnp.zeros(x.shape[:-2] + x.shape[-1:], jnp.float32)
+
     def init_fn(params):
-        return muon_transform.init(params)
+        muon_state = muon_transform.init(params)
+        if neuron_norm_beta2 is None:
+            return muon_state
+        return muon_state, jax.tree.map(_neuron_second_moment, params)
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
-        muon_updates, next_state = muon_transform.update(updates, state, params)
+        if neuron_norm_beta2 is None:
+            muon_updates, next_state = muon_transform.update(updates, state, params)
+        else:
+            muon_state, second_moment = state
+            muon_updates, muon_state = muon_transform.update(updates, muon_state, params)
+
+            def neuron_normalize(u, v):
+                if v is None:
+                    return u, v
+                v = neuron_norm_beta2 * v + (1 - neuron_norm_beta2) * jnp.mean(
+                    jnp.square(u.astype(jnp.float32)), axis=-2
+                )
+                return (u / (jnp.sqrt(v)[..., None, :] + 1e-10)).astype(u.dtype), v
+
+            pairs = jax.tree.map(neuron_normalize, muon_updates, second_moment, is_leaf=lambda x: x is None)
+            is_pair = lambda x: isinstance(x, tuple) and len(x) == 2  # noqa: E731
+            muon_updates = jax.tree.map(lambda t: t[0], pairs, is_leaf=is_pair)
+            next_state = (muon_state, jax.tree.map(lambda t: t[1], pairs, is_leaf=is_pair))
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
         return muonh_updates, next_state
 
@@ -209,6 +240,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
+    neuron_norm_beta2: float | None = None
+    """NorMuon neuron-wise normalization of the MuonH direction with this second-moment decay (None: off)."""
     """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
 
     def build(self, num_train_steps):
@@ -229,6 +262,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         learning_rate=lr,
                         coefficient_type=self.coefficient_type,
                         head_dim=self.muon_head_dim,
+                        neuron_norm_beta2=self.neuron_norm_beta2,
                     )
                 )
                 components.append(_match_named_update_sharding())
