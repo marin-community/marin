@@ -42,6 +42,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from levanter._debug_logging import flush_debug_output
 from levanter.checkpoint_manifest import CheckpointArray, build_manifest, read_manifest, write_manifest
 from levanter.utils import jax_utils
+from levanter.utils.byte_budget import HostByteBudget
 
 logger = logging.getLogger(__name__)
 
@@ -320,43 +321,6 @@ class _ShardWrite:
         if self.slice_axis is None:
             return None
         return self.slice_axis, self.slice_start, self.slice_limit
-
-
-class _HostByteBudget:
-    """Bound one process's staged save bytes while writes remain in flight."""
-
-    def __init__(self, limit_bytes: int):
-        self._limit = limit_bytes
-        self._in_flight = 0
-        self._peak = 0
-        self._released = asyncio.Event()
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @property
-    def peak_bytes(self) -> int:
-        return self._peak
-
-    async def acquire(self, num_bytes: int) -> None:
-        # Built before the save's loop exists, so bind on first use.
-        self._loop = asyncio.get_running_loop()
-        # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
-        while self._in_flight and self._in_flight + num_bytes > self._limit:
-            self._released.clear()
-            await self._released.wait()
-        self._in_flight += num_bytes
-        self._peak = max(self._peak, self._in_flight)
-
-    def release(self, num_bytes: int) -> None:
-        """Callable from any thread; TensorStore resolves commits off the loop."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(self._release_on_loop, num_bytes)
-
-    def _release_on_loop(self, num_bytes: int) -> None:
-        # Every mutation lands on the loop thread, so acquire never observes a partial update.
-        self._in_flight -= num_bytes
-        self._released.set()
 
 
 def _hashable_index(index) -> tuple:
@@ -734,7 +698,7 @@ def _serialize_arrays(
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config)
-    gate = _HostByteBudget(config.max_staged_host_bytes)
+    gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
