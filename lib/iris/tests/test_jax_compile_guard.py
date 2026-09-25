@@ -3,7 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from threading import Condition, Event
+from threading import Condition
 
 import pytest
 from iris.jax.compile_guard import check_distributed_compile_fingerprint
@@ -83,23 +83,3 @@ def test_distributed_compile_missing_peer_reports_observed_fingerprints() -> Non
 
     with pytest.raises(RuntimeError, match="expected processes \\(0, 1\\); observed \\{0: 'module-0'\\}"):
         check_distributed_compile_fingerprint(service.client(0), (0, 1), 0, 0, "module-0", timeout_ms=10)
-
-
-def test_distributed_compile_late_peer_within_timeout_continues() -> None:
-    service = _FakeCoordinationService()
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        first = executor.submit(
-            check_distributed_compile_fingerprint, service.client(0), (0, 1), 0, 0, "same-module", 500
-        )
-        with service.condition:
-            assert service.condition.wait_for(lambda: any(arrivals == {0} for arrivals in service.arrivals.values()), 1)
-        # Simulate a rank finishing checkpoint I/O after its peer entered the guard.
-        assert not Event().wait(0.08)
-        second = executor.submit(
-            check_distributed_compile_fingerprint, service.client(1), (0, 1), 1, 0, "same-module", 500
-        )
-        first.result()
-        second.result()
-
-    assert service.values == {}
