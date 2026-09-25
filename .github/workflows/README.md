@@ -46,7 +46,9 @@ matches, then posts a completion marker with that SHA and refreshes the
 the matching marker from the Loom GitHub App, so an old label cannot pass a new
 head. Loom's `agentic-lint` profile and the workflow's OIDC federation are
 declared in `infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is
-published from `infra/pulumi/github`.
+published from `infra/pulumi/github`. Until that variable is published, the
+policy accepts a completed local review label so the migration PR can pass
+before its trusted launcher is active on `main`.
 
 Other GitHub agent entry points use the `github-automation` Loom profile.
 Canary failure workflows launch an independent triage session and continue to

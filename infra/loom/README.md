@@ -135,8 +135,11 @@ remaining GitHub agent workflows have individual federation mappings to the
 `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
-`LOOM_AGENTIC_LINT_PROFILE` and `LOOM_GITHUB_AUTOMATION_PROFILE`. Both stack
-updates must finish before these Actions workflows can launch sessions.
+`LOOM_AGENTIC_LINT_PROFILE` and `LOOM_GITHUB_AUTOMATION_PROFILE`. Merge the
+workflow change, then deploy the Loom stack followed by the GitHub Pulumi
+stack. The lint policy accepts the existing local-review label until the
+profile variable is published; after publication it requires a Loom review of
+the current PR head.
 
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
