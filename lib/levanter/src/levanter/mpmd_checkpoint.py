@@ -117,7 +117,7 @@ def wrap_checkpoint_arrays(state: State, shardings: PyTree) -> State:
         )
         local_arrays = []
         for mesh_id in sorted(target.mesh_ids):
-            sharding = NamedSharding(target.mpmd_mesh.unstack[mesh_id], target.spec)
+            sharding = NamedSharding(target.mpmd_mesh.unstack[mesh_id], target.spec, memory_kind=target.memory_kind)
             if sharding.addressable_devices:
                 local_arrays.append(
                     jax.make_array_from_single_device_arrays(

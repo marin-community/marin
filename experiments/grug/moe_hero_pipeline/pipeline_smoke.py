@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import _compute_flops
+from experiments.grug.moe_hero_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_hero_pipeline.pipeline import (
     BATCH_AXES,
     TRAIN_LOSS_KEY,
@@ -181,6 +182,9 @@ def _parse_args() -> argparse.Namespace:
         help="Park real device state on pinned host during disposable warmup, then restore it",
     )
     parser.add_argument("--steps", type=int, default=3)
+    parser.add_argument("--stop-after-step", type=int, help="End a bounded run before the configured total steps")
+    parser.add_argument("--checkpoint-root", help="Restore from and save under this checkpoint directory")
+    parser.add_argument("--checkpoint-every-steps", type=int, default=0)
     parser.add_argument(
         "--synchronize-devices-after-step",
         action="store_true",
@@ -199,6 +203,10 @@ def _parse_args() -> argparse.Namespace:
         parser.error("expert-waves must be positive")
     if args.steps < 1 or args.expert_axis_size < 1:
         parser.error("steps and expert-axis-size must be positive")
+    if args.stop_after_step is not None and not 1 <= args.stop_after_step <= args.steps:
+        parser.error("stop-after-step must be between 1 and steps")
+    if args.checkpoint_every_steps < 0 or (args.checkpoint_every_steps and not args.checkpoint_root):
+        parser.error("checkpoint-every-steps must be nonnegative and requires checkpoint-root when set")
 
     if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
         raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")
@@ -284,11 +292,27 @@ def main() -> None:
     peak_flops = device_flops("h100")
     assert peak_flops is not None
     if args.optimizer == "muonh":
-        optimizer = GrugMoeMuonHConfig(
+        optimizer_config = GrugMoeMuonHConfig(
             learning_rate=13 / 3 * 1e-4, adam_lr=1e-4, warmup=0, lr_schedule="constant"
-        ).build(args.steps)
+        )
+        optimizer = optimizer_config.build(args.steps)
+        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
     else:
         optimizer = optax.adamw(1e-4, b1=0.9, b2=0.95, mu_dtype=jnp.bfloat16, weight_decay=0.1)
+        optimizer_contract = {
+            "type": "adamw",
+            "learning_rate": 1e-4,
+            "b1": 0.9,
+            "b2": 0.95,
+            "mu_dtype": "bfloat16",
+            "weight_decay": 0.1,
+        }
+    checkpoint_contract = {
+        "model": dataclasses.asdict(model_config),
+        "mp_policy": "params=bfloat16,compute=bfloat16,output=bfloat16",
+        "optimizer": optimizer_contract,
+        "training_steps": args.steps,
+    }
     _log(
         "pipeline_init",
         model=dataclasses.asdict(model_config),
@@ -350,6 +374,14 @@ def main() -> None:
     batches = prepared.batches
     denominator = prepared.loss_denominator
     del prepared
+    start_step = 0
+    if args.checkpoint_root:
+        state, start_step = restore_checkpoint(
+            args.checkpoint_root, state, compiled_step.in_shardings[0][0], contract=checkpoint_contract
+        )
+        if args.offload_opt_state:
+            assert all(value.sharding.memory_kind == "pinned_host" for value in jax.tree.leaves(state.opt_state))
+        _log("pipeline_checkpoint_restored", step=start_step, checkpoint_root=args.checkpoint_root)
     # The compiled function takes state as an argument; no real arrays are
     # donated to disposable warmup. Delete old aliases before parking buffers.
     del step
@@ -368,7 +400,8 @@ def main() -> None:
     started = time.monotonic()
     _initialize_pipeline_communicators(mpmd_mesh, placements)
     _log("pipeline_communicators_initialized", elapsed_seconds=time.monotonic() - started)
-    for completed_steps in range(1, args.steps + 1):
+    last_step = args.stop_after_step or args.steps
+    for completed_steps in range(start_step + 1, last_step + 1):
         started = time.monotonic()
         state, metrics = compiled_step(state, batches, denominator)
         jax.block_until_ready((state, metrics))
@@ -389,8 +422,12 @@ def main() -> None:
         )
         if args.run_id and jax.process_index() == 0:
             wandb.log({"train/loss": loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps)
+        if args.checkpoint_root and args.checkpoint_every_steps:
+            if completed_steps % args.checkpoint_every_steps == 0 or completed_steps == last_step:
+                path = save_checkpoint(args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract)
+                _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
     barrier_sync_named("hero_pipeline_smoke_complete", timeout=_MULTIHOST_TIMEOUT)
-    _log("pipeline_complete", steps=args.steps, full_hero=full_hero)
+    _log("pipeline_complete", steps=last_step, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:
         wandb.finish()
 
