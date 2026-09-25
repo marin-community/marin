@@ -341,13 +341,6 @@ config:
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
       ref: refs/heads/main
-    - name: iris-screenshot-review
-      repositoryId: *marinRepositoryId
-      workflowRef: marin-community/marin/.github/workflows/ops-iris-screenshot-review.yaml@refs/heads/main
-      profile: *githubAutomationProfile
-      serviceTag: *githubAutomationProfile
-      event: workflow_run
-      ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main

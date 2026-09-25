@@ -52,9 +52,8 @@ base revision, a matching completion marker is required.
 
 Other GitHub agent entry points use the `github-automation` Loom profile.
 Canary failure workflows launch an independent triage session and continue to
-send the immediate Slack fallback notification. `ops-iris-screenshot-review.yaml`
-reads the artifact from a completed `Marin - Unit` run and launches a Loom
-visual review only when screenshots were uploaded.
+send the immediate Slack fallback notification. The Iris smoke test still
+uploads screenshots for inspection through the `Marin - Unit` run.
 
 ## External dependency updates
 
