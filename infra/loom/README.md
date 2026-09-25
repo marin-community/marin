@@ -152,6 +152,9 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only
 `/marina-read/api` capability. Loom passes them directly to compatible ACP
