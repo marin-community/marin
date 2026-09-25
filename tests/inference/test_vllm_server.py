@@ -8,6 +8,7 @@ routing by severity and flushing/draining on teardown. A second group covers sta
 process without HTTP readiness and waiting once for an ordinary server.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -48,25 +49,29 @@ def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
 
 
 @pytest.mark.parametrize(
-    "path, extra_args, expect_distributed",
+    "path, extra_args, expected_format, expect_distributed",
     [
-        ("/tmp/staged-hf-model", ["--model-loader-extra-config", '{"distributed":true}'], False),
-        ("s3://bucket/model", ["--model-loader-extra-config", '{"distributed":true}'], True),
+        ("/tmp/staged-hf-model", ["--model-loader-extra-config", '{"distributed":true}'], "auto", False),
+        ("s3://bucket/model", ["--model-loader-extra-config", '{"distributed":true}'], "runai_streamer", True),
         (
             "/tmp/explicit-runai-model",
             ["--load-format=runai_streamer", '--model-loader-extra-config={"distributed":true}'],
+            "runai_streamer",
             True,
         ),
     ],
 )
-def test_runai_loader_option_only_reaches_runai_format(path, extra_args, expect_distributed):
+def test_runai_loader_option_only_reaches_runai_format(path, extra_args, expected_format, expect_distributed):
     environment = VllmEnvironment(
         vllm_server.InferenceModelConfig(name="model", path=path, engine_kwargs={}), extra_args=extra_args
     )
 
-    assert any("distributed" in arg for arg in environment.extra_cli_args) is expect_distributed
-    if not expect_distributed:
-        assert "--model-loader-extra-config" not in environment.extra_cli_args
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load-format", default="auto")
+    parser.add_argument("--model-loader-extra-config", type=json.loads, default={})
+    parsed, _ = parser.parse_known_args(environment.extra_cli_args)
+    assert parsed.load_format == expected_format
+    assert parsed.model_loader_extra_config.get("distributed", False) is expect_distributed
 
 
 def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
