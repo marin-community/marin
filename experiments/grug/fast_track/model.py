@@ -61,7 +61,6 @@ from experiments.grug.fast_track.router_metrics import (
 from experiments.grug.moe.kda import chunk_kda, kda_fused
 
 _GATED_NORM_RANK = 128
-_ROUTING_RENORM_SUM = 2.5
 _QB_HIST_BINS = 10_000
 _CE_TOKENS_PER_RANK = 65_536
 # A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512.
@@ -106,11 +105,11 @@ class RouterCombine(StrEnum):
     """How the MoE combine weights of the K selected experts are formed from their unbiased logits."""
 
     SIGMOID_RENORM = "sigmoid_renorm"
-    """``sigmoid(logit)``, renormalized to sum to ``_ROUTING_RENORM_SUM``."""
+    """``sigmoid(logit)``, renormalized to sum to ``routing_renorm_sum``."""
     SOFTMAX_RENORM = "softmax_renorm"
-    """Softmax over the K selected logits, times ``_ROUTING_RENORM_SUM``."""
+    """Softmax over the K selected logits, times ``routing_renorm_sum``."""
     SIGMOID_RAW = "sigmoid_raw"
-    """``sigmoid(logit)`` times a constant (``_ROUTING_RENORM_SUM / (K/2)``, so the sum matches at init),
+    """``sigmoid(logit)`` times a constant (``routing_renorm_sum / (K/2)``, so the sum matches at init),
     no renormalization: a token's total expert weight can vary."""
 
 
@@ -263,6 +262,10 @@ class GrugModelConfig:
     """A learnable scalar (init 1) on every attention and MLP sublayer output, before it enters the
     AttnRes history."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
+    routing_renorm_sum: float = 2.5
+    """Total combine weight of a token's K routed experts (``RouterCombine``)."""
+    latent_out_norm: bool = False
+    """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
     second_embed: bool = False
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
@@ -854,6 +857,7 @@ class MoEMLP(eqx.Module):
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
+    latent_out_norm: RMSNorm | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -883,6 +887,9 @@ class MoEMLP(eqx.Module):
                 None
                 if latent is None
                 else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
+            latent_out_norm=(
+                RMSNorm.init(latent, cfg.layer_norm_eps) if latent is not None and cfg.latent_out_norm else None
             ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -930,15 +937,15 @@ class MoEMLP(eqx.Module):
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         k = self.cfg.num_experts_per_token
+        renorm_sum = self.cfg.routing_renorm_sum
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
-            combine_weights_f = _ROUTING_RENORM_SUM * jax.nn.softmax(unbiased_topk, axis=-1)
+            combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
         elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
-            combine_weights_f = jax.nn.sigmoid(unbiased_topk) * (_ROUTING_RENORM_SUM / (k / 2))
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk) * (renorm_sum / (k / 2))
         else:
             combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-            # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
             denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-            combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+            combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
@@ -985,6 +992,8 @@ class MoEMLP(eqx.Module):
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
+        if self.latent_out_norm is not None:
+            routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up is not None:
             routed_flat = jnp.einsum(
                 "tl,ld->td",
