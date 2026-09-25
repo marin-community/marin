@@ -4,23 +4,25 @@
 """Model-visible renderings of a single semantic answer task."""
 
 import json
-from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import AnswerFormat, AnswerKind, TaskSpec
 
 
-@dataclass(frozen=True)
-class Rendering:
+class Rendering(BaseModel):
     """A model-visible answer convention with a stable export identifier."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     answer_format: AnswerFormat
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def validate_rendering(self) -> "Rendering":
         if not self.id:
             raise ValueError("A rendering id is required")
-        if not isinstance(self.answer_format, AnswerFormat):
-            raise ValueError(f"Unsupported answer format: {self.answer_format}")
+        return self
 
 
 def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:

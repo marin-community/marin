@@ -3,25 +3,22 @@
 
 """Resolve private verifier kinds to typed grading handlers."""
 
-import dataclasses
-import tempfile
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib.metadata import entry_points
-from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
 
-import msgspec
-from tasktrove_verify.grade import Status, grade
-from tasktrove_verify.spec import ExactSpec
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from taskcompendium.models import TaskSpec, VerifierSpec
 from taskcompendium.rendering import Rendering, extract_answer
 
 ENTRY_POINT_GROUP = "taskcompendium.verifiers"
 EXACT_ANSWER_KIND = "exact_answer"
-PayloadT = TypeVar("PayloadT")
+PayloadT = TypeVar("PayloadT", bound=BaseModel)
+WHITESPACE = re.compile(r"\s+")
 
 
 class Outcome(StrEnum):
@@ -43,6 +40,7 @@ class GradingAttempt:
 
     rendering: Rendering
     response: str | None
+    environment: object
     transcript: tuple[dict[str, Any], ...] = ()
 
 
@@ -63,8 +61,8 @@ def _handler(kind: str) -> VerifierHandler[Any]:
 def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[Any], Any]:
     handler = _handler(verifier.kind)
     try:
-        payload = msgspec.convert(verifier.parameters, type=handler.payload_type, strict=True)
-    except (msgspec.ValidationError, TypeError, ValueError) as error:
+        payload = handler.payload_type.model_validate(verifier.parameters)
+    except ValidationError as error:
         raise ValueError(f"Invalid {verifier.kind!r} verifier parameters: {error}") from error
     return handler, payload
 
@@ -80,25 +78,37 @@ def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResu
     return handler.grade(payload, attempt)
 
 
-def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
+def grade_answer(
+    specification: TaskSpec, rendering: Rendering, response: str | None, environment: object
+) -> GradeResult:
     """Extract and score a response through the verifier registry."""
-    return grade_attempt(specification, GradingAttempt(rendering, response))
+    return grade_attempt(specification, GradingAttempt(rendering, response, environment))
 
 
-class ExactAnswerPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+class ExactAnswerPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
     expected: str
     ignore_case: bool = True
     ignore_whitespace: bool = True
 
-    def __post_init__(self) -> None:
-        if not self.expected.strip():
+    @field_validator("expected")
+    @classmethod
+    def nonempty_expected(cls, value: str) -> str:
+        if not value.strip():
             raise ValueError("An exact answer is required")
+        return value
 
 
 def exact_answer(expected: str, ignore_case: bool = True, ignore_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
-    payload = ExactAnswerPayload(expected, ignore_case, ignore_whitespace)
-    return VerifierSpec(EXACT_ANSWER_KIND, msgspec.to_builtins(payload))
+    payload = ExactAnswerPayload(expected=expected, ignore_case=ignore_case, ignore_whitespace=ignore_whitespace)
+    return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters=payload.model_dump())
+
+
+def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:
+    value = WHITESPACE.sub(" ", value).strip() if payload.ignore_whitespace else value.strip()
+    return value.casefold() if payload.ignore_case else value
 
 
 def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeResult:
@@ -106,18 +116,8 @@ def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeR
         candidate = extract_answer(attempt.response, attempt.rendering)
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-    with tempfile.TemporaryDirectory(prefix="taskcompendium-answer-") as temporary:
-        output = Path(temporary) / "answer.txt"
-        output.write_text(candidate)
-        contract = ExactSpec(
-            expected=(payload.expected,),
-            ignore_case=payload.ignore_case,
-            ignore_whitespace=payload.ignore_whitespace,
-        )
-        result = grade(dataclasses.replace(contract, output=str(output)), output.parent, output.parent)
-    if result.status != Status.SCORED:
-        return GradeResult(Outcome.INFRA_ERROR, None, str(result.detail))
-    return GradeResult(Outcome.GRADED, result.reward)
+    match = _normalize_exact(candidate, payload) == _normalize_exact(payload.expected, payload)
+    return GradeResult(Outcome.GRADED, float(match))
 
 
 def exact_answer_handler() -> VerifierHandler[ExactAnswerPayload]:

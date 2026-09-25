@@ -28,10 +28,10 @@ class TaskArchive:
     @property
     def source(self) -> Source:
         return Source(
-            self.release_uri,
-            self.release_revision,
-            f"{self.tasktrove_source}:{self.tasktrove_path}",
-            IMPORTER_REVISION,
+            dataset=self.release_uri,
+            revision=self.release_revision,
+            row=f"{self.tasktrove_source}:{self.tasktrove_path}",
+            importer_revision=IMPORTER_REVISION,
         )
 
 

@@ -46,14 +46,14 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
-    public = render_instruction(specification, Rendering("plain", AnswerFormat.PLAIN))
+    public = render_instruction(specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
 
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
 
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
-    rendering = Rendering("plain", AnswerFormat.PLAIN)
+    rendering = Rendering(id="plain", answer_format=AnswerFormat.PLAIN)
     for source_response, response, reward in (
         ("Answer: C", "C", 1.0),
         ("Answer: D", "D", 0.0),
@@ -61,10 +61,12 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
-        result = grade_answer(specification, rendering, response)
+        result = grade_answer(specification, rendering, response, object())
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
-    json_result = grade_answer(specification, Rendering("json", AnswerFormat.JSON), '{"answer":"C"}')
-    malformed = grade_answer(specification, rendering, "Answer: C")
+    json_result = grade_answer(
+        specification, Rendering(id="json", answer_format=AnswerFormat.JSON), '{"answer":"C"}', object()
+    )
+    malformed = grade_answer(specification, rendering, "Answer: C", object())
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
     assert (malformed.status, malformed.reward) == (Outcome.EXTRACTION_ERROR, None)
 
@@ -95,7 +97,9 @@ def test_archive_rejects_excessive_empty_members():
 async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     specification = import_task(_archive())
     binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), binding, tmp_path / "task")
+    task = lower_to_harbor(
+        specification, Rendering(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+    )
 
     result = await run_trial(
         task,
@@ -113,7 +117,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     task = lower_to_harbor(
         import_task(_archive()),
-        Rendering("plain", AnswerFormat.PLAIN),
+        Rendering(id="plain", answer_format=AnswerFormat.PLAIN),
         HarborTaskBinding(),
         tmp_path / "task",
     )
@@ -123,7 +127,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
         "from taskcompendium.lowering import read_rendering, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_answer(read_specification(root / 'specification.json'), "
-        "read_rendering(root / 'rendering.json'), 'C'); "
+        "read_rendering(root / 'rendering.json'), 'C', object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
