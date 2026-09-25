@@ -17,6 +17,7 @@ from experiments.post_training.task_curriculum.models import Curriculum
 SOURCE = Path(__file__).parent
 REPO = SOURCE.parents[2]
 SITE = REPO / "docs/experiments/bio-task-coverage.html"
+BENCHMARK_REVIEW = REPO / "docs/experiments/bixbench-verified-competencies.md"
 GITHUB = "https://github.com/marin-community/marin/blob/codex/bio-task-generators/"
 
 
@@ -32,6 +33,173 @@ def primary_competency(taxonomy: dict, recipe: str) -> str:
     if len(matches) != 1:
         raise ValueError(f"Expected one primary competency for {recipe}, found {matches}")
     return matches[0]
+
+
+def benchmark_pages() -> tuple[list[dict], list[str]]:
+    """Build question navigation from inventories and explicit draft annotations."""
+    inputs = ["benchmark_coverage.json"]
+    pages = []
+    for name, release in load("benchmark_coverage.json")["benchmarks"].items():
+        page = {
+            "id": name,
+            "name": name,
+            "distribution": release["distribution"],
+            "source_url": release["source_url"],
+            "inventory": release["tasks_file"],
+            "inspection": release["task_inventory_status"],
+            "questions": [],
+            "review": None,
+        }
+        # OOD source metadata is visible, but its question content is not ingested.
+        if release["distribution"] != "ID" or not release["training_mapping_allowed"]:
+            pages.append(page)
+            continue
+        inputs.append(release["tasks_file"])
+        inventory = load(release["tasks_file"])
+        review_file = "benchmark_competencies/" + Path(release["tasks_file"]).name
+        annotations = {}
+        if (SOURCE / review_file).exists():
+            inputs.append(review_file)
+            review = load(review_file)
+            if review["benchmark"] != name or review["source_revision"] != inventory["source_revision"]:
+                raise ValueError(f"Competency review source mismatch: {name}")
+            annotations = {row["task_id"]: row for row in review["tasks"]}
+            if len(annotations) != len(review["tasks"]) or set(annotations) != {
+                row["task_id"] for row in inventory["tasks"]
+            }:
+                raise ValueError(f"Competency review must cover each question exactly once: {name}")
+            competency_ids = {row["id"] for row in review["competencies"]}
+            if len(competency_ids) != len(review["competencies"]):
+                raise ValueError(f"Duplicate competency definitions: {name}")
+            for row in inventory["tasks"]:
+                annotation = annotations[row["task_id"]]
+                labels = annotation["focal_competencies"] + annotation["supporting_competencies"]
+                if len(labels) != len(set(labels)) or not set(labels) <= competency_ids:
+                    raise ValueError(f"Invalid competency labels: {name}/{row['task_id']}")
+                if annotation["source_question_sha256"] != row["source_question_sha256"]:
+                    raise ValueError(f"Question changed since review: {name}/{row['task_id']}")
+            page["review"] = {key: value for key, value in review.items() if key != "tasks"}
+            page["review_file"] = review_file
+        for task in inventory["tasks"]:
+            family = task.get("workflow_family", "")
+            expanded = {
+                **inventory.get("task_defaults", {}),
+                **inventory.get("patterns", {}).get(family, {}),
+                **task,
+            }
+            page["questions"].append(
+                {
+                    "id": task["task_id"],
+                    "family": family,
+                    "summary": task.get("workflow_pattern", family.replace("-", " ")),
+                    "source_url": task.get("source_metadata_url", release["source_url"]),
+                    "source_capsule": task.get("source_capsule_id"),
+                    "formats": expanded.get("required_formats", []),
+                    "stages": expanded.get("required_stages", []),
+                    "status": expanded.get("status", "unmapped"),
+                    "recipes": expanded.get("recipes", []),
+                    "annotation": annotations.get(task["task_id"]),
+                }
+            )
+        pages.append(page)
+    inventoried = {page["inventory"] for page in pages}
+    for source in load("benchmark_sources.json")["sources"]:
+        if source.get("task_inventory") in inventoried:
+            continue
+        pages.append(
+            {
+                "id": source["name"],
+                "name": source["name"],
+                "distribution": source["distribution"],
+                "source_url": source["source_url"],
+                "inventory": None,
+                "inspection": source["inspection"],
+                "questions": [],
+                "review": None,
+            }
+        )
+    return pages, inputs
+
+
+def benchmark_markdown(review: dict) -> str:
+    """Render the flat question review for editing alongside the explorer."""
+    names = {row["id"]: row["name"] for row in review["competencies"]}
+    counts = []
+    for competency in review["competencies"]:
+        focal = sum(competency["id"] in row["focal_competencies"] for row in review["tasks"])
+        total = sum(
+            competency["id"] in row["focal_competencies"] + row["supporting_competencies"] for row in review["tasks"]
+        )
+        counts.append((competency, focal, total))
+    lines = [
+        "# BixBench-Verified: flat competency review",
+        "",
+        f"Draft for review. All {len(review['tasks'])} source questions are annotated; "
+        f"the {len(review['competencies'])} competency definitions are provisional. "
+        "Task generation remains paused. Only executable rewards are eligible; no LLM judge.",
+        "",
+        "An **analysis competency** is a reusable operation with an observable outcome. "
+        "A **workflow recipe** connects several competencies to answer a scientific question. "
+        "Generate connected workflows on independent real inputs, and use competencies to track breadth. "
+        "Source questions may ask for just one endpoint from a shared workflow.",
+        "",
+        "Focal labels describe the requested endpoint; supporting labels describe necessary components. "
+        "Count a question once per label. Counts overlap and do not measure unique studies, "
+        "independent workflows, scientific importance or validated generated tasks.",
+        "",
+        "[Versioned annotations and verification notes]"
+        "(../../experiments/post_training/bio_tasks/benchmark_competencies/bixbench-verified-50.json) · "
+        "[Source inventory](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json)",
+        "",
+        "The naming is informed by [EDAM's separation of operations, topics, data and formats]"
+        "(https://edamontology.org/). These are local draft labels, not official EDAM terms. "
+        "The [ISCB framework](https://academic.oup.com/bioinformaticsadvances/article/4/1/vbae166/7903279) "
+        "addresses broader professional competencies; our units are narrower, observable analysis operations.",
+        "",
+        "## Ranked competency list",
+        "",
+        "Total includes focal and supporting appearances. Generic supporting operations can dominate; "
+        "inspect focal counts before deciding generation priorities. No weighting policy is selected.",
+        "",
+        "| Competency | Focal questions | Total questions | Observable outcome |",
+        "| --- | ---: | ---: | --- |",
+    ]
+    for competency, focal, total in sorted(counts, key=lambda row: (-row[2], row[0]["name"])):
+        lines.append(f"| {competency['name']} | {focal} | {total} | {competency['outcome']} |")
+    lines.extend(
+        [
+            "",
+            "## Question-by-question draft",
+            "",
+            "Summaries are paraphrases checked against the pinned Verified question hashes. "
+            "An executable check is only proposed, not validated. `needs-definition` requires "
+            "a frozen scientific contract. `defer-interpretation` excludes the open-ended endpoint.",
+            "",
+            "| Question | Summary | Focal competencies | Supporting competencies | Reward disposition |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in review["tasks"]:
+        focal_names = "; ".join(names[key] for key in row["focal_competencies"])
+        supporting_names = "; ".join(names[key] for key in row["supporting_competencies"]) or "—"
+        lines.append(
+            f"| {row['task_id']} | {row['question_summary']} | {focal_names} | "
+            f"{supporting_names} | {row['verification_status']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Review granularity first: merge labels that would lead to the same assessment, "
+            "and split labels when they require different scientific decisions or output checks. "
+            "Choose a connected workflow, freeze its artifact contract, then vary study, organism, "
+            "assay and design using independent observed data. New instances must add substantive "
+            "biological variation; changing labels alone adds no coverage.",
+            "",
+            "Rebuild this Markdown and the HTML with "
+            "`uv run python -m experiments.post_training.bio_tasks.coverage_site`.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def site_data() -> dict:
@@ -142,6 +310,7 @@ def site_data() -> dict:
         {key: row.get(key) for key in ("name", "distribution", "source_url", "scientific_scope", "task_inventory")}
         for row in load("benchmark_sources.json")["sources"]
     ]
+    benchmarks, benchmark_inputs = benchmark_pages()
     inputs = [
         "competencies.json",
         "public_examples.json",
@@ -152,6 +321,8 @@ def site_data() -> dict:
         "container_validation.json",
         "vendor/d3-hierarchy-3.1.2.min.js",
         "vendor/d3-hierarchy-LICENSE",
+        "benchmark_pages.js",
+        *benchmark_inputs,
     ]
     return {
         "version": curriculum.version,
@@ -161,6 +332,7 @@ def site_data() -> dict:
         "examples": examples,
         "repositories": repositories,
         "sources": sources,
+        "benchmarks": benchmarks,
         "policy": taxonomy["policy"],
         "references": taxonomy["references"],
         "facets": taxonomy["facets"],
@@ -181,12 +353,17 @@ def main() -> None:
         template.replace("__BIO_DATA__", payload)
         .replace("__D3_HIERARCHY__", (SOURCE / "vendor/d3-hierarchy-3.1.2.min.js").read_text())
         .replace("__D3_LICENSE__", (SOURCE / "vendor/d3-hierarchy-LICENSE").read_text())
+        .replace("__BENCHMARK_PAGES__", (SOURCE / "benchmark_pages.js").read_text())
     )
+    markdown = benchmark_markdown(load("benchmark_competencies/bixbench-verified-50.json"))
     if args.check:
         if SITE.read_text() != rendered:
             raise ValueError("Coverage HTML is stale; rerun this module without --check")
+        if BENCHMARK_REVIEW.read_text() != markdown:
+            raise ValueError("Benchmark review Markdown is stale; rerun this module without --check")
     else:
         SITE.write_text(rendered)
+        BENCHMARK_REVIEW.write_text(markdown)
     print(f"{'Checked' if args.check else 'Wrote'} {SITE.relative_to(REPO)} ({len(rendered):,} bytes)")
 
 

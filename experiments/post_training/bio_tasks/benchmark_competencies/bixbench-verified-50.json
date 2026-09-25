@@ -1,0 +1,889 @@
+{
+  "schema_version": 1,
+  "benchmark": "BixBench-Verified-50",
+  "status": "draft-for-review",
+  "source_revision": "c77fc8ea4611b546947b8a4710ed36ab72ee233c",
+  "source_metadata_sha256": "940de7d97eb6a9616a446734f4838188879deaf5a6b43acf5cac63623bccb593",
+  "method": "Manual endpoint-level decomposition of all 50 Verified question texts, checked against pinned question hashes. Summaries are paraphrases. No answer, distractor, result, reference notebook or biological fixture is used.",
+  "counting": "Count each question once per competency. Focal means the requested endpoint; supporting means an explicitly needed component. Shared capsules are not independent workflows. Upstream operations are not assumed from a workflow-family label.",
+  "reward_policy": "Only executable rewards are eligible for generation. Numeric-contract is a proposed artifact check, not implemented validation. Needs-definition requires a frozen scientific contract. Defer-interpretation excludes the open-ended endpoint; its numeric components may inform separate tasks.",
+  "competencies": [
+    {
+      "id": "summarize",
+      "name": "Summarize and compare grouped measurements",
+      "outcome": "Means, medians, extrema, ratios or differences with explicit grouping and order of aggregation."
+    },
+    {
+      "id": "cohort",
+      "name": "Define eligible observations and denominators",
+      "outcome": "An inclusion mask and denominator that preserve the intended patient, gene, variant, site or measurement unit."
+    },
+    {
+      "id": "join",
+      "name": "Reconcile biological feature and sample identities",
+      "outcome": "An auditable join across assays, annotations or replicates with duplicate and missing-identity policies."
+    },
+    {
+      "id": "alignment-signal",
+      "name": "Measure signal and composition in sequence alignments",
+      "outcome": "Per-alignment parsimony-informative counts/fractions or relative composition variability under declared site rules."
+    },
+    {
+      "id": "tree-metrics",
+      "name": "Measure branch-length properties of phylogenetic trees",
+      "outcome": "Treeness, evolutionary rate, long-branch score, patristic distance or tree length using a pinned metric definition."
+    },
+    {
+      "id": "rank-test",
+      "name": "Compare independent groups with a rank-based test",
+      "outcome": "Mann–Whitney U statistic and p-value with group order, sidedness and tie handling declared."
+    },
+    {
+      "id": "expression-model",
+      "name": "Estimate design-aware differential gene expression",
+      "outcome": "Count-model contrasts with sample design, normalization, dispersion, effect estimates and uncertainty."
+    },
+    {
+      "id": "shrinkage",
+      "name": "Shrink differential-expression effect estimates",
+      "outcome": "Shrunken log-fold changes with estimator and coefficient specified; significance tests kept distinct."
+    },
+    {
+      "id": "multiple-testing",
+      "name": "Adjust and compare multiple-testing procedures",
+      "outcome": "A declared test family, adjusted p-values and rejection counts under the named procedure."
+    },
+    {
+      "id": "pathway",
+      "name": "Test pathway overrepresentation",
+      "outcome": "Gene universe, selected genes, pathway membership, contingency counts and enrichment statistics."
+    },
+    {
+      "id": "set-comparison",
+      "name": "Compare direction-aware gene or pathway sets",
+      "outcome": "Intersections, differences, membership counts or ranked-set subsets with explicit direction and significance rules."
+    },
+    {
+      "id": "spearman",
+      "name": "Estimate rank associations between biological measurements",
+      "outcome": "Spearman coefficients or tests on matched observations, preserving ties and missingness policy."
+    },
+    {
+      "id": "pearson",
+      "name": "Estimate linear associations between biological measurements",
+      "outcome": "Pearson correlations on the declared feature population and measurement scale."
+    },
+    {
+      "id": "variant-summary",
+      "name": "Filter and summarize annotated cohort variants",
+      "outcome": "Per-patient/gene burdens or annotation proportions with VAF, consequence and reference-call filters."
+    },
+    {
+      "id": "substitution-spectrum",
+      "name": "Classify nucleotide substitutions and calculate Ts/Tv",
+      "outcome": "Transition and transversion counts, allele policy and their ratio."
+    },
+    {
+      "id": "read-mapping",
+      "name": "Map reads to a reference with declared alignment settings",
+      "outcome": "Reference-aligned reads with the requested mapper, reference and read-group metadata."
+    },
+    {
+      "id": "coverage-depth",
+      "name": "Calculate genome-wide read coverage with zero-depth bases",
+      "outcome": "Depth sum and full reference-length denominator, with alignment/base inclusion rules."
+    },
+    {
+      "id": "pca",
+      "name": "Transform expression data and interpret PCA variance",
+      "outcome": "An oriented and transformed matrix, fitted components and explained-variance fractions."
+    },
+    {
+      "id": "response-model",
+      "name": "Fit nonlinear biological response curves",
+      "outcome": "Fitted polynomial or spline response functions under explicit design and basis choices."
+    },
+    {
+      "id": "model-selection",
+      "name": "Compare statistical models using a declared criterion",
+      "outcome": "Likelihood, parameter count, AIC or another prespecified selection criterion."
+    },
+    {
+      "id": "optimization",
+      "name": "Find a bounded optimum of a fitted response",
+      "outcome": "An optimum over the allowed biological domain, including boundary checks."
+    },
+    {
+      "id": "logistic",
+      "name": "Fit and interpret a binary logistic response model",
+      "outcome": "Unpenalized or explicitly specified fits, outcome encoding, coefficient units and likelihood."
+    },
+    {
+      "id": "orthologs",
+      "name": "Identify complete shared single-copy orthologues",
+      "outcome": "Per-proteome BUSCO completeness and copy status, then an intersection across proteomes."
+    },
+    {
+      "id": "morphometry",
+      "name": "Compare measured colony morphology across conditions",
+      "outcome": "Condition-level area/circularity summaries and contrasts; segmentation is not assumed."
+    },
+    {
+      "id": "protein-foldchange",
+      "name": "Calculate protein abundance changes on the correct scale",
+      "outcome": "Tumor/control abundance summaries, fold changes and log2 changes with normalization and aggregation stated."
+    },
+    {
+      "id": "methylation-filter",
+      "name": "Filter methylation observations while preserving row/site identity",
+      "outcome": "Strict threshold masks, deduplicated site sets where requested, and retained/removed row counts."
+    },
+    {
+      "id": "cpg-density",
+      "name": "Compute reference-length-normalized CpG densities",
+      "outcome": "Unique-site counts divided by matched chromosome lengths, then chromosome-level comparisons."
+    },
+    {
+      "id": "gene-length",
+      "name": "Derive gene lengths from a declared annotation",
+      "outcome": "Protein-coding gene identities and lengths under a frozen span/exon and transcript-selection rule."
+    },
+    {
+      "id": "expression-summary",
+      "name": "Aggregate expression across the declared samples",
+      "outcome": "Per-gene sample means on a stated scale and count-based eligibility filters."
+    },
+    {
+      "id": "sensitivity",
+      "name": "Assess how cohort or replicate exclusions change an analysis",
+      "outcome": "Comparable reruns with changed inclusion sets and endpoint differences."
+    },
+    {
+      "id": "biological-interpretation",
+      "name": "Interpret directional pathway evidence in biological context",
+      "outcome": "An evidence-backed biological claim; an unrestricted narrative is outside the current reward scope."
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "bix-6-q4",
+      "question_summary": "Agreement between replicate CRISPR-screen p-values.",
+      "focal_competencies": [
+        "spearman"
+      ],
+      "supporting_competencies": [
+        "join"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the feature-aligned replicate p-value table and Spearman coefficient.",
+      "decisions": "Use chronic round 1 and preserve ties. Running MAGeCK is not implied if its results are already inputs.",
+      "source_question_sha256": "a450578a2e0f939cf328d0ea73121337defa4de54f49707ab7fae0d316b37663"
+    },
+    {
+      "task_id": "bix-11-q1",
+      "question_summary": "Difference in median treeness between fungi and animals.",
+      "focal_competencies": [
+        "tree-metrics",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check each tree’s treeness and both group medians before their difference.",
+      "decisions": "Output a decimal proportion, preserving fungi-minus-animals ordering.",
+      "source_question_sha256": "7090b016cbd816db05d2b35b139e6207bd2ed959cb4d268907f2a22157aef96b"
+    },
+    {
+      "task_id": "bix-11-q2",
+      "question_summary": "Fraction of fungal gene trees above a treeness threshold.",
+      "focal_competencies": [
+        "tree-metrics"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-tree treeness and numerator/denominator for the percentage.",
+      "decisions": "Use strict >0.06 and an explicit eligible-gene denominator.",
+      "source_question_sha256": "a27bb10febe8a1e0d206ecee482bf61f8c3b7757ebbc1db0878a59aeae847f62"
+    },
+    {
+      "task_id": "bix-12-q2",
+      "question_summary": "Median fraction of informative alignment sites across fungal genes.",
+      "focal_competencies": [
+        "alignment-signal",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-gene site counts and eligible-site denominators, then the median percentage.",
+      "decisions": "Freeze treatment of gaps and ambiguous residues; take the median of per-gene percentages.",
+      "source_question_sha256": "085e3f73ddd484f748df5c59fa5c61ffa2e228f7893b1846397406701bfb1612"
+    },
+    {
+      "task_id": "bix-12-q4",
+      "question_summary": "Rank-test statistic comparing informative-site percentages across groups.",
+      "focal_competencies": [
+        "alignment-signal",
+        "rank-test"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check each alignment’s fraction and the U statistic.",
+      "decisions": "Test per-gene percentages, not raw site counts; freeze group order and eligible-site rules.",
+      "source_question_sha256": "9c63cfe85d3c0507d07ce63b23b0124180dc231d873137d6853dcbe312ce384b"
+    },
+    {
+      "task_id": "bix-12-q5",
+      "question_summary": "Largest informative-site count among animal gene alignments.",
+      "focal_competencies": [
+        "alignment-signal",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check all per-gene informative-site counts and the maximum.",
+      "decisions": "Use counts, not fractions; freeze ambiguity and gap handling.",
+      "source_question_sha256": "721d0bf417e7a57c8deb3f689d9e4ae97d9339690d7c4f1c7962022059ffd133"
+    },
+    {
+      "task_id": "bix-12-q6",
+      "question_summary": "Rank-test statistic comparing raw informative-site counts across groups.",
+      "focal_competencies": [
+        "alignment-signal",
+        "rank-test"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-gene raw site counts and the U statistic.",
+      "decisions": "Use counts, not percentages; freeze group order and ties.",
+      "source_question_sha256": "55d18c0b3a7551ec2e47852f0ef59e8740ad23e4b03d2e981a1559127683fee9"
+    },
+    {
+      "task_id": "bix-14-q1",
+      "question_summary": "Synonymous fraction among low-VAF coding variants in carriers.",
+      "focal_competencies": [
+        "variant-summary"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the carrier/coding/VAF inclusion mask and synonymous numerator and denominator.",
+      "decisions": "VAF is strictly <0.3; freeze variant unit and coding-consequence categories.",
+      "source_question_sha256": "a7ba9c94388b2c7286c5ae25cf90907e4e7d3dedaa8df69526eb5ad9905533b7"
+    },
+    {
+      "task_id": "bix-16-q1",
+      "question_summary": "Gene with the strongest negative expression–essentiality association.",
+      "focal_competencies": [
+        "spearman"
+      ],
+      "supporting_competencies": [
+        "join"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the complete gene-wise coefficient table and its minimum.",
+      "decisions": "Use matched cell lines and declare ties, constant vectors and missing-value handling.",
+      "source_question_sha256": "96172fa75a517be5982ae85a348c984d2f6c524a6411f55ea9260e68e47b5a6b"
+    },
+    {
+      "task_id": "bix-16-q3",
+      "question_summary": "Count of genes with strong positive expression–essentiality association.",
+      "focal_competencies": [
+        "spearman"
+      ],
+      "supporting_competencies": [
+        "join",
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check gene-wise matched observations and correlations before counting coefficients ≥0.6.",
+      "decisions": "Preserve cell-line alignment and missingness; a coefficient threshold does not imply a significance test.",
+      "source_question_sha256": "2387b2b52bf15f41b0fd22f959ee67924d0a61a91ede3bb8d385864a8a39ca16"
+    },
+    {
+      "task_id": "bix-16-q4",
+      "question_summary": "Fraction of genes with significant expression–essentiality rank association.",
+      "focal_competencies": [
+        "spearman",
+        "multiple-testing"
+      ],
+      "supporting_competencies": [
+        "join",
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check all correlation tests, the BH-adjusted vector and the significant fraction.",
+      "decisions": "Retain both correlation directions; freeze significance cutoff, test family and treatment of constant/missing vectors.",
+      "source_question_sha256": "41e8fc2121acfa5068af2a5f6cbe9d4970320d27b3134595070d3d2c4d350f8e"
+    },
+    {
+      "task_id": "bix-17-q2",
+      "question_summary": "Median patient-level somatic-variant burden among carriers.",
+      "focal_competencies": [
+        "variant-summary",
+        "summarize"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check cohort membership, variant mask, patient counts and their median.",
+      "decisions": "Use VAF<0.3 and specified consequence/reference exclusions; retain eligible zero-variant patients.",
+      "source_question_sha256": "476f359c946b088141523c758381625bffc8217b14ddac02984efde972527320"
+    },
+    {
+      "task_id": "bix-18-q1",
+      "question_summary": "Mean circularity of the genotype with the greatest mean colony area.",
+      "focal_competencies": [
+        "morphometry",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check genotype-level mean area and circularity, then select by mean area.",
+      "decisions": "Select the genotype first; do not return the maximum individual colony’s circularity. Freeze ties.",
+      "source_question_sha256": "619b0c8047389540594821429420bb5d5e9de62cdcf1a7ba0d84e25760a5ec5b"
+    },
+    {
+      "task_id": "bix-18-q3",
+      "question_summary": "Percent reduction in mean colony area for a mutant relative to wild type.",
+      "focal_competencies": [
+        "morphometry",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check group means and 100×(wildtype−mutant)/wildtype.",
+      "decisions": "The wild-type mean is the denominator; define replicate weighting and rounding.",
+      "source_question_sha256": "5516c318cf254fc2b26034f58dae41427e2b66b3cc414a0726509e73087634c3"
+    },
+    {
+      "task_id": "bix-20-q3",
+      "question_summary": "Benign classification fraction among eligible annotated carrier variants.",
+      "focal_competencies": [
+        "variant-summary"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check exclusions, ClinVar annotation eligibility and benign/likely-benign counts.",
+      "decisions": "Restrict to VAF<0.3; exclude intronic, intergenic, UTR and reference calls. Denominator requires a ClinVar classification.",
+      "source_question_sha256": "160936c9bdd9a7d8956ab31105f6f3128182812a795fe90c4593217920a4844a"
+    },
+    {
+      "task_id": "bix-22-q1",
+      "question_summary": "Immune cell type with the weakest gene-length/expression correlation.",
+      "focal_competencies": [
+        "pearson",
+        "gene-length",
+        "expression-summary"
+      ],
+      "supporting_competencies": [
+        "join",
+        "cohort"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check gene lengths and mean expression for each cell type, all four correlations and the minimum absolute value.",
+      "decisions": "Freeze span versus exon length, expression scale and eligibility; do not import Verified q4’s ≥10 filter into q1.",
+      "source_question_sha256": "d95b7f1d74b6b4aca3af321f5666cd6f91cc3155587df90902d9e4e5cb0e3ede"
+    },
+    {
+      "task_id": "bix-22-q4",
+      "question_summary": "Gene-length/expression correlation in expressed CD14 protein-coding genes.",
+      "focal_competencies": [
+        "pearson",
+        "gene-length",
+        "expression-summary"
+      ],
+      "supporting_competencies": [
+        "join",
+        "cohort"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check annotation joins, protein-coding and total-count≥10 filters, sample means and Pearson correlation.",
+      "decisions": "Freeze gene-length definition and expression scale; the existing adaptation explicitly records its donor-CPM context.",
+      "source_question_sha256": "d835f729dcd6b7e0b15b6df32b528cbd843733913eaf37fee2ebc6ab1be552a7"
+    },
+    {
+      "task_id": "bix-24-q2",
+      "question_summary": "Whether up- or downregulated genes primarily explain metabolic pathway effects.",
+      "focal_competencies": [
+        "biological-interpretation"
+      ],
+      "supporting_competencies": [
+        "expression-model",
+        "pathway",
+        "set-comparison",
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "defer-interpretation",
+      "verification": "Numerical DE and direction-separated GO tables are verifiable components; the broad interpretation is deferred.",
+      "decisions": "Primarily drives metabolic effects lacks a quantitative rule. Do not replace it with a label or claim full coverage without a new explicit contract.",
+      "source_question_sha256": "10cb354b99b0f43ba02ffec58edba710158d0ca6f23b773c94c6f8c56dfb2f33"
+    },
+    {
+      "task_id": "bix-26-q3",
+      "question_summary": "Selected-gene overlap with a KEGG pathway under iron depletion.",
+      "focal_competencies": [
+        "expression-model",
+        "pathway",
+        "set-comparison"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the upregulated DEG set and its intersection with the frozen pathway membership.",
+      "decisions": "Use |log2FC|>1.5 and padj<0.05, retaining the positive direction and declared condition.",
+      "source_question_sha256": "e51e8254441995fcd0a1d8f32351c030e6b16e447841cea298f33781d4147ea1"
+    },
+    {
+      "task_id": "bix-26-q5",
+      "question_summary": "Pathways enriched under iron depletion but not in the comparison condition.",
+      "focal_competencies": [
+        "expression-model",
+        "pathway",
+        "set-comparison"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check both DEG lists and pathway tests, then the significant-set difference.",
+      "decisions": "Use |log2FC|>1.5, gene padj<0.05 and pathway padj<0.05. Lack of significance is not evidence of no effect.",
+      "source_question_sha256": "d2f03458b81354c568e5abed77f690f627dba9e3c4eae0ec272d23007fa40135"
+    },
+    {
+      "task_id": "bix-27-q5",
+      "question_summary": "Variance explained by PC1 after a specified expression transformation.",
+      "focal_competencies": [
+        "pca"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check matrix orientation, log10(x+1), PCA configuration and PC1 explained variance.",
+      "decisions": "Fit 100 components; declare centering/scaling and numerical tolerance; report percent in [0,100].",
+      "source_question_sha256": "a02db1d74da568fc366256ec02d8819b07c7a741a2d0878dafba9365391e1514"
+    },
+    {
+      "task_id": "bix-28-q3",
+      "question_summary": "Median long-branch score for a specified fungal gene.",
+      "focal_competencies": [
+        "tree-metrics",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check the complete taxon-level long-branch scores and their median.",
+      "decisions": "Use the pinned metric; branch lengths and within-tree aggregation matter.",
+      "source_question_sha256": "dc1b507a7f261ef2ac3e0c05a0d19d4973eca1bfed9a71ce656d9244f42be048"
+    },
+    {
+      "task_id": "bix-30-q3",
+      "question_summary": "Ratio of significant miRNA counts under two multiple-testing corrections.",
+      "focal_competencies": [
+        "multiple-testing"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the same raw p-value family, both adjusted vectors and Bonferroni:BY rejection counts.",
+      "decisions": "Threshold is ≤0.05; preserve the ordered pair of counts and define zero-count handling.",
+      "source_question_sha256": "c88e82a8baa3a4b78724c5776238ff33f19a705a12514fe9224b9c04e38faf95"
+    },
+    {
+      "task_id": "bix-31-q2",
+      "question_summary": "Sex-associated gene effect with batch adjustment and shrinkage.",
+      "focal_competencies": [
+        "expression-model",
+        "shrinkage"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check the declared count inputs, sex/batch design and requested shrunken gene effect.",
+      "decisions": "The source combines batch-corrected counts and a batch covariate. Resolve count validity and double adjustment before authoring.",
+      "source_question_sha256": "704cdc4a94320dcbd776bef074c082eb788a5139657699fc573ef2182b894b44"
+    },
+    {
+      "task_id": "bix-32-q2",
+      "question_summary": "Pathways enriched in the same direction across three mutant contrasts.",
+      "focal_competencies": [
+        "expression-model",
+        "pathway",
+        "set-comparison"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check per-mutant positive/negative gene sets, separate ORA results and direction-matched intersections.",
+      "decisions": "Use |LFC|>1.5 for genes. Freeze the otherwise underspecified significance rules and background; do not assign a gene LFC to a pathway.",
+      "source_question_sha256": "26e7dbb0b0345d6599159145551c2dd28e72e7ef13a0a57f73003e73de247611"
+    },
+    {
+      "task_id": "bix-34-q2",
+      "question_summary": "Median patristic distance for a specified fungal gene.",
+      "focal_competencies": [
+        "tree-metrics",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check the pairwise distance table and median under a declared pair policy.",
+      "decisions": "Freeze unordered versus ordered pairs, diagonal exclusion and missing branch lengths.",
+      "source_question_sha256": "ddb16c5feb7a007c384a9afd4c6f304c8ad1dc24c44285f723bcd2a2da2b5690"
+    },
+    {
+      "task_id": "bix-34-q5",
+      "question_summary": "Ratio of group medians of gene-level mean patristic distances.",
+      "focal_competencies": [
+        "tree-metrics",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check each gene’s mean pairwise distance, group medians and fungi/animals ratio.",
+      "decisions": "Preserve within-gene mean followed by across-gene median; define pair policy.",
+      "source_question_sha256": "1d030254eae14b7f694a6939a50bac8cc08106b5d1dbb8bb447efd7d79864bc3"
+    },
+    {
+      "task_id": "bix-35-q1",
+      "question_summary": "Evolutionary rate of a specified animal orthologue.",
+      "focal_competencies": [
+        "tree-metrics"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Recompute the requested PhyKIT evolutionary-rate metric on the identified gene tree.",
+      "decisions": "Pin the PhyKIT function/version and resolve the source’s misspelled function name.",
+      "source_question_sha256": "48254ebcfa94f663e75554a2bf7448962ddbc910f7b508d5f7b750fb32672c60"
+    },
+    {
+      "task_id": "bix-35-q2",
+      "question_summary": "Rank-test statistic comparing animal and fungal evolutionary rates.",
+      "focal_competencies": [
+        "tree-metrics",
+        "rank-test"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-gene evolutionary rates and the Mann–Whitney U statistic.",
+      "decisions": "Freeze group order, missing trees and tie policy.",
+      "source_question_sha256": "e84f6f8bed540c111cd60416697ee0a4aa9b4d0a0d8f542b85610bf820dc3d4f"
+    },
+    {
+      "task_id": "bix-37-q1",
+      "question_summary": "Tumor-to-normal abundance fold change for a protein.",
+      "focal_competencies": [
+        "protein-foldchange"
+      ],
+      "supporting_competencies": [
+        "summarize"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check sample-level abundance, group summaries and their ratio.",
+      "decisions": "Normalization, missing values and ratio-of-means versus paired ratios require an explicit contract.",
+      "source_question_sha256": "bc88f1264d6174df1563bd648b823816b89d04bb388cc69ea31724788640f7fd"
+    },
+    {
+      "task_id": "bix-37-q4",
+      "question_summary": "Log2 tumor-to-normal abundance fold change for a protein.",
+      "focal_competencies": [
+        "protein-foldchange"
+      ],
+      "supporting_competencies": [
+        "summarize"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check group-level abundance, ratio and log2 transform before two-decimal rounding.",
+      "decisions": "Freeze abundance scale and aggregation; mean log difference and log ratio of means can differ.",
+      "source_question_sha256": "1aba0c2693042713187e6d671c68ac8bfd3a3d0d299ea5b72907cc4c770e7959"
+    },
+    {
+      "task_id": "bix-38-q1",
+      "question_summary": "Fold change in median tree length between organism groups.",
+      "focal_competencies": [
+        "tree-metrics",
+        "summarize"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-tree lengths, group medians and fungi/animals ratio.",
+      "decisions": "Freeze branch inclusion and missing-length behavior; retain the ratio direction.",
+      "source_question_sha256": "ec990d710671599243484f14b24ea7058f29098a543ae97c1f98d1a9ff87f5e0"
+    },
+    {
+      "task_id": "bix-41-q5",
+      "question_summary": "Mixture whose measured colony phenotype is closest to the reference strain.",
+      "focal_competencies": [
+        "morphometry"
+      ],
+      "supporting_competencies": [
+        "summarize"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check mean area/circularity by mixture and a declared distance to the reference.",
+      "decisions": "Closest is underspecified across two differently scaled measurements. Freeze scaling, distance and tie rule.",
+      "source_question_sha256": "9360bb14a4cb50974e4a90149468c858a3029813ebedf543116bc6cbc1075308"
+    },
+    {
+      "task_id": "bix-43-q2",
+      "question_summary": "Reactome pathway enrichment odds ratio after a multi-group treatment contrast.",
+      "focal_competencies": [
+        "expression-model",
+        "pathway"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the complete contrast, DEG inclusion mask and enrichment contingency table before the odds ratio.",
+      "decisions": "Use all four specified groups for dispersion; counts >10 in at least one of all 30 samples; padj ≤0.05, |LFC| ≥0.5 and baseMean ≥10. Freeze Reactome_2022 background.",
+      "source_question_sha256": "c258c8a3ca257a3560561d14e72a365b001dc9d546993b0f33af79d9af761801"
+    },
+    {
+      "task_id": "bix-43-q4",
+      "question_summary": "DEG/pathway membership overlap fraction after a treatment contrast.",
+      "focal_competencies": [
+        "expression-model",
+        "pathway",
+        "set-comparison"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check DEG membership and the numerator/denominator for the named Reactome pathway.",
+      "decisions": "Use padj<0.05 and |log2FC|≥0.5. Freeze pathway release/background; do not copy q2-specific filters without evidence.",
+      "source_question_sha256": "3ce76c51b9affea0a18c6bc2f2c125f3d7ca24605eac5158827cc321a210a8af"
+    },
+    {
+      "task_id": "bix-45-q1",
+      "question_summary": "Rank-test p-value comparing alignment composition variability.",
+      "focal_competencies": [
+        "alignment-signal",
+        "rank-test"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check per-alignment PhyKIT RCV values and the Mann–Whitney p-value.",
+      "decisions": "Pin RCV definition, test sidedness, exact/asymptotic method and tie correction.",
+      "source_question_sha256": "1df8d6c0f542932f84cf83f458daea32ed0a31659802ab967550a3ccbe232397"
+    },
+    {
+      "task_id": "bix-46-q4",
+      "question_summary": "Differential-expression effect for a specified gene and mutant contrast.",
+      "focal_competencies": [
+        "expression-model"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check the contrast and requested gene’s log2 fold change before rounding.",
+      "decisions": "Freeze design and count-model settings; neither shrinkage nor enrichment is explicitly requested.",
+      "source_question_sha256": "6ca10a7c484e10f9b16abe36e0d924118447b5b317ee2bf885efb455466905de"
+    },
+    {
+      "task_id": "bix-47-q3",
+      "question_summary": "Gene with the most non-reference variants in the oldest male carrier.",
+      "focal_competencies": [
+        "variant-summary"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check patient selection and gene-level non-reference variant counts, then the argmax.",
+      "decisions": "Freeze age ties, repeated variants and gene-mapping rules; do not import a somatic VAF filter from other questions.",
+      "source_question_sha256": "2fc7fa331349bba70edbd5fda631f6e67ddcf6e6dfd5978212280191d182478c"
+    },
+    {
+      "task_id": "bix-49-q4",
+      "question_summary": "Number of significant genes in a sex-adjusted disease contrast with effect shrinkage.",
+      "focal_competencies": [
+        "expression-model",
+        "shrinkage"
+      ],
+      "supporting_competencies": [
+        "cohort",
+        "multiple-testing"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the sex-adjusted model, shrinkage artifacts and padj<0.05 rejection count.",
+      "decisions": "Use apeglm; significance comes from the declared test, not the magnitude of a shrunken effect.",
+      "source_question_sha256": "454dfcbd3592c4c447c769097b2c74413e646e11073f2119503003a3ced697b8"
+    },
+    {
+      "task_id": "bix-51-q2",
+      "question_summary": "AIC of a treatment-response logistic model using only BMI.",
+      "focal_competencies": [
+        "logistic",
+        "model-selection"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the design matrix, likelihood, parameter count and AIC.",
+      "decisions": "Include an intercept; declare event encoding, complete-case population and unpenalized fitting.",
+      "source_question_sha256": "414c51bf9b9c3e6c3765222cc8f31bafc0118c2c1ac7ad85bfc45b2c0b176af2"
+    },
+    {
+      "task_id": "bix-51-q8",
+      "question_summary": "Age coefficient in a single-predictor treatment-response logistic model.",
+      "focal_competencies": [
+        "logistic"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check event encoding, intercept-plus-age fit and the raw-age log-odds slope.",
+      "decisions": "Report coefficient per year, not odds ratio; do not include BMI or standardize age.",
+      "source_question_sha256": "c7bb46cc2e7abc72a546beb2d86a9d9ac291de498bd6c693cc2696f099beaf3a"
+    },
+    {
+      "task_id": "bix-52-q2",
+      "question_summary": "Mean chromosome density of extreme-methylation, age-related CpG sites.",
+      "focal_competencies": [
+        "methylation-filter",
+        "cpg-density",
+        "summarize"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the row filter, unique loci, chromosome lengths and arithmetic mean of eligible densities.",
+      "decisions": "Use >90% or <10%; include only chromosomes with filtered sites; do not use pooled genome density.",
+      "source_question_sha256": "834d809effea09d1b90f3dac2c83adb4dbeb902422e61fe83d203546f4c0e8df"
+    },
+    {
+      "task_id": "bix-52-q6",
+      "question_summary": "Chromosome with the greatest density of age-related CpG sites.",
+      "focal_competencies": [
+        "cpg-density"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check all chromosome counts and densities before selecting the maximum.",
+      "decisions": "Use age-related sites without importing q2’s extreme-methylation filter; freeze chromosome eligibility and ties.",
+      "source_question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346"
+    },
+    {
+      "task_id": "bix-52-q7",
+      "question_summary": "Number of methylation measurement rows removed by an extreme-value filter.",
+      "focal_competencies": [
+        "methylation-filter"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check the row-level strict-threshold mask and removed-row count.",
+      "decisions": "Count observations, not unique CpG sites. Values exactly 10% and 90% are removed.",
+      "source_question_sha256": "d167ebfab9d62283e9fedc241a62a91a2f6ddcc3f9b705898906391c6a9c3a76"
+    },
+    {
+      "task_id": "bix-53-q2",
+      "question_summary": "Change in differential-gene count after excluding third replicates.",
+      "focal_competencies": [
+        "expression-model",
+        "shrinkage",
+        "sensitivity"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check both complete DE results, counts and the derived increase/decrease/unchanged label.",
+      "decisions": "Use raw p<0.05, |log2FC|>1 and baseMean>10; freeze shrinker and rerun policies. The direction label is deterministic.",
+      "source_question_sha256": "d646675d321001e0793d4416e5c24c3d04c38f5202af533bc9366b0d7d4f05cd"
+    },
+    {
+      "task_id": "bix-53-q5",
+      "question_summary": "Fraction of top enriched pathways with an oxidative-stress name match.",
+      "focal_competencies": [
+        "expression-model",
+        "shrinkage",
+        "pathway",
+        "set-comparison"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check selected genes, enrichment ranking, top-20 membership and the name-match fraction.",
+      "decisions": "Use raw p<0.05, |LFC|>1 and baseMean>10; freeze WikiPathways_2019_Mouse, rank ties and rounding.",
+      "source_question_sha256": "b6511359d1cccf7be33e51ac84ce8533d20989b777c5b79573c6ca781c795723"
+    },
+    {
+      "task_id": "bix-54-q7",
+      "question_summary": "Maximum colony area predicted by the selected nonlinear response model.",
+      "focal_competencies": [
+        "response-model",
+        "model-selection",
+        "optimization"
+      ],
+      "supporting_competencies": [
+        "morphometry"
+      ],
+      "verification_status": "needs-definition",
+      "verification": "Check all fitted candidate models, the selected model and its bounded optimum.",
+      "decisions": "The question does not specify what best-fitting means. Freeze selection criterion, spline basis and observed frequency domain.",
+      "source_question_sha256": "7e574faf7675858781681036b914c1b025b857beb2a4e94c2555dc297642830b"
+    },
+    {
+      "task_id": "bix-55-q1",
+      "question_summary": "Complete single-copy orthologues shared by four proteomes.",
+      "focal_competencies": [
+        "orthologs",
+        "set-comparison"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check complete single-copy status in each proteome and the four-way intersection.",
+      "decisions": "Pin BUSCO and eukaryota_odb10; exclude duplicated, fragmented and missing calls.",
+      "source_question_sha256": "8734df9eb29d17df07b3e7d736bdfb2e5d782eb323dd4d1088891733f112aa03"
+    },
+    {
+      "task_id": "bix-61-q2",
+      "question_summary": "Whole-reference average depth after a specified bacterial read alignment.",
+      "focal_competencies": [
+        "read-mapping",
+        "coverage-depth"
+      ],
+      "supporting_competencies": [],
+      "verification_status": "numeric-contract",
+      "verification": "Check the declared BWA-MEM alignment and depth sum divided by full reference length.",
+      "decisions": "Include zero-depth bases; preserve the required read group and freeze SAMtools flag/base-quality rules.",
+      "source_question_sha256": "9bb2a23bce033101b00e64658923441ba15253384b65f6b874dad9af48b43cda"
+    },
+    {
+      "task_id": "bix-61-q5",
+      "question_summary": "Transition/transversion ratio in a bacterial sample.",
+      "focal_competencies": [
+        "substitution-spectrum"
+      ],
+      "supporting_competencies": [
+        "cohort"
+      ],
+      "verification_status": "numeric-contract",
+      "verification": "Check eligible substitution counts, Ts/Tv and two-decimal rounding.",
+      "decisions": "Freeze variant filters, multiallelic decomposition and treatment of indels; upstream calling is input-dependent.",
+      "source_question_sha256": "95687365a900102efd02376e04fb1a7f73f8ede849af664abc00111f4d4ef533"
+    }
+  ]
+}
