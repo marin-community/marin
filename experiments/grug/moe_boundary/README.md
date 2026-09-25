@@ -205,6 +205,40 @@ Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
 inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
 
+## Phase 0 results (matched recipe)
+
+All three arms were rerun under the corrected (matched) recipe after the
+PR #9281 review found the original runs' optimizer was detuned (heuristic-
+derived batch instead of the pinned cell batch at d768, and a 5% LR floor
+vs the baseline's decay-to-zero). Gate decision and full detail are in
+issue #9280. Summary (Paloma macro loss / avg last-200-step tok/s / gate-1
+effective speedup):
+
+| arm | macro | tok/s | speedup | W&B |
+|---|---|---|---|---|
+| d512 α=1.0 | **3.5415** | 393,000 | 0.909 | [moe_boundary_compute_opt_d512_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha1_matched) |
+| d512 α=0.707 | 3.5459 | 422,134 | — | [moe_boundary_compute_opt_d512_ep1_alpha0.707_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha0.707_matched) |
+| d768 α=1.0 | **3.2186** | 285,558 | 1.026 | [moe_boundary_compute_opt_d768_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d768_ep1_alpha1_matched) |
+| README baselines | 3.5422 / 3.2273 | 433,986 / 294,726 | — | — |
+
+Reading:
+
+- **The recipe, not the operator, caused the exploratory deficits.** Under
+  the matched recipe both α=1.0 arms tie-or-beat the baseline on loss
+  (d512 −0.0007, d768 −0.0087) where the exploratory runs showed
+  +0.0038/+0.0198 deficits. α=1.0 stays the representative (α=0.707 loses
+  at d512).
+- **Gate 1 splits.** d512 fails on throughput (effective speedup 0.909:
+  the boundary vector-adds and the coda's `rms_norm` cost ~9% wall-clock at
+  3.82e17 FLOPs) while d768 passes (1.026: the loss gain −0.0087 outweighs
+  the remaining −3.1% throughput cost at 2.81e18 FLOPs). The boundary
+  overhead amortizes with scale, and the loss advantage grows with scale —
+  the same direction the paper reports for Operator-1.
+- The pre-fix d512/d768 runs (no `_matched` suffix) are exploratory: they
+  used the heuristic-derived optimizer batch (d768: 128 vs the cell's 64)
+  and a 5% LR floor, so their comparisons against the baseline table are
+  invalid.
+
 ## Files
 
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation,
