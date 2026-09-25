@@ -243,6 +243,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
+    kda_decay_lr_mult: float = 1.0
+    """Adam LR multiplier for the KDA decay parameters (``_KDA_ADAM_LEAVES``: dt_bias, A_log, the gate projections)."""
+    kda_decay_beta1: float | None = None
+    """Adam beta1 for the KDA decay parameters (None: ``beta1``)."""
+    kda_decay_beta2: float | None = None
+    """Adam beta2 for the KDA decay parameters (None: ``beta2``)."""
     lm_head_group: str = "adamh"
     """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
     embed_group: str = "adam"
@@ -297,11 +303,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
-            def plain_adam_at(lr):
+            def plain_adam_at(lr, beta1=None, beta2=None):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(
+                    optax.scale_by_adam(
+                        self.beta1 if beta1 is None else beta1, self.beta2 if beta2 is None else beta2, self.epsilon
+                    )
+                )
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -311,6 +321,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "adam": adam_transform_at(adam_lr),
                 "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult),
+                "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
@@ -335,7 +346,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
-                return "adam"
+                return "kda_decay"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
