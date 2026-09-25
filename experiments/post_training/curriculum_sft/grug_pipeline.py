@@ -76,7 +76,7 @@ def prepare_chat_record(record: dict) -> dict:
 def prepare_generated_chat(config: PrepareConfig) -> Artifact:
     """Write OpenAI-style chat Parquet for assistant-only packed SFT."""
     pipeline = (
-        Dataset.from_files(prefix_join(config.input_path, "chat", "*.parquet"))
+        Dataset.from_files(prefix_join(prefix_join(config.input_path, "chat"), "*.parquet"))
         .flat_map(load_parquet)
         .map(prepare_chat_record)
         .write_parquet(
