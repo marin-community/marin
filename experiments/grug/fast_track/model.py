@@ -20,6 +20,7 @@ from enum import StrEnum
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
@@ -101,6 +102,18 @@ class AttnResLayerBackward(StrEnum):
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
 
 
+class RouterCombine(StrEnum):
+    """How the MoE combine weights of the K selected experts are formed from their unbiased logits."""
+
+    SIGMOID_RENORM = "sigmoid_renorm"
+    """``sigmoid(logit)``, renormalized to sum to ``_ROUTING_RENORM_SUM``."""
+    SOFTMAX_RENORM = "softmax_renorm"
+    """Softmax over the K selected logits, times ``_ROUTING_RENORM_SUM``."""
+    SIGMOID_RAW = "sigmoid_raw"
+    """``sigmoid(logit)`` times a constant (``_ROUTING_RENORM_SUM / (K/2)``, so the sum matches at init),
+    no renormalization: a token's total expert weight can vary."""
+
+
 class ValueEmbeds(StrEnum):
     """Value embeddings on the MLA layers: ``v = lambda1 * v + w * value_embed[token]``."""
 
@@ -129,19 +142,50 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
+def _local_gather(table: jax.Array, ids: jax.Array) -> jax.Array:
+    return table[ids]
+
+
+@jax.custom_vjp
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Look up tokens from a replicated table without a cross-rack collective."""
+    """Look up tokens from a replicated table without a cross-rack collective.
 
-    def _local(table: jax.Array, ids: jax.Array) -> jax.Array:
-        return table[ids]
-
+    The backward scatter-adds each shard's row cotangents in float32 and then sums over the batch axes.
+    Under the bf16 compute policy the table arrives in bf16, and the default gather transpose would
+    scatter-add every token's cotangent straight into a bf16 table: contended bf16 atomics that are
+    slow (~11 ms/step at d512) and round each frequent token's accumulated gradient at every add.
+    """
     token_ids = reshard(token_ids, P(_BATCH_AXES, None))
     return shard_map(
-        _local,
+        _local_gather,
         mesh=get_abstract_mesh(),
         in_specs=(P(None, None), P(_BATCH_AXES, None)),
         out_specs=P(_BATCH_AXES, None, None),
     )(token_embed, token_ids)
+
+
+def _embedding_gather_fwd(token_embed: jax.Array, token_ids: jax.Array):
+    return _embedding_gather(token_embed, token_ids), (token_ids, jnp.zeros((0, *token_embed.shape), token_embed.dtype))
+
+
+def _embedding_gather_bwd(residuals, g: jax.Array):
+    token_ids, table_like = residuals
+    vocab, dim = table_like.shape[1:]
+
+    def _local_scatter(ids: jax.Array, cot: jax.Array) -> jax.Array:
+        local = jnp.zeros((vocab, dim), jnp.float32).at[ids].add(cot.astype(jnp.float32))
+        return jax.lax.psum(local.astype(table_like.dtype), _BATCH_AXES)
+
+    d_table = shard_map(
+        _local_scatter,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None, None)),
+        out_specs=P(None, None),
+    )(reshard(token_ids, P(_BATCH_AXES, None)), reshard(g, P(_BATCH_AXES, None, None)))
+    return d_table, np.zeros(token_ids.shape, dtype=jax.dtypes.float0)
+
+
+_embedding_gather.defvjp(_embedding_gather_fwd, _embedding_gather_bwd)
 
 
 def _partition_spec_of(x: jax.Array) -> P | None:
@@ -218,6 +262,7 @@ class GrugModelConfig:
     sublayer_scales: bool = False
     """A learnable scalar (init 1) on every attention and MLP sublayer output, before it enters the
     AttnRes history."""
+    router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     second_embed: bool = False
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
@@ -884,10 +929,16 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        k = self.cfg.num_experts_per_token
+        if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
+            combine_weights_f = _ROUTING_RENORM_SUM * jax.nn.softmax(unbiased_topk, axis=-1)
+        elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk) * (_ROUTING_RENORM_SUM / (k / 2))
+        else:
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+            # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
