@@ -14,6 +14,7 @@ completion check and is discarded after each task.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -156,7 +157,9 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     }
     args.update(config.get("extra_model_args", {}))
     if use_chat and config["chat_template_kwargs"]:
-        args["chat_template_kwargs"] = json.dumps(config["chat_template_kwargs"], separators=(",", ":"))
+        # lm-eval splits model args at every comma; Evalchemy decodes this before building the HTTP payload.
+        encoded = base64.urlsafe_b64encode(json.dumps(config["chat_template_kwargs"]).encode("utf-8")).decode("ascii")
+        args["chat_template_kwargs"] = f"base64:{encoded}"
     if max_length is not None:
         args["max_length"] = max_length
     return ",".join(f"{key}={value}" for key, value in args.items())

@@ -19,7 +19,7 @@ from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
 
 SEPTEMBER_16_VERSION = "eval-policy-2026-09-16-verified"
 SEPTEMBER_24_VERSION = "eval-policy-2026-09-24-verified"
-EVALCHEMY_COMMIT = "64033bff876764f5e4123e76bd7e44c857b5f053"
+EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
 NUPA_SEED = 20222943
 DEFAULT_SEED = 42
