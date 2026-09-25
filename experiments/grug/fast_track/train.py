@@ -502,6 +502,14 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: [stack.stacked.mlp.router_bias for stack in t.layer_stacks()], model, per_stack)
 
 
+def _next_qb_betas(state: GrugTrainState, new_betas: jax.Array) -> jax.Array:
+    """This step's QB betas, or the held ones once ``qb_freeze_step`` is reached."""
+    freeze_step = state.params.config.qb_freeze_step
+    if freeze_step is None:
+        return new_betas
+    return jnp.where(state.step + 1 >= freeze_step, state.pending_qb_betas, new_betas)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -691,7 +699,7 @@ def _make_train_step(
             opt_state=opt_state,
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
-            pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
+            pending_qb_betas=_next_qb_betas(state, metrics.get("qb_beta_per_layer", state.pending_qb_betas)),
         )
 
         return next_state, metrics, watch_stats

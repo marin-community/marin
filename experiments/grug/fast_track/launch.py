@@ -139,6 +139,7 @@ STEP_TIMEOUT = timedelta(minutes=15)
 PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 MAX_RETRIES_FAILURE = 3
+Z_LOSS_WEIGHT = 1e-4
 MAX_TASK_FAILURES = 3
 PROFILE_START_STEP = 50
 PROFILE_NUM_STEPS = 5
@@ -326,6 +327,7 @@ def build_h100_ladder_run(
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
+    z_loss_weight: float = Z_LOSS_WEIGHT,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -400,7 +402,7 @@ def build_h100_ladder_run(
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
-        z_loss_weight=1e-4,
+        z_loss_weight=z_loss_weight,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
@@ -608,6 +610,13 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Training-job retries after a failure (0 for debugging runs).",
 )
 @click.option(
+    "--z-loss-weight",
+    type=click.FloatRange(min=0.0),
+    default=Z_LOSS_WEIGHT,
+    show_default=True,
+    help="Weight of the final-logit logsumexp z-loss (0 disables it).",
+)
+@click.option(
     "--model-set",
     multiple=True,
     help="Override a GrugModelConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
@@ -650,6 +659,7 @@ def main(
     seed: int,
     profile: bool,
     max_retries: int,
+    z_loss_weight: float,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -674,6 +684,7 @@ def main(
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),
+        z_loss_weight=z_loss_weight,
     )
 
 

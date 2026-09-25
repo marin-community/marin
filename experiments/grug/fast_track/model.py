@@ -290,6 +290,11 @@ class GrugModelConfig:
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
+    proj_biases: tuple[str, ...] = ()
+    """Zero-init learnable biases at these sites: ``qkv`` (KDA q/k/v and MLA q / KV-latent projections),
+    ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
+    qb_freeze_step: int | None = None
+    """Stop updating the QB router biases from this step on (they keep their last value)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     aux_lm_layer: int | None = None
@@ -431,6 +436,8 @@ class CausalSelfAttention(eqx.Module):
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
     qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult); else cfg.qk_mult
+    bias_q: Float[Array, " NH"] | None
+    bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -460,8 +467,12 @@ class CausalSelfAttention(eqx.Module):
                 ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
                 ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
                 qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+                bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
+                bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
             )
+        if "qkv" in cfg.proj_biases:
+            raise ValueError("proj_biases 'qkv' is implemented for MLA and KDA only")
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -479,6 +490,8 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+            bias_q=None,
+            bias_dkv=None,
             cfg=cfg,
         )
 
@@ -491,8 +504,13 @@ class CausalSelfAttention(eqx.Module):
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         head_dim = self.cfg.inferred_head_dim
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        kv_latent = self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", x, self.w_dkv))
+        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        latent = jnp.einsum("bsh,hl->bsl", x, self.w_dkv)
+        if self.bias_q is not None and self.bias_dkv is not None:
+            q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
+            latent = latent + unshard(self.bias_dkv).astype(x.dtype)
+        q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
+        kv_latent = self.kv_latent_norm(latent)
         k_flat = jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uk)
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -675,6 +693,7 @@ class KimiDeltaAttention(eqx.Module):
     dt_bias: Float[Array, "N H"]
     w_beta: Float[Array, "D N"]
     o_norm: "RMSNorm"
+    bias_qkv: Float[Array, "3 NH"] | None
     sconv_q: ShortConv
     sconv_k: ShortConv
     sconv_v: ShortConv
@@ -696,6 +715,7 @@ class KimiDeltaAttention(eqx.Module):
             dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, h)),
             w_beta=reshard(_init_weight(k_b, (d, n), std), P(None, None)),
             o_norm=RMSNorm.init(h, 1e-6),
+            bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel),
@@ -708,13 +728,16 @@ class KimiDeltaAttention(eqx.Module):
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
 
-        def project(w: jax.Array, conv: ShortConv) -> jax.Array:
-            y = jax.nn.silu(conv(jnp.einsum("bsh,hd->bsd", x, w), segment_ids))
+        def project(w: jax.Array, conv: ShortConv, bias_row: int) -> jax.Array:
+            y = jnp.einsum("bsh,hd->bsd", x, w)
+            if self.bias_qkv is not None:
+                y = y + unshard(self.bias_qkv[bias_row]).astype(x.dtype)
+            y = jax.nn.silu(conv(y, segment_ids))
             return rearrange(y, "... (n d) -> ... n d", d=head_dim)
 
-        q = project(self.w_q, self.sconv_q)
-        k = project(self.w_k, self.sconv_k)
-        v = project(self.w_v, self.sconv_v)
+        q = project(self.w_q, self.sconv_q, 0)
+        k = project(self.w_k, self.sconv_k, 1)
+        v = project(self.w_v, self.sconv_v, 2)
         a = jnp.einsum("bsd,dr,re->bse", x, self.w_a_down, self.w_a_up)
         a = rearrange(a, "... (n d) -> ... n d", d=head_dim).astype(jnp.float32)
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
@@ -1094,6 +1117,8 @@ class Block(eqx.Module):
     # Learnable sublayer output scalars (None without cfg.sublayer_scales).
     attn_out_scale: Float[Array, ""] | None
     mlp_out_scale: Float[Array, ""] | None
+    bias_attn_out: Float[Array, " D"] | None
+    bias_mlp_out: Float[Array, " D"] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -1136,6 +1161,8 @@ class Block(eqx.Module):
             attn_res_query_mlp=attn_res_query,
             attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
             mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
+            bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
+            bias_mlp_out=jnp.zeros((cfg.hidden_dim,)) if "mlp_out" in cfg.proj_biases else None,
         )
 
     def attn_branch(
@@ -1152,6 +1179,8 @@ class Block(eqx.Module):
             out = self.attn(attn_in, _sconv_segment_ids(mask))
         else:
             out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids)
+        if self.bias_attn_out is not None:
+            out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
         if self.attn_out_scale is not None:
@@ -1169,6 +1198,8 @@ class Block(eqx.Module):
             out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in)
         else:
             out, stats = self.mlp(mlp_in)
+        if self.bias_mlp_out is not None:
+            out = out + unshard(self.bias_mlp_out).astype(out.dtype)
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         if self.mlp_out_scale is not None:
