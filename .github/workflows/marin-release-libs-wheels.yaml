@@ -25,7 +25,6 @@ on:
       - "finelog-v*"
       - "iris-native-v*"
       - "marin-libs-v*"
-      - "shellbox-v*"
     # GitHub requires static path filters. Keep this list aligned with
     # package-owned source_patterns; orchestration-only changes do not publish.
     paths:
