@@ -22,7 +22,7 @@ All 50 source questions were reviewed for this draft decomposition. 1 still have
 | bix-6-q4 | Statistical inference | Molecular function |
 | bix-61-q5 | Descriptive analysis | Genetic variation |
 | bix-53-q2 | Statistical inference | Gene expression |
-| bix-27-q5 | Data preparation; Exploratory analysis | Gene expression |
+| bix-27-q5 | Data preparation; Clustering and dimensionality reduction | Gene expression |
 | bix-54-q7 | Statistical inference; Optimization | Morphology |
 | bix-51-q2 | Statistical inference | Disease and treatment response |
 | bix-12-q5 | Descriptive analysis | Evolutionary relationships; Nucleotide sequences |

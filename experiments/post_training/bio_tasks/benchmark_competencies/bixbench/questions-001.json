@@ -37,7 +37,7 @@
           "id": "bix-design-case-control-go"
         }
       ],
-      "annotation_basis": "rule-assisted draft; review required",
+      "annotation_basis": "question-level review of the original instruction and stated input stage",
       "existing_mapping_status": "component-only",
       "recipes": [
         "real-rnaseq-size-factors",
@@ -46,21 +46,21 @@
         "real-rnaseq-go-enrichment"
       ],
       "scientific_context": [
-        "gene-expression"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
-        "exploratory-analysis",
-        "descriptive-analysis"
+        "statistical-inference"
       ],
-      "decomposition_status": "provisional",
+      "decomposition_status": "question-reviewed",
       "analysis_tags": [
-        "clustering",
-        "descriptive-statistics"
+        "model-fitting",
+        "hypothesis-testing",
+        "multiple-testing"
       ],
       "output_tags": [],
-      "context_review_needed": [
-        "Immunology"
-      ]
+      "context_review_needed": [],
+      "decomposition_note": "The question starts from RNA-seq counts and metadata and explicitly requires DESeq2 differential-expression analysis, selection by adjusted p-value, GO enrichment and an adjusted enrichment p-value after semantic simplification. Assign Statistical inference for model fitting, hypothesis testing and multiple-testing correction. The clusterProfiler package name does not establish clustering, and returning a rounded p-value does not establish descriptive analysis. Normalization internal to DESeq2 has no separately requested result here. Gene expression describes the measured input; Molecular function describes the GO functional annotation analysis. The T-cell term does not imply immune-repertoire analysis. Freeze the contrast, tested-gene universe and simplification conventions when authoring the verifier."
     },
     {
       "task_id": "bix-1-q2",

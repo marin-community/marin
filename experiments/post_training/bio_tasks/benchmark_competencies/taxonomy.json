@@ -40,10 +40,10 @@
     },
     {
       "id": "exploratory-analysis",
-      "name": "Exploratory analysis",
+      "name": "Clustering and dimensionality reduction",
       "outcome": "Discover groups or lower-dimensional representations through clustering or dimensionality reduction.",
-      "include": "Compute or assess clusters, components or embeddings as analytical results.",
-      "exclude": "Using a supplied embedding; plotting coordinates without analyzing the representation."
+      "include": "Compute clusters, components or embeddings, or assess the structure of a fitted representation.",
+      "exclude": "Summarizing supplied component statistics; plotting supplied coordinates; a package name such as clusterProfiler without a clustering or dimensionality-reduction requirement."
     },
     {
       "id": "alignment-matching",

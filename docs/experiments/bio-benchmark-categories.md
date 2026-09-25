@@ -6,7 +6,7 @@ Assignments are provisional requirements, not validated task coverage. Each ques
 
 Use these counts to find candidate workflows for review, alongside scientific decisions, available observed inputs and an executable reward. They are not generation quotas.
 
-49 records have a question-level operation decomposition. 641 records have no operation annotations yet; other migrated operation lists can also be incomplete. 619 records have no resolved scientific context. 874 retain a broad context requiring a more specific review. All eligible records remain in the denominator; missing annotations are not zero demand.
+50 records have a question-level operation decomposition. 641 records have no operation annotations yet; other migrated operation lists can also be incomplete. 619 records have no resolved scientific context. 873 retain a broad context requiring a more specific review. All eligible records remain in the denominator; missing annotations are not zero demand.
 
 ## Operation families
 
@@ -14,11 +14,11 @@ Use these counts to find candidate workflows for review, alongside scientific de
 | --- | --- | ---: | ---: | ---: |
 | Information retrieval | Locate reference records or source material and extract specified facts with traceable provenance. | 1534 | 42.9% | 17 |
 | Predictive modeling | Fit predictors, generate predictions or assess predictive performance under a declared evaluation policy. | 495 | 13.9% | 16 |
-| Descriptive analysis | Compute counts, proportions, distribution summaries or other descriptive measurements. | 407 | 11.4% | 21 |
+| Descriptive analysis | Compute counts, proportions, distribution summaries or other descriptive measurements. | 406 | 11.4% | 21 |
 | Simulation | Compute model-generated outcomes under specified conditions and numerical conventions. | 352 | 9.9% | 2 |
 | Data preparation | Clean, reconcile, normalize or transform inputs and prepare features for analysis. | 188 | 5.3% | 20 |
-| Statistical inference | Estimate associations or effects, test hypotheses, correct multiple tests or quantify uncertainty. | 110 | 3.1% | 11 |
-| Exploratory analysis | Discover groups or lower-dimensional representations through clustering or dimensionality reduction. | 109 | 3.1% | 12 |
+| Statistical inference | Estimate associations or effects, test hypotheses, correct multiple tests or quantify uncertainty. | 111 | 3.1% | 11 |
+| Clustering and dimensionality reduction | Discover groups or lower-dimensional representations through clustering or dimensionality reduction. | 108 | 3.0% | 12 |
 | Graph analysis | Calculate connectivity, paths, network structure or tree properties. | 65 | 1.8% | 11 |
 | Spatial analysis | Analyze positions, distances, geometry, neighborhoods or spatial dependence. | 57 | 1.6% | 14 |
 | Alignment and matching | Establish correspondence between ordered sequences, reference profiles or other representations. | 45 | 1.3% | 7 |
@@ -28,7 +28,7 @@ Use these counts to find candidate workflows for review, alongside scientific de
 
 | Category | Description | Question records | % of eligible records | ID releases |
 | --- | --- | ---: | ---: | ---: |
-| Molecular function | Gene essentiality, genetic dependencies, functional annotations and protein activity. | 1013 | 28.4% | 22 |
+| Molecular function | Gene essentiality, genetic dependencies, functional annotations and protein activity. | 1014 | 28.4% | 22 |
 | Genetic variation | Alleles, genotypes, inheritance and population variation. | 1003 | 28.1% | 21 |
 | Gene expression | RNA abundance and expression differences, including targeted and transcriptome-wide measurements. | 794 | 22.2% | 26 |
 | Disease and treatment response | Clinical phenotypes, disease progression, experimental or clinical treatment effects, drug sensitivity and resistance. | 520 | 14.6% | 20 |
