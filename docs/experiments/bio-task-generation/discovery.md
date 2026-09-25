@@ -19,6 +19,14 @@ Other concrete sources include [nf-core pipelines](https://nf-co.re/pipelines), 
 
 Follow catalog entries to workflow repositories, underlying packages, cited papers, analysis code and public data. Search from papers and tutorials back toward code as well. Institutional analysis-core courses, documented support questions and methods comparisons may reveal additional needs. Support answers are candidate leads, not trusted numerical references. Tiny package fixtures are useful installation checks, not evidence of realistic task size.
 
+## Reusable input collection
+
+Curate a versioned collection of biological datasets that multiple recipes can reuse. Start with inputs bundled with or linked from repository examples, tutorials and paper analyses. Their accompanying code can help establish formats, metadata conventions and intended use. Inspect whether they are observed data, simulated examples or installation fixtures; example status alone does not establish scientific adequacy or redistribution eligibility. Search for additional compatible studies when these inputs leave gaps.
+
+Treat a dataset as a defined set of biological observations with associated metadata. Reads, counts and derived subsets from those observations are linked assets of that dataset, not additional datasets toward the initial target. Distinct datasets can still share a study. Record each dataset's study/accession, source revision and asset hashes, biological units, assay, experimental design, metadata, available processing stages, size and access/redistribution terms. Link derived subsets and intermediates to their source observations. Keep this small inventory version-controlled; store large assets through the [publication arrangement](storage.md).
+
+Around ten datasets for an initial scientific area is a planning hypothesis to test, not a fixed quota or a prerequisite for authoring. Count independent studies separately from datasets, subsets and file representations. Choose the collection against proposed recipes: prioritize missing designs, modalities and biological contexts over additional variants of an already well-used study. For transcriptomics, one single-cell dataset cannot supply the replication, treatments or raw-read inputs required by every recipe. Report tasks per study and compatible datasets per recipe so repeated reuse and gaps remain visible. The appropriate collection size remains open.
+
 ## Discovery prompt
 
 The version-controlled discovery prompt may be used by a coordinating assistant, subagent or model worker. Inputs specify scientific areas, repository types, adoption signals, practical constraints and already known candidates.

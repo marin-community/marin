@@ -82,6 +82,12 @@ Use the [pipeline development testbed](index.md#pipeline-development-testbed) to
 
 The proposal worker should expose unresolved assumptions before construction. Freeze the scientific contract before computing expected outputs. Initially, an explicit analysis protocol is easier to validate than unrestricted method choice; it can still require substantial input handling, experimental design and integration.
 
+## Reusing datasets across recipes
+
+Select inputs from the [reusable input collection](discovery.md#reusable-input-collection) before curating new inputs for an individual task. Record which dataset–recipe combinations are scientifically compatible, including required processing stage, metadata, replication and design. Generate only compatible combinations; do not assume every recipe applies to every dataset. Run the reference on each instance's inputs to derive its expected results, and validate that instance separately. The recipe's acceptance rules stay fixed; expected values and input-specific identities change with the instance.
+
+One observed RNA-seq study with counts and suitable sample metadata can support separate normalization, sample-level exploratory analysis and differential-expression tasks, plus a connected analysis. A reads-to-counts task additionally needs compatible reads and a reference. These tasks broaden the operations exercised while retaining shared study lineage. Expand the collection when a recipe lacks meaningful variation; reuse does not replace the [initial ten-instance target](#initial-instance-target), and ten instances do not require ten studies.
+
 ## Input variation
 
 | Input source | Transcriptomics example | Contribution |

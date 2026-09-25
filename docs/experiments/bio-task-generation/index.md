@@ -55,6 +55,7 @@ The testbed starts with these cases; it is not yet an automated regression suite
 - Recipe boundaries, composition and permitted variation axes, to be calibrated through [transcriptomics examples](examples/transcriptomics.md).
 - The vocabulary for operations and scientific contexts, and how demand and missing coverage influence selection. No uniform allocation rule or numerical weighting formula is adopted.
 - How much retrieval-only or generic statistical work belongs in the corpus, and how much benchmark analysis to retain.
+- The size and composition of the [reusable input collection](discovery.md#reusable-input-collection). Around ten datasets per initial scientific area is a provisional idea; study diversity and recipe compatibility guide selection.
 - The initial candidate portfolio and the ongoing independent-trial and human-review sampling policy after calibration.
 - Authoring model, worker concurrency, budgets and repair limits. GLM is a candidate; no model service is required by a released grader.
 - The public release repository name and account, storage quota and final packaging layout. The storage page proposes Hugging Face; no release repository has been created by this plan.
