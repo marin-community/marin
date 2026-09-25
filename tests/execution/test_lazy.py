@@ -83,6 +83,22 @@ def dclm_1b(*, lr: float = 3e-3) -> ArtifactStep[Ckpt]:
     )
 
 
+def test_remote_env_values_do_not_leak_from_step_repr():
+    secret = "example-secret-value"
+    wrapped = remote(_make_tokens, env_vars={"WANDB_API_KEY": secret})
+    step = ArtifactStep(
+        name="datasets/redacted",
+        version="dev",
+        artifact_type=Tokens,
+        run=wrapped,
+        build_config=lambda ctx: TokenizeCfg(out=ctx.output_path, source="source", tokenizer="tokenizer"),
+    )
+
+    assert wrapped.env_vars["WANDB_API_KEY"] == secret
+    assert secret not in repr(wrapped)
+    assert secret not in repr(step)
+
+
 # --- Identity vs execution -----------------------------------------------------
 
 

@@ -51,7 +51,7 @@ class RemoteCallable(Generic[P, R]):
 
     fn: Callable[P, R]
     resources: ResourceConfig
-    env_vars: dict[str, str] = field(default_factory=dict)
+    env_vars: dict[str, str] = field(default_factory=dict, repr=False)
     pip_dependency_groups: list[str] | None = None
     pip_packages: list[str] | None = None
     name: str | None = None
