@@ -20,7 +20,6 @@ def _guest_file(name: str):
 
 
 def guest_code_id() -> str:
-    """Identify guest-side code included in a staged bundle."""
     digest = hashlib.sha256()
     for name in ("disk-init", "init", "pty-agent.c"):
         digest.update(_guest_file(name).read_bytes())
