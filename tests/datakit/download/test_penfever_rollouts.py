@@ -48,7 +48,8 @@ def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
                 {
                     "role": "assistant",
                     "content": (
-                        '<think><think>Inspect first.</think></think>\n{"analysis":"duplicate","plan":"duplicate",'
+                        '<think>Inspect {"commands": []} as an example first.</think>\nI will inspect it now.\n'
+                        '{"analysis":"duplicate","plan":"duplicate",'
                         '"commands":[{"keystrokes":"ls\\n","duration":0.1}]}'
                     ),
                 },
@@ -67,14 +68,20 @@ def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
         "Respond with JSON containing analysis, plan, commands, and task_complete.\n\n"
         "Task Description:\nFix the code."
     )
-    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
-    assert all(message.get("channel") == "final" for message in messages if message["role"] == "assistant")
-    assert json.loads(messages[1]["content"][0]["text"]) == {
+    assert [message["role"] for message in messages] == ["user", "assistant", "assistant", "user", "assistant"]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": 'Inspect {"commands": []} as an example first.'}]
+    assert [message["channel"] for message in messages if message["role"] == "assistant"] == [
+        "analysis",
+        "final",
+        "final",
+    ]
+    assert json.loads(messages[2]["content"][0]["text"]) == {
         "analysis": "duplicate",
         "plan": "duplicate",
         "commands": [{"keystrokes": "ls\n", "duration": 0.1}],
     }
-    assert messages[2]["content"] == [{"type": "text", "text": "New Terminal Output:\nfile.py"}]
+    assert messages[3]["content"] == [{"type": "text", "text": "New Terminal Output:\nfile.py"}]
     assert json.loads(messages[-1]["content"][0]["text"]) == {
         "analysis": "Done.",
         "plan": "Stop.",
@@ -82,11 +89,30 @@ def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
         "task_complete": True,
     }
     assert "chat_template_kwargs" not in document
-    rendered = render_chat_record(_normalize_chat_record(document, "messages", "id"))["text"]
+    normalized = _normalize_chat_record(document, "messages", "id")
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is True
+    rendered = render_chat_record(normalized)["text"]
     assert "Respond with JSON containing analysis, plan, commands, and task_complete." in rendered
+    assert 'Inspect {"commands": []} as an example first.' in rendered
     assert '"task_complete": true' in rendered
     assert "<tool_call>" not in rendered
     assert "<tool_response" not in rendered
+
+
+@pytest.mark.parametrize("prefix", ["<think><think>Inspect.</think></think>", "<think>Inspect."])
+def test_terminal_protocol_quarantines_malformed_thinking(prefix):
+    transform = row_to_chat_doc(_dataset("minimax-m27-131k"))
+    assert (
+        transform(
+            {
+                "conversations": [
+                    {"role": "user", "content": "Inspect the file."},
+                    {"role": "assistant", "content": prefix + '{"commands": [], "task_complete": true}'},
+                ]
+            }
+        )
+        == []
+    )
 
 
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():

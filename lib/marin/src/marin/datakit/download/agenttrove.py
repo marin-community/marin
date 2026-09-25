@@ -241,7 +241,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.17.native-terminus-source-filter"},
+        hash_attrs={"version": "2026.09.24"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

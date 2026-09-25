@@ -1258,7 +1258,9 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
                 }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
-            "terminus_version": "2026.09.17.native-json",
+            "terminus_version": (
+                "2026.09.17.native-json" if dataset.cohort_name == "qwen35-122b-131k-opencode" else "2026.09.24"
+            ),
             "conversion_version": "2026.09.11.review-fixes",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
