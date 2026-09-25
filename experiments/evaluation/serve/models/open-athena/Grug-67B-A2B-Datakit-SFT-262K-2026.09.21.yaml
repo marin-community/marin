@@ -1,0 +1,18 @@
+name: grug-67b-a2b-datakit-sft-262k-2026-09-21
+location: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+  disk: 500g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 262144
+  reasoning_parser: grug
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'

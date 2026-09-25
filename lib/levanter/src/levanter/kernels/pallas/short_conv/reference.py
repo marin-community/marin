@@ -16,6 +16,8 @@ lag order -- fixes the rounding that the fused kernel is required to match.
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from .config import OOB_SEGMENT
+
 
 def short_conv_reference(
     weight: Float[Array, "W C"],
@@ -33,7 +35,7 @@ def short_conv_reference(
     for lag in range(1, weight.shape[0]):
         shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
         if segment_ids is not None:
-            seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
+            seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=OOB_SEGMENT)[:, :seq_len]
             shifted = jnp.where((seg_shifted == segment_ids)[..., None], shifted, 0.0)
         out = out + weight[lag] * shifted
     return out

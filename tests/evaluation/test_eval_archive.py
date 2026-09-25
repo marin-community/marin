@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -13,9 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.admin import set_table_metadata
-from finestore.reader import ReadView
-from fsspec.core import url_to_fs
-from marin.evaluation.archive import (
+from finestore.eval import (
     Choice,
     EvalSample,
     EvaluationStore,
@@ -25,16 +24,27 @@ from marin.evaluation.archive import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
+    sample_from_lm_eval,
+    summarize_native_eval_samples,
 )
-from marin.evaluation.records import TaskCoverage
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.cli import (
+    ArchiveSweep,
+    SweepOutcome,
+    _resolve_prefixes,
+    _sweep_archives,
+    selected_archives,
+)
 from experiments.evaluation.migrations.cli import cli as migrations_cli
 from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
@@ -82,6 +92,133 @@ def test_archive_row_round_trips_each_sample_kind():
         assert sample_from_archive_row(row) == sample
 
 
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
+            b'{"doc_id": 999}\n',
+            content_type="application/x-ndjson",
+        )
+        store.add_source_artifact(
+            "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
+            json.dumps(
+                {
+                    "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+                    **_result_contract(
+                        "gsm8k",
+                        "exact_match",
+                        "accuracy",
+                        1.0,
+                        n_benchmark=1,
+                        n_attempted=1,
+                    ),
+                }
+            ).encode(),
+            content_type="application/json",
+        )
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_5shot",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                extracted="4",
+                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 5),))
+
+    assert summary.samples == 1
+    assert summary.coverage == {
+        "gsm8k_5shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=1,
+            n_unanswered=0,
+        )
+    }
+    assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
+    assert summary.tasks[0].benchmark is not None
+    assert summary.tasks[0].benchmark.primary_metric == "accuracy"
+
+
+def test_native_summary_partitions_repeated_task_configurations(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        for task, score in (("hellaswag_0shot", 0.0), ("hellaswag_10shot", 1.0)):
+            store.add_source_artifact(
+                f"evalchemy/{task}/native/samples_hellaswag_native.jsonl",
+                b'{"doc_id": 0}\n',
+                content_type="application/x-ndjson",
+            )
+            store.add_source_artifact(
+                f"evalchemy/{task}/native/results_hellaswag.json",
+                json.dumps(
+                    {
+                        "results": {"hellaswag": {"acc,none": score}},
+                        **_result_contract(
+                            "hellaswag",
+                            "acc",
+                            "accuracy",
+                            score,
+                            n_benchmark=1,
+                            n_attempted=1,
+                        ),
+                    }
+                ).encode(),
+                content_type="application/json",
+            )
+            store.add_sample(
+                EvalSample(
+                    task=task,
+                    doc_id="0",
+                    kind=SampleKind.MULTIPLE_CHOICE,
+                    grading=Grading(method="lm-eval:acc", metric="acc", score=score, passed=bool(score)),
+                    metrics={"acc": score},
+                    correct=bool(score),
+                )
+            )
+        store.seal()
+    finally:
+        store.close()
+
+    summary = summarize_native_eval_samples(
+        root,
+        tasks=(EvalTaskConfig("hellaswag", 0), EvalTaskConfig("hellaswag", 10)),
+    )
+
+    assert summary.coverage == {
+        "hellaswag_0shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=0,
+            n_unanswered=0,
+        ),
+        "hellaswag_10shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=1,
+            n_unanswered=0,
+        ),
+    }
+    assert summary.canonical_metrics == {
+        "hellaswag_0shot": {"accuracy": 0.0},
+        "hellaswag_10shot": {"accuracy": 1.0},
+    }
+
+
 def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     results = tmp_path / "run" / "results"
     sample_path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
@@ -109,6 +246,60 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     assert sample.prompt_messages[0].content == content
 
 
+def test_export_lm_eval_samples_bounds_peak_python_memory(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "mmlu_pro" / "model" / "samples_mmlu_pro_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    prompt = "Read the question and choose one answer. " + ("context " * 1_024)
+    rows = []
+    for doc_id in range(2_048):
+        rows.append(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "doc": {"question": "Which answer is correct?", "choices": ["A", "B"]},
+                    "target": 0,
+                    "arguments": [[prompt, "A"], [prompt, "B"]],
+                    "resps": [[-1.0, True], [-2.0, True]],
+                    "filtered_resps": [0],
+                    "acc": 1.0,
+                }
+            )
+        )
+    sample_path.write_text("\n".join(rows) + "\n")
+    del rows
+
+    source_size = sample_path.stat().st_size
+    tracemalloc.start()
+    try:
+        exported = export_lm_eval_samples(str(results))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert exported.samples == 2_048
+    assert peak < source_size * 5 / 2
+
+
+def test_native_evalchemy_generation_preserves_prompt():
+    prompt = json.dumps([{"role": "user", "content": "How many eggs?"}])
+
+    sample = sample_from_lm_eval(
+        "gsm8k_5shot",
+        {
+            "doc_id": 0,
+            "doc": {"question": "How many eggs?"},
+            "target": "18",
+            "arguments": [[[prompt], {"temperature": 1.0}]],
+            "resps": [["18"]],
+            "filtered_resps": ["18"],
+        },
+    )
+
+    assert sample.prompt_messages is not None
+    assert [(message.role, message.content) for message in sample.prompt_messages] == [("user", "How many eggs?")]
+
+
 def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
     """One lm-eval --log_samples row: a task applying two filters writes one of these per filter."""
     return {
@@ -123,6 +314,39 @@ def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: st
         "exact_match": score,
         "schema_version": 1,
         "task_name": "gsm8k",
+    }
+
+
+def _result_contract(
+    task: str,
+    source_metric: str,
+    canonical_metric: str,
+    value: float,
+    *,
+    n_benchmark: int,
+    n_attempted: int,
+    kind: str = "binary",
+) -> dict:
+    return {
+        "benchmark_metadata": {
+            task: {
+                "schema_version": 1,
+                "task": task,
+                "primary_metric": canonical_metric,
+                "metric_kind": kind,
+                "metrics": [
+                    {
+                        "name": canonical_metric,
+                        "source_name": source_metric,
+                        "kind": kind,
+                        "higher_is_better": True,
+                    }
+                ],
+                "n_benchmark": n_benchmark,
+                "n_attempted": n_attempted,
+            }
+        },
+        "canonical_results": {task: {canonical_metric: value}},
     }
 
 
@@ -165,6 +389,38 @@ def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
 
     [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
+
+
+def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
+    # Custom Evalchemy tasks can omit per-sample metrics while adding numeric provenance fields.
+    # Treating those row indices as scores makes every item after the first look correct.
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("metrics")
+    row.pop("exact_match")
+    row.update(
+        {
+            "sample_id": "MMLUPro:0:0:0",
+            "sample_namespace": "MMLUPro",
+            "sample_ordinal": 17,
+            "sample_repeat": 0,
+            "sample_shard": 0,
+            "source_id": 17,
+        }
+    )
+    _write_jsonl(results, [row])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(archived)
+    assert archived["filter"] == "none"
+    assert sample.metrics == {}
+    assert sample.grading is None
+    assert sample.correct is None
+    assert coverage == {
+        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+    }
 
 
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
@@ -220,6 +476,73 @@ def test_preserving_artifacts_never_includes_the_archive_itself(tmp_path):
     assert run_artifacts(str(results)) == sorted(run_artifacts(str(results)))
     assert len(run_artifacts(str(results))) == before
     assert not any(name.startswith(("samples/", "steps/", "blobs/")) for name in run_artifacts(str(results)))
+
+
+def test_aggregate_scored_task_counts_every_enumerated_document_as_scored(tmp_path):
+    """AIME24 writes only ``accuracy_avg``; its rows carry no per-item score. They are still graded."""
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    metadata = {
+        "schema_version": 1,
+        "task": "aime24",
+        "primary_metric": "accuracy",
+        "metric_kind": "continuous",
+        "metrics": [{"name": "accuracy", "source_name": "accuracy_avg", "kind": "continuous", "higher_is_better": True}],
+        "n_benchmark": 4,
+        "n_attempted": 4,
+    }
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"aime24": {"accuracy_avg": 0.5, "accuracy_std_err": 0.05, "num_total": 4}},
+                "benchmark_metadata": {"aime24": metadata},
+                "canonical_results": {"aime24": {"accuracy": 0.5, "accuracy_stderr": 0.05}},
+            }
+        )
+    )
+    rows = []
+    for doc_id in range(4):
+        row = _lm_eval_row(doc_id, "none", 1.0, "7")
+        del row["metrics"], row["exact_match"]
+        row["task_name"] = "aime24"
+        rows.append(row)
+    (directory / "samples_aime24_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    export = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("AIME24", 0, task_alias="aime24"),))
+
+    assert export.coverage["aime24"] == TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4, n_correct=None)
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert all(sample_from_archive_row(row).correct is None for row in stored)
+
+
+def test_missing_sample_metrics_do_not_imply_aggregate_scoring(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match": 0.5}},
+                **_result_contract("gsm8k", "exact_match", "exact_match", 0.5, n_benchmark=2, n_attempted=2),
+            }
+        )
+    )
+    rows = []
+    for doc_id in range(2):
+        row = _lm_eval_row(doc_id, "none", 1.0, "7")
+        del row["metrics"], row["exact_match"]
+        rows.append(row)
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    export = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 0),))
+
+    assert export.coverage["gsm8k"] == TaskCoverage(
+        n_benchmark=2,
+        n_attempted=2,
+        n_scored=0,
+        errors={"ungraded": 2},
+    )
 
 
 def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
@@ -389,6 +712,240 @@ def test_a_group_task_reports_coverage_per_subtask(tmp_path):
     assert all(entry.n_attempted == 3 for entry in coverage.values())
 
 
+def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "mmlu_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"mmlu_anatomy": {"acc,none": 1.0}, "mmlu_astronomy": {"acc,none": 0.0}},
+                "benchmark_metadata": {
+                    task: _result_contract(task, "acc", "accuracy", value, n_benchmark=size, n_attempted=2)[
+                        "benchmark_metadata"
+                    ][task]
+                    for task, value, size in (("mmlu_anatomy", 1.0, 3), ("mmlu_astronomy", 0.0, 4))
+                },
+                "canonical_results": {
+                    "mmlu_anatomy": {"accuracy": 1.0},
+                    "mmlu_astronomy": {"accuracy": 0.0},
+                },
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(2)]
+    for row in rows:
+        row["acc"] = row.pop("exact_match")
+    (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    coverage = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),),
+    ).coverage
+
+    assert coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(n_benchmark=3, n_attempted=2, n_scored=2, n_correct=2),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_benchmark=4, n_attempted=2, n_scored=0),
+    }
+
+
+def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "math500" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"MATH500": {"accuracy": 1.0}},
+                **_result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row["accuracy"] = row.pop("exact_match")
+    (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(row) + "\n")
+
+    [coverage] = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500"),),
+    ).coverage.values()
+
+    assert coverage.n_benchmark == 500
+    assert coverage.n_attempted == 10
+    assert coverage.n_scored == 1
+
+
+def test_export_records_aggregate_only_benchmark_metadata(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 0.4}},
+                **_result_contract(
+                    "AIME24",
+                    "accuracy_avg",
+                    "accuracy",
+                    0.4,
+                    n_benchmark=30,
+                    n_attempted=30,
+                    kind="continuous",
+                ),
+            }
+        )
+    )
+
+    exported = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("AIME24", 0, task_alias="aime24"),),
+    )
+
+    assert exported.canonical_metrics == {"aime24": {"accuracy": 0.4}}
+    assert exported.coverage == {"aime24": TaskCoverage(n_benchmark=30, n_attempted=30, n_scored=0)}
+    assert exported.tasks[0].benchmark is not None
+    assert exported.tasks[0].benchmark.primary_metric == "accuracy"
+
+
+def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"aime24": {"accuracy_avg": 1.0}},
+                **_result_contract("aime24", "accuracy", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    (directory / "samples_aime24_20260807.jsonl").write_text(json.dumps(row) + "\n")
+    task = EvalTaskConfig("aime24", 0, task_alias="aime24")
+
+    export_lm_eval_samples(str(results), tasks=(task,))
+
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 0.0, "4")
+    row["f1"] = 1.0
+    source = _write_jsonl(results, [row])
+    (source.parent / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"f1": 1.0}},
+                **_result_contract("gsm8k", "f1", "f1", 1.0, n_benchmark=1, n_attempted=1, kind="continuous"),
+            }
+        )
+    )
+    task = EvalTaskConfig("gsm8k", 5)
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(stored)
+    assert sample.grading.metric == "f1"
+    assert sample.correct
+
+
+def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    result_path = directory / "results_20260807.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 1.0}},
+                **_result_contract("AIME24", "accuracy", "accuracy", 1.0, n_benchmark=30, n_attempted=30),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    source = directory / "samples_AIME24_20260807.jsonl"
+    source.write_text(json.dumps(row) + "\n")
+    task = EvalTaskRef(
+        name="AIME24",
+        num_fewshot=0,
+        task_alias="aime24",
+    )
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+def test_two_sample_files_for_one_leaf_use_one_grouped_coverage_key(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 2}}})
+    )
+    for timestamp in ("20260807", "20260808"):
+        (directory / f"samples_gsm8k_{timestamp}.jsonl").write_text(json.dumps(_lm_eval_row(0, "none", 1.0, "4")) + "\n")
+
+    coverage = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),)).coverage
+
+    assert set(coverage) == {"gsm8k_5shot/gsm8k"}
+
+
+def test_export_reads_each_result_payload_once(tmp_path, monkeypatch):
+    results = tmp_path / "run" / "results"
+    source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    result_path = source.parent / "results_20260807.json"
+    result_path.write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 1}}})
+    )
+    original = StoragePath.read_bytes
+    reads = 0
+
+    def counted_read(path: StoragePath) -> bytes:
+        nonlocal reads
+        if str(path).endswith("results_20260807.json"):
+            reads += 1
+        return original(path)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", counted_read)
+
+    export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),))
+
+    assert reads == 1
+
+
+def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match,none": 1.0}},
+                **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=10, n_attempted=2),
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in (0, 2)]
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(ValueError, match="sample document extent 3 exceeds intended count 2"):
+        export_lm_eval_samples(
+            str(results),
+            tasks=(EvalTaskConfig("gsm8k", 5),),
+        )
+
+
 def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
     # "Sealed" has to mean "these are the finished contents". A stale marker left by an earlier
     # session would vouch for a table a failed export has since replaced.
@@ -413,19 +970,33 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     own = str(tmp_path / "own" / "results")
     visited: list[str] = []
 
-    def work(path: str) -> SweepOutcome:
+    def work(path: str, _records) -> SweepOutcome:
         visited.append(path)
         return SweepOutcome("exported", "0 sample(s)")
 
-    _sweep_archives({shared: ["run-a", "run-b"], own: ["run-c"]}, 4, work)
+    _sweep_archives(
+        {shared: ArchiveSweep(run_ids=("run-a", "run-b")), own: ArchiveSweep(run_ids=("run-c",))},
+        4,
+        work,
+    )
 
     assert sorted(visited) == sorted([shared, own])
 
 
-def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
+def test_naming_an_archive_directly_recovers_only_its_records(tmp_path, monkeypatch):
     # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
     named = str(tmp_path / "one" / "results")
-    assert selected_archives((), (named + "/",)) == {named: []}
+    matching = SimpleNamespace(results_path=named, run_id="run-a")
+    other = SimpleNamespace(results_path=str(tmp_path / "other" / "results"), run_id="run-b")
+    monkeypatch.setattr(
+        "experiments.evaluation.migrations.cli.list_records",
+        lambda prefix: (matching, other) if prefix == DEFAULT_SCAN_PREFIXES[0] else (),
+    )
+
+    prefixes = _resolve_prefixes((), (named + "/",))
+
+    assert prefixes == tuple(DEFAULT_SCAN_PREFIXES)
+    assert selected_archives(prefixes, (named + "/",)) == {named: ArchiveSweep(records=(matching,), run_ids=("run-a",))}
 
 
 def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypatch):

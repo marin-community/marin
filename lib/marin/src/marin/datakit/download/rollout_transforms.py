@@ -23,6 +23,7 @@ CHAT_CONTROL_TOKEN = re.compile(
     r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
 )
+TOOL_WRAPPER = re.compile(r"</?tool_(?:call|response)(?:[: >])", re.IGNORECASE)
 REASONING_START = "<|start_think|>"
 REASONING_END = "<|end_think|>"
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
@@ -203,7 +204,7 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
                 if content is None:
                     raise ValueError("Tool observations must contain text")
                 _check_source_markup(content)
-                if re.search(r"</?tool_(?:call|response)(?:[: >])", content, re.IGNORECASE):
+                if TOOL_WRAPPER.search(content):
                     raise ValueError("Tool observations must not contain chat protocol wrappers")
                 call_id = message.get("tool_call_id")
                 unanswered = pending.keys() - observations.keys()

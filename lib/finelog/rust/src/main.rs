@@ -233,6 +233,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing::info!(policy = %auth.describe(), "finelog-server: auth policy active");
     let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
+    let config = match &forwarder {
+        Some(forwarder) => config.with_forwarding(forwarder.config().clone()),
+        None => config,
+    };
     let app = build_app_with_config(Arc::clone(&store), config);
 
     // Cross-cluster forwarding starts before the listener binds so an existing

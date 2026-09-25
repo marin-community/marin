@@ -22,13 +22,10 @@ from iris.cluster.bundle import content_id
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.federation_store import ControllerFederationStore
+from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.service import (
-    WORKDIR_FILE_OFFLOAD_THRESHOLD,
-    ControllerServiceImpl,
-    _peer_status,
-)
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -761,7 +758,7 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
 def test_peer_status_derivation(cluster, handoff_state, has_reported_tasks, expected):
     """The full truth table of the PeerStatus derivation, including REJECTED and
     the mirrored-tasks-beat-a-stale-PENDING_HANDOFF ordering."""
-    assert _peer_status(cluster, handoff_state, has_reported_tasks) == expected
+    assert peer_status(cluster, handoff_state, has_reported_tasks) == expected
 
 
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):

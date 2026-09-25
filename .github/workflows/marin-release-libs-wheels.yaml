@@ -35,6 +35,7 @@ on:
       - "lib/finelog/rust/**"
       - "lib/iris/hatch_build.py"
       - "lib/iris/rust/**"
+      - "lib/finestore/src/**"
       - "rust/**"
       - "scripts/python_libs_package.py"
   pull_request:
@@ -47,6 +48,7 @@ on:
       - "lib/finelog/rust/**"
       - "lib/iris/hatch_build.py"
       - "lib/iris/rust/**"
+      - "lib/finestore/src/**"
       - "rust/**"
       - "scripts/ci/package_release.py"
       - "scripts/python_libs_package.py"

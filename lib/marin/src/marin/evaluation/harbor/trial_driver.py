@@ -6,15 +6,16 @@
 import asyncio
 import hashlib
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -22,30 +23,34 @@ from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
+from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
-from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
+from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
+
+from marin.evaluation.harbor.agent_context import (
+    MAX_INPUT_TOKENS_KEY,
+    MAX_OUTPUT_TOKENS_KEY,
+    MODEL_INFO_KEY,
+    reconciled_model_info,
+)
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_TERMINUS_2_AGENT = "terminus-2"
+_LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
+_MAX_TOKENS_KEY = "max_tokens"
 _STABLE_JOB_NAME = "__marin_job__"
 _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
-_PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
 _HF_DATASET_PREFIX = "hf://"
-_DEFAULT_MODEL_INFO = MappingProxyType(
-    {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-    }
-)
 
 
 class RuntimeOverlay(BaseModel):
@@ -59,6 +64,8 @@ class RuntimeOverlay(BaseModel):
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
     verifier_env: dict[str, str]
+    archive_root: str
+    archive_dataset: str
 
 
 class _DatasetKind(StrEnum):
@@ -183,13 +190,6 @@ def _dataset_metadata(
     return _DatasetMetadata(_DatasetKind.HARBOR_REGISTRY, dataset.name, revision)
 
 
-def _model_info(value: object) -> dict[str, Any]:
-    configured = {} if value is None else value
-    if not isinstance(configured, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    return {**_DEFAULT_MODEL_INFO, **configured}
-
-
 def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise ValueError("Harbor agent opencode_config must be a mapping")
@@ -216,6 +216,30 @@ def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     }
 
 
+def _terminus_llm_call_kwargs(
+    config: Mapping[str, Any] | None,
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    if config is None:
+        call_kwargs: Mapping[str, Any] = {}
+    elif isinstance(config, Mapping):
+        call_kwargs = config
+    else:
+        raise ValueError("Harbor agent llm_call_kwargs must be a mapping")
+
+    if not isinstance(max_output_tokens, int) or max_output_tokens < 1:
+        raise ValueError(f"Harbor agent model_info.max_output_tokens must be positive, got {max_output_tokens!r}")
+    max_tokens = call_kwargs.get(_MAX_TOKENS_KEY, max_output_tokens)
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError(f"Harbor agent llm_call_kwargs.max_tokens must be positive, got {max_tokens!r}")
+    if max_tokens > max_output_tokens:
+        raise ValueError(
+            f"Harbor agent llm_call_kwargs.max_tokens is {max_tokens} but model_info.max_output_tokens is only "
+            f"{max_output_tokens}; lower the request limit or raise generation.max_gen_toks"
+        )
+    return {**call_kwargs, _MAX_TOKENS_KEY: max_tokens}
+
+
 def _agent_config(
     agent: AgentConfig,
     *,
@@ -238,7 +262,16 @@ def _agent_config(
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
-    kwargs["model_info"] = _model_info(kwargs.get("model_info"))
+    model_info = reconciled_model_info(
+        overlay.model_agent_kwargs.get(MODEL_INFO_KEY),
+        agent.kwargs.get(MODEL_INFO_KEY),
+    )
+    kwargs[MODEL_INFO_KEY] = model_info
+    if agent.name == _TERMINUS_2_AGENT:
+        kwargs[_LLM_CALL_KWARGS_KEY] = _terminus_llm_call_kwargs(
+            kwargs.get(_LLM_CALL_KWARGS_KEY),
+            model_info[MAX_OUTPUT_TOKENS_KEY],
+        )
     return _agent_config(
         agent,
         endpoint_url=overlay.endpoint_url,
@@ -248,8 +281,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
 
 
 def _stable_agent(agent: AgentConfig) -> AgentConfig:
-    if "model_info" in agent.kwargs:
-        _model_info(agent.kwargs["model_info"])
+    reconciled_model_info(None, agent.kwargs.get(MODEL_INFO_KEY))
     return _agent_config(
         agent,
         endpoint_url=_STABLE_ENDPOINT,
@@ -289,6 +321,10 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "agents": [agent],
             "datasets": [dataset],
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
+            "archive": ArchiveConfig(
+                root=overlay.archive_root,
+                dataset=overlay.archive_dataset,
+            ),
         }
     )
     return effective
@@ -329,6 +365,15 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
+def _harbor_config_commit() -> str:
+    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
+    direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
+    commit = direct_url.get("vcs_info", {}).get("commit_id")
+    if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
+        raise ValueError("Harbor distribution does not identify its pinned commit")
+    return commit
+
+
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
@@ -344,22 +389,35 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    placeholder_dataset_path = (
-        None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
-    )
-    _effective_config(
-        stable_config,
-        RuntimeOverlay(
-            job_name=_STABLE_JOB_NAME,
-            jobs_dir=_STABLE_JOBS_DIR,
-            dataset_path=placeholder_dataset_path,
-            endpoint_url=_STABLE_ENDPOINT,
-            served_model=_STABLE_MODEL,
-            task_limit=None,
-            model_agent_kwargs=dict(model_agent_kwargs),
-            verifier_env={},
-        ),
-    )
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
+        dataset_path = (
+            str((path.parent / dataset_metadata.selector).resolve())
+            if dataset_metadata.kind == _DatasetKind.LOCAL
+            else None
+        )
+        effective = _effective_config(
+            stable_config,
+            RuntimeOverlay(
+                job_name=_STABLE_JOB_NAME,
+                jobs_dir=jobs_dir,
+                dataset_path=dataset_path,
+                endpoint_url=_STABLE_ENDPOINT,
+                served_model=_STABLE_MODEL,
+                task_limit=None,
+                model_agent_kwargs=dict(model_agent_kwargs),
+                verifier_env={},
+                archive_root=jobs_dir,
+                archive_dataset=dataset_metadata.selector,
+            ),
+        )
+        job = asyncio.run(Job.create(effective))
+    if len(job.benchmark_metadata) != 1:
+        raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
+    infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
+    agent_errors = errors_by_category(ErrorCategory.AGENT)
+    passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
+    undecided_errors = known_error_types() - infrastructure_errors - agent_errors - passthrough_errors
+    model_info = effective.agents[0].kwargs[MODEL_INFO_KEY]
     return {
         "stable_policy_json": stable_policy_json,
         "digest": f"sha256:{hashlib.sha256(stable_policy_json.encode()).hexdigest()}",
@@ -368,6 +426,20 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
+        "verifier_env_keys": sorted(
+            {name for name, default in get_required_host_vars(config.verifier.env) if default is None}
+        ),
+        "error_taxonomy": {
+            "infrastructure": sorted(infrastructure_errors),
+            "agent": sorted(agent_errors),
+            "passthrough": sorted(passthrough_errors),
+            "undecided": sorted(undecided_errors),
+            "commit": _harbor_config_commit(),
+        },
+        "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
+        "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
+        "benchmark_metadata": job.benchmark_metadata[0].model_dump(mode="json"),
+        "trials_per_task": config.n_attempts * len(config.agents),
     }
 
 

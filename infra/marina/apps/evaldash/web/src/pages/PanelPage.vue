@@ -4,17 +4,17 @@
  *
  * There is no headline cross-benchmark mean. A mean over benchmarks has no interpretation without a
  * declared panel, a per-benchmark metric, and a rule for the benchmarks a model never ran, so it is
- * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface,
- * and every ordering uses the interval's lower bound: a run that lost items should not outrank one
- * that graded them.
+ * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface.
+ * A benchmark column sorts on the score, and the fleet-best marker and delta-best pick the leader
+ * by the same rule. The interval under each score stays visible, and Compare ranks on it.
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
+import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
+import { cellsByModel, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -31,6 +31,7 @@ import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 // --- Request state. Everything the server needs to resolve a panel goes in the query, so a panel is
 // a shareable URL and the filters that produced a number travel with it. ---
@@ -46,6 +47,7 @@ const SELECTED_KEY = 'evaldash.selectedEvals'
 const KNOWN_KEY = 'evaldash.knownEvals'
 const selectedEvals = reactive(new Set<string>())
 const knownEvals = ref<string[]>([])
+const selectionReady = ref(false)
 
 // The selection every panel-backed endpoint shares. Compare takes the same one, so a head-to-head
 // launched from a narrowed panel scores the benchmarks and cohort the reader was looking at.
@@ -134,10 +136,12 @@ const sharedTasks = computed<string[]>(() => {
   return visibleTasks.value.filter((task) => selected.value.every((model) => modelCells.value[model]?.[task]))
 })
 
-// Carry the panel's selection into the compare route, so the comparison answers the same question
-// the panel was showing rather than falling back to every benchmark at the newest cohort.
+// Pin Compare to the exact variants shown in the panel.
 function goCompare() {
-  router.push({ path: '/compare', query: { ...selection.value, models: selected.value.join(',') } })
+  const benchmarks = columns.value.map((column) => column.task).join(',')
+  const query: Record<string, string> = { ...selection.value, models: selected.value.join(',') }
+  if (benchmarks) query.benchmarks = benchmarks
+  router.push({ path: '/compare', query })
 }
 
 const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))
@@ -159,18 +163,32 @@ function readStored(key: string): string[] | null {
     return null
   }
 }
-function persistSelection(present: string[]) {
+function routeBenchmarks(): string[] | null {
+  const value = route.query.benchmarks
+  if (value == null) return null
+  const values = Array.isArray(value) ? value : [value]
+  return values.flatMap((entry) => entry?.split(',') ?? []).filter(Boolean)
+}
+function persistSelection(present: string[], updateRoute = true) {
   localStorage.setItem(SELECTED_KEY, JSON.stringify([...selectedEvals]))
   localStorage.setItem(KNOWN_KEY, JSON.stringify(present))
+  if (!updateRoute) return
+  const selected = [...selectedEvals]
+  const benchmarks = selected.length > 0 && selected.length !== present.length ? selected.join(',') : undefined
+  void router.replace({ query: { ...route.query, benchmarks } })
 }
 function syncSelection(present: string[]) {
+  const fromRoute = routeBenchmarks()
   const stored = readStored(SELECTED_KEY)
   const known = new Set(readStored(KNOWN_KEY) ?? [])
   selectedEvals.clear()
   for (const name of present) {
-    if (stored === null || stored.includes(name) || !known.has(name)) selectedEvals.add(name)
+    if (fromRoute ? fromRoute.includes(name) : stored === null || stored.includes(name) || !known.has(name)) {
+      selectedEvals.add(name)
+    }
   }
   knownEvals.value = present
+  selectionReady.value = true
   persistSelection(present)
 }
 // Driven by meta rather than the panel: the panel reflects the current selection, so syncing off it
@@ -181,6 +199,18 @@ watch(
     if (evals) syncSelection(evals.filter((name) => !isSmokeEval(name)))
   },
   { immediate: true },
+)
+watch(
+  () => route.query.benchmarks,
+  () => {
+    if (!selectionReady.value) return
+    const requested = routeBenchmarks()
+    selectedEvals.clear()
+    for (const name of knownEvals.value) {
+      if (requested === null || requested.includes(name)) selectedEvals.add(name)
+    }
+    persistSelection(knownEvals.value, false)
+  },
 )
 
 interface SuiteNode {
@@ -217,29 +247,93 @@ const visibleTasks = computed(() => data.value?.panel ?? [])
 // --- Fleet best per benchmark (the rail caret and the column marker) ---
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
-// --- Ordering: by a benchmark column's interval lower bound, else by panel coverage. Sorting on the
-// lower bound is the point — a partly-graded run cannot buy rank with the items it kept. ---
+// --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---
+const MODEL_SORT = 'model'
 const COVERAGE_SORT = 'coverage'
+const UPDATED_SORT = 'last_updated'
+type SortDirection = 'asc' | 'desc'
+
 const sortKey = ref<string>(COVERAGE_SORT)
-function sortBy(key: string) {
-  sortKey.value = sortKey.value === key ? COVERAGE_SORT : key
+const sortDirection = ref<SortDirection>('desc')
+
+function defaultDirection(key: string): SortDirection {
+  return key === MODEL_SORT ? 'asc' : 'desc'
 }
+function sortBy(key: string) {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortDirection.value = defaultDirection(key)
+}
+function sortGlyph(key: string): string {
+  if (sortKey.value !== key) return ''
+  return sortDirection.value === 'asc' ? '▲' : '▼'
+}
+function headerClass(key: string): string {
+  return sortKey.value === key ? 'text-accent' : 'text-text-secondary'
+}
+
+// A benchmark column orders its cells by compareCells, the rule the fleet-best marker uses. The model,
+// coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
+function compareRows(a: PanelRow, b: PanelRow, direction: number): number {
+  if (sortKey.value === MODEL_SORT) return a.model.localeCompare(b.model) * direction
+  if (sortKey.value === COVERAGE_SORT) return (a.covered - b.covered) * direction
+  if (sortKey.value === UPDATED_SORT) {
+    if (a.last_updated === null || b.last_updated === null) {
+      return Number(a.last_updated === null) - Number(b.last_updated === null)
+    }
+    return a.last_updated.localeCompare(b.last_updated) * direction
+  }
+  const cellA = a.cells[sortKey.value]
+  const cellB = b.cells[sortKey.value]
+  if (!cellA || !cellB) return Number(!cellA) - Number(!cellB)
+  return -compareCells(cellA, cellB) * direction
+}
+
 const rows = computed<PanelRow[]>(() => {
   const all = [...(data.value?.rows ?? [])]
+  const direction = sortDirection.value === 'asc' ? 1 : -1
   return all.sort((a, b) => {
     if (a.archived !== b.archived) return Number(a.archived) - Number(b.archived)
-    if (sortKey.value === COVERAGE_SORT) {
-      if (a.covered !== b.covered) return b.covered - a.covered
-      return a.model.localeCompare(b.model)
-    }
-    const av = a.cells[sortKey.value]?.low ?? null
-    const bv = b.cells[sortKey.value]?.low ?? null
-    if (av === null && bv === null) return a.model.localeCompare(b.model)
-    if (av === null) return 1
-    if (bv === null) return -1
-    return bv - av
+    return compareRows(a, b, direction) || a.model.localeCompare(b.model)
   })
 })
+
+interface FamilyColumn {
+  family: string
+  task: string
+  variants: string[]
+}
+
+// Meta includes siblings omitted by a narrowed panel, so the picker can switch back.
+const knownVariants = computed<Record<string, string[]>>(() => {
+  const known = new Set(knownEvals.value)
+  const out: Record<string, string[]> = {}
+  for (const entry of meta.value?.families ?? []) {
+    const present = entry.variants.filter((name) => known.has(name))
+    if (present.length) out[entry.family] = present
+  }
+  return out
+})
+
+const columns = computed<FamilyColumn[]>(() => {
+  const shown = new Set(visibleTasks.value)
+  return (data.value?.families ?? []).map((entry) => ({
+    family: entry.family,
+    task: entry.variants.find((name) => shown.has(name)) ?? entry.default,
+    variants: knownVariants.value[entry.family] ?? entry.variants,
+  }))
+})
+
+function pickVariant(column: FamilyColumn, variant: string) {
+  const next = withVariant(selectedEvals, column.variants, variant)
+  selectedEvals.clear()
+  for (const name of next) selectedEvals.add(name)
+  if (sortKey.value === column.task) sortKey.value = variant
+  persistSelection(knownEvals.value)
+}
 
 // Δ best is per benchmark, where a difference between two measurements of the same thing is defined.
 // There is no cross-benchmark Δ.
@@ -283,6 +377,10 @@ function cellFor(row: PanelRow, task: string): PanelCell | undefined {
 function gapFor(row: PanelRow, task: string): MissingCell | undefined {
   return row.missing[task]
 }
+function protocolLabel(task: string): string {
+  const protocol = data.value?.protocols[task]
+  return protocol ? `${protocol.metric} · ${protocol.kind}` : 'legacy metric'
+}
 // A cell names the run behind it, the cohort it came from, and the harness that defined the
 // benchmark. Cells in one column can come from different cohorts -- that is the point of merging the
 // newest valid result per benchmark -- so the row heading cannot carry this and the cell must.
@@ -291,11 +389,15 @@ function cellTitle(cell: PanelCell): string {
     cell.interval_kind === INTERVAL_KIND.IDENTIFIED
       ? formatCoverage(cell.coverage)
       : 'attempted count not reported, so completeness is unknown'
+  const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
-    `${cell.metric} · ${cell.n_scored} items graded`,
+    `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
+    cell.n_benchmark === null
+      ? 'benchmark size unreported'
+      : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
-    `run ${cell.run_id}`,
+    `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
     `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
     'click for history',
   ].join('\n')
@@ -305,7 +407,7 @@ function isSuspect(cell: PanelCell): boolean {
   return cell.flags.includes(RESULT_FLAG.NO_ANSWERS)
 }
 function gapLabel(gap: MissingCell): string {
-  if (gap.reason.startsWith('coverage')) return 'under-covered'
+  if (gap.reason.includes('coverage')) return 'under-covered'
   if (gap.reason.startsWith('flagged')) return 'flagged'
   return 'no result'
 }
@@ -330,7 +432,7 @@ function goToModel(model: string) {
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
-        the run never graded. Ordering everywhere uses the interval's lower bound.
+        the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
     </div>
 
@@ -488,8 +590,22 @@ function goToModel(model: string) {
                 class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
               >
                 <th class="px-3 py-2 text-left w-8"></th>
-                <th class="px-3 py-2 text-left">Model</th>
-                <th class="px-3 py-2 text-left">Coverage</th>
+                <th
+                  class="px-3 py-2 text-left cursor-pointer"
+                  :class="headerClass(MODEL_SORT)"
+                  title="Sort by model name"
+                  @click="sortBy(MODEL_SORT)"
+                >
+                  Model {{ sortGlyph(MODEL_SORT) }}
+                </th>
+                <th
+                  class="px-3 py-2 text-left cursor-pointer"
+                  :class="headerClass(COVERAGE_SORT)"
+                  title="Sort by panel coverage"
+                  @click="sortBy(COVERAGE_SORT)"
+                >
+                  Coverage {{ sortGlyph(COVERAGE_SORT) }}
+                </th>
                 <th v-if="aggregatePolicy" class="px-3 py-2 text-right">Panel aggregate</th>
                 <th class="px-3 py-2 text-left">Profile</th>
                 <th class="px-3 py-2 text-right"></th>
@@ -593,8 +709,8 @@ function goToModel(model: string) {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Per-benchmark
             <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · click a header to sort by its lower
-              bound · a cell for history)
+              ({{ rows.length }} models × {{ columns.length }} benchmark families · benchmarks sort on score · click a
+              cell for history)
             </span>
           </h3>
         </div>
@@ -604,26 +720,47 @@ function goToModel(model: string) {
               <tr class="border-b border-surface-border bg-surface-raised">
                 <th
                   class="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer"
-                  :class="sortKey === COVERAGE_SORT ? 'text-accent' : 'text-text-secondary'"
-                  title="Sort by panel coverage"
-                  @click="sortBy(COVERAGE_SORT)"
+                  :class="headerClass(MODEL_SORT)"
+                  title="Sort by model name"
+                  @click="sortBy(MODEL_SORT)"
                 >
-                  Model
+                  Model {{ sortGlyph(MODEL_SORT) }}
                 </th>
                 <th
-                  v-for="task in visibleTasks"
-                  :key="task"
+                  v-for="column in columns"
+                  :key="column.family"
                   class="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
-                  :class="sortKey === task ? 'text-accent' : 'text-text-secondary'"
-                  @click="sortBy(task)"
+                  :class="headerClass(column.task)"
+                  @click="sortBy(column.task)"
                 >
-                  {{ task }}
+                  {{ column.family }} {{ sortGlyph(column.task) }}
+                  <select
+                    v-if="column.variants.length > 1"
+                    class="block mx-auto mt-0.5 rounded border border-surface-border bg-surface px-1 py-0 font-mono text-[10px] font-normal normal-case text-text-secondary"
+                    title="Which setting of this benchmark the column shows. Compare uses the selected setting."
+                    :value="column.task"
+                    @click.stop
+                    @change="pickVariant(column, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="variant in column.variants" :key="variant" :value="variant">{{ variant }}</option>
+                  </select>
+                  <span class="block font-normal normal-case font-mono text-[10px] text-text-muted">
+                    {{ protocolLabel(column.task) }}
+                  </span>
                   <span
-                    v-if="best[task]"
+                    v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"
                     style="color: var(--c-best)"
-                    >▲ {{ formatScore(best[task].value) }}</span
+                    >▲ {{ formatScore(best[column.task].value) }}</span
                   >
+                </th>
+                <th
+                  class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
+                  :class="headerClass(UPDATED_SORT)"
+                  title="Latest result included in this row"
+                  @click="sortBy(UPDATED_SORT)"
+                >
+                  Last updated {{ sortGlyph(UPDATED_SORT) }}
                 </th>
               </tr>
             </thead>
@@ -639,7 +776,7 @@ function goToModel(model: string) {
                     {{ row.model }}
                   </button>
                 </td>
-                <td v-for="task in visibleTasks" :key="task" class="p-1 text-center align-middle">
+                <td v-for="{ task } in columns" :key="task" class="p-1 text-center align-middle">
                   <button
                     v-if="cellFor(row, task)"
                     class="w-full rounded px-2 py-1.5 leading-tight cursor-pointer hover:ring-1 hover:ring-accent-border"
@@ -679,6 +816,12 @@ function goToModel(model: string) {
                   </button>
                   <span v-else class="text-text-muted" title="Never run on this benchmark">—</span>
                 </td>
+                <td
+                  class="px-3 py-2 text-right whitespace-nowrap font-mono text-[11px] tabular-nums text-text-muted"
+                  title="Latest result included in this row"
+                >
+                  {{ formatTimestamp(row.last_updated) }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -688,7 +831,13 @@ function goToModel(model: string) {
           <span class="text-status-warning">no result</span> links the run that failed the panel's admission rule, and
           — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
           panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
-          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>.
+          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>. Last updated is
+          the maximum timestamp among the row's displayed cells. Each cell's timestamp appears in its tooltip.
+        </p>
+        <p class="text-xs text-text-muted mt-1 leading-relaxed">
+          A benchmark run under more than one setting takes one column, opened on whichever setting has results for the
+          most models here. The picker under the name switches it, and every cell, tooltip, history and comparison
+          stays on the exact eval it names.
         </p>
       </div>
     </div>

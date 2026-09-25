@@ -1,12 +1,20 @@
 ---
 name: consult-echo
-description: Search or cite Echo when Marin's prior-work policy applies, another selected workflow requires it, or the user explicitly asks; do not substitute it for local code search.
+description: Search or cite Echo at the start of a fresh Marin investigation when prior-work policy applies, another selected workflow requires it, or the user explicitly asks; reuse relevant results during the same logical investigation.
 ---
 
 # Consult Echo
 
 Search Echo before rediscovering prior work. Cite canonical Echo, GitHub, or
 Discord URLs for the evidence you use.
+
+Treat one incident, debugging session, or research question as one logical
+investigation across continuation turns. Search once when that investigation
+starts, then reuse relevant results already fetched in the conversation. Do not
+search again merely because the user asks a follow-up question or requests the
+next operational step. Search again only when the incident, question,
+repository scope, or freshness requirement changes, when a selected workflow
+requires a current duplicate check, or when the user explicitly asks.
 
 ## Search
 
@@ -67,9 +75,10 @@ Run this search sequence before adding or editing a wiki note.
 
 ## Choose the durable home
 
-Every incident gets a standalone Echo record through `write-ops-log`, linked
-from its associated PR or issue. Also use the narrowest reusable home when the
-incident or other work changes durable guidance:
+Every live infrastructure incident, as defined by `write-ops-log`, gets a
+standalone Echo record linked from its associated PR or issue. Also use the
+narrowest reusable home when the incident or other work changes durable
+guidance:
 
 - Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
   or guardrail in one subsystem.

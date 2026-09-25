@@ -73,9 +73,12 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         assert triggered == ["projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash"]
 
         runs = client.get("/runs?limit=100").json()
-        assert len(runs) == 15
+        assert len(runs) == 21
         assert client.get("/runs/snowball-2026.07.20-mmlu").json()["status"] == "succeeded"
         assert client.get("/status").json()["store"]["catalog_generation"] > 0
+
+        snowball = next(row for row in client.get("/panel").json()["rows"] if row["model"] == "snowball")
+        assert snowball["last_updated"] == max(cell["created_at"] for cell in snowball["cells"].values())
 
 
 def test_a_second_instance_serves_the_generation_the_first_committed(engine, records):

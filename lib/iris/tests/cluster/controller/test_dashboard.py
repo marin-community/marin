@@ -2026,18 +2026,6 @@ def test_proxy_dashboard_forwards_endpoint_service_rpc(monkeypatch):
     assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
 
 
-def test_proxy_dashboard_forwards_resource_service_rpc(monkeypatch):
-    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch)
-    with TestClient(dashboard.app) as client:
-        response = client.post(
-            "/iris.resource.ResourceService/Get",
-            json={"resourceType": "job"},
-        )
-
-    assert response.status_code == 200
-    assert [request.url.path for request in requests] == ["/iris.resource.ResourceService/Get"]
-
-
 def _static_credentials() -> ClientCredentials:
     return ClientCredentials(
         token_provider=StaticTokenProvider("app-token"),

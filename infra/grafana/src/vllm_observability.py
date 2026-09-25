@@ -3,14 +3,23 @@
 
 """Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
-import math
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
+
+import duckdb
+import pyarrow as pa
+from dashboard_dataset import bounded_bucket_ms, projection_database, validate_table_budget, validate_value
+from finelog.errors import QueryResultTooLargeError
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 # Leave room for latency/outcome series and bounded producer tables in the shared result.
 VLLM_MAX_POINTS = 360
 VLLM_MAX_RESULT_ROWS = 10_000
+VLLM_MAX_SAMPLES = 1_000_000
+VLLM_MAX_SERIES = 50_000
+VLLM_DETAIL_MAX_WINDOW_MS = 7 * 60 * 60 * 1000
+VLLM_MAX_SUMMARY_ROWS = 1_000
 VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
 VLLM_HISTOGRAM_COHERENCE_MS = 15_000
@@ -25,8 +34,13 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "freshness",
         "freshness_detail",
         "latency",
+        "length_finish_fraction",
+        "output_length_distribution",
         "request_outcome",
         "request_rate",
+        "run_summary",
+        "run_timeline",
+        "diagnostic_status",
         "saturation",
         "saturation_summary",
         "telemetry_health",
@@ -49,6 +63,7 @@ class VllmOverviewQuery:
     """Validated SQL and canonical parameters for one vLLM overview."""
 
     sql: str
+    samples_sql: str
     identity_field: VllmIdentityField
     identity: str
     start_ms: int
@@ -94,14 +109,58 @@ _HEALTH_METRIC_NAMES = (
     "metric_publication_dropped_records",
 )
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
+_HISTOGRAM_BOUND_ORDER_SQL = "CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(upper_bound AS DOUBLE) END"
+_SUMMARY_METRIC_NAMES = (
+    *_TOKEN_COUNTERS,
+    *_PREEMPTION_COUNTERS,
+    *_OUTCOME_COUNTERS,
+    "time_to_first_token_seconds_count",
+    "inter_token_latency_seconds_sum",
+    "inter_token_latency_seconds_count",
+    "num_requests_waiting",
+    "kv_cache_usage_perc",
+    "gpu_cache_usage_perc",
+)
 
 
 def sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _sql_values(values: tuple[str, ...]) -> str:
+def sql_values(values: tuple[str, ...]) -> str:
     return ", ".join(sql_string(value) for value in values)
+
+
+def _vllm_samples_query(
+    identity_field: VllmIdentityField, identity: str, scan_start_ms: int, end_ms: int, names: tuple[str, ...]
+) -> str:
+    identity_literal = sql_string(identity)
+    metric_names = sql_values(names)
+    return f"""
+WITH base AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+           service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
+    FROM "telemetry_v1.vllm"
+    WHERE service = 'vllm'
+      AND {identity_field.value} = {identity_literal}
+      AND name IN ({metric_names})
+      AND timestamp_ms >= {scan_start_ms} AND timestamp_ms < {end_ms}
+    UNION ALL
+    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+           service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
+    FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND {identity_field.value} = {identity_literal}
+      AND name IN ({metric_names})
+      AND timestamp_ms >= {scan_start_ms} AND timestamp_ms < {end_ms}
+)
+SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+       array_agg(named_struct('timestamp_ms', timestamp_ms, 'seq', seq, 'value', value)) AS points
+FROM (SELECT * FROM base LIMIT {VLLM_MAX_SAMPLES + 1}) AS bounded_samples
+GROUP BY 1, 2, 3, 4, 5, 6
+LIMIT {VLLM_MAX_SERIES + 1}
+""".strip()
 
 
 def _case_for(mapping: tuple[tuple[str, str], ...], expression: str) -> str:
@@ -129,22 +188,6 @@ def _histogram_source_mapping() -> tuple[tuple[str, str], ...]:
     )
 
 
-def _validate_identity(identity: str) -> None:
-    if not identity:
-        raise ValueError("identity must not be empty")
-    if len(identity) > VLLM_MAX_IDENTITY_LENGTH:
-        raise ValueError(f"identity exceeds {VLLM_MAX_IDENTITY_LENGTH} characters")
-    if any(ord(character) < 32 for character in identity):
-        raise ValueError("identity must not contain control characters")
-
-
-def _bounded_bucket_ms(start_ms: int, end_ms: int, requested_bucket_ms: int) -> int:
-    if requested_bucket_ms <= 0:
-        raise ValueError("bucket_ms must be positive")
-    minimum_for_result_cap = math.ceil((end_ms - start_ms) / VLLM_MAX_POINTS)
-    return min(end_ms - start_ms, max(requested_bucket_ms, VLLM_MIN_BUCKET_MS, minimum_for_result_cap))
-
-
 def vllm_overview_query(
     identity_field: VllmIdentityField,
     identity: str,
@@ -153,63 +196,47 @@ def vllm_overview_query(
     requested_bucket_ms: int,
 ) -> VllmOverviewQuery:
     """Render the fixed vLLM overview query after validating its safety bounds."""
-    _validate_identity(identity)
-    if start_ms < 0 or end_ms <= start_ms:
-        raise ValueError("to must be later than from and both times must be nonnegative")
-    if end_ms - start_ms > VLLM_MAX_WINDOW_MS:
-        raise ValueError("vLLM overview range must not exceed 7 days")
-
-    bucket_ms = _bounded_bucket_ms(start_ms, end_ms, requested_bucket_ms)
+    validate_value("identity", identity, max_length=VLLM_MAX_IDENTITY_LENGTH)
+    bucket_ms = bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=VLLM_MAX_WINDOW_MS,
+        max_window_error="vLLM overview range must not exceed 7 days",
+        min_bucket_ms=VLLM_MIN_BUCKET_MS,
+        max_points=VLLM_MAX_POINTS,
+    )
     standalone_bucket_ms = max(bucket_ms, VLLM_SCRAPE_INTERVAL_MS)
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
-    identity_literal = sql_string(identity)
-    metric_names = _sql_values(_METRIC_NAMES)
-    serving_metric_names = _sql_values(_SERVING_METRIC_NAMES)
-    token_counters = _sql_values(_TOKEN_COUNTERS)
-    preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
-    outcome_counters = _sql_values(_OUTCOME_COUNTERS)
-    gauges = _sql_values(_GAUGES)
-    histogram_names = _sql_values(_HISTOGRAM_NAMES)
+    serving_metric_names = sql_values(_SERVING_METRIC_NAMES)
+    token_counters = sql_values(_TOKEN_COUNTERS)
+    preemption_counters = sql_values(_PREEMPTION_COUNTERS)
+    outcome_counters = sql_values(_OUTCOME_COUNTERS)
+    gauges = sql_values(_GAUGES)
+    histogram_names = sql_values(_HISTOGRAM_NAMES)
     histogram_family = _case_for(_histogram_name_mapping(), "name")
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
+    samples_sql = _vllm_samples_query(identity_field, identity, scan_start_ms, end_ms, _METRIC_NAMES)
+    # Retain the whole leading coherence interval and one predecessor per
+    # series. Older points can affect neither an in-window delta nor freshness.
+    coherence_start_ms = start_ms - start_ms % VLLM_HISTOGRAM_COHERENCE_MS
     sql = f"""
-WITH base AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
-           service,
-           name,
-           kind,
-           value,
-           resource_attributes_json,
-           attributes_json,
-           timestamp_ms,
-           seq
-    FROM "telemetry_v1.vllm"
-    WHERE service = 'vllm'
-      AND {identity_field.value} = {identity_literal}
-      AND name IN ({metric_names})
-      AND timestamp_ms >= {scan_start_ms}
-      AND timestamp_ms < {end_ms}
-
-    UNION ALL
-
-    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
-           service,
-           name,
-           kind,
-           value,
-           resource_attributes_json,
-           attributes_json,
-           timestamp_ms,
-           seq
-    FROM "telemetry_v1.marinskyrl"
-    WHERE service = 'marinskyrl'
-      AND json_get(attributes_json, 'metric_source') = 'vllm'
-      AND {identity_field.value} = {identity_literal}
-      AND name IN ({metric_names})
-      AND timestamp_ms >= {scan_start_ms}
-      AND timestamp_ms < {end_ms}
+WITH base AS MATERIALIZED (
+    SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+           point.timestamp_ms AS timestamp_ms, point.seq AS seq, point.value AS value
+    FROM (
+        SELECT * EXCLUDE (points), unnest(list_concat(
+            list_slice(list_filter(points, p -> p.timestamp_ms < {coherence_start_ms}), -1, -1),
+            list_filter(points, p -> p.timestamp_ms >= {coherence_start_ms})
+        )) AS point
+        FROM (SELECT * REPLACE (
+            list_sort(points) AS points,
+            CAST(resource_attributes_json AS resource_labels) AS resource_attributes_json,
+            CAST(attributes_json AS metric_labels) AS attributes_json
+        ) FROM series)
+    )
 ), cumulative_samples AS (
     SELECT *,
            LAG(value) OVER (
@@ -446,6 +473,10 @@ WITH base AS (
     GROUP BY 1, 2, 3, 4, 5, 6
 ), coherent_histogram_increments AS (
     SELECT samples.sample_t,
+           samples.origin_cluster,
+           samples.service,
+           samples.resource_attributes_json,
+           samples.producer_identity,
            samples.family,
            samples.component,
            samples.upper_bound,
@@ -459,6 +490,18 @@ WITH base AS (
      AND samples.source_family = validity.source_family
      AND samples.sample_t = validity.sample_t
     WHERE validity.valid_sample = 1
+), engine_itl AS (
+    SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS value,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
+    FROM coherent_histogram_increments
+    WHERE family = 'inter_token_latency'
+    GROUP BY 1
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
+), ranked_engine_itl AS (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY series) AS producer_rank
+    FROM engine_itl
 ), histogram_time_means AS (
     SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
            family,
@@ -487,6 +530,14 @@ WITH base AS (
            bucket_count,
            MAX(bucket_count) OVER (PARTITION BY family) AS total_count
     FROM histogram_buckets
+), output_length_distribution AS (
+    SELECT upper_bound,
+           bucket_count - COALESCE(LAG(bucket_count) OVER (
+               ORDER BY {_HISTOGRAM_BOUND_ORDER_SQL}
+           ), 0) AS value,
+           total_count
+    FROM histogram_ranked_buckets
+    WHERE family = 'output_tokens'
 ), histogram_quantiles AS (
     SELECT family,
            MIN(CASE
@@ -518,11 +569,12 @@ WITH base AS (
            END AS value,
            samples
     FROM histogram_stats
-    -- A UNION per statistic would repeat the histogram pipeline in Finelog's plan.
+    -- Share the histogram pipeline across statistics.
     CROSS JOIN (VALUES ('mean'), ('p50'), ('p90'), ('p99')) AS quantile(stat)
 ), outcome_increments AS (
     SELECT timestamp_ms,
            service,
+           name,
            COALESCE(
                json_get(attributes_json, 'finished_reason'),
                json_get(attributes_json, 'finish_reason'),
@@ -538,6 +590,12 @@ WITH base AS (
     SELECT outcome, SUM(delta) AS value
     FROM outcome_increments
     GROUP BY 1
+), length_finish_fraction AS (
+    SELECT SUM(CASE WHEN outcome = 'length' THEN delta ELSE 0 END) / NULLIF(SUM(delta), 0) AS value,
+           SUM(delta) AS samples
+    FROM outcome_increments
+    WHERE name = 'request_success_total'
+    HAVING COUNT(delta) > 0
 ), outcome_source_rates AS (
     SELECT {start_ms} + (timestamp_ms - {start_ms})
                - (timestamp_ms - {start_ms}) % CASE
@@ -812,6 +870,21 @@ WITH base AS (
 
     UNION ALL
 
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'engine_summary' AS section,
+           'inter_token_latency_mean' AS metric,
+           'observed' AS stat,
+           series AS series,
+           value AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM ranked_engine_itl
+    WHERE producer_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
+
+    UNION ALL
+
     SELECT t AS t,
            'saturation' AS section,
            'iteration_tokens' AS metric,
@@ -910,6 +983,34 @@ WITH base AS (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM outcome_totals
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'length_finish_fraction' AS section,
+           'length_finish_fraction' AS metric,
+           'fraction' AS stat,
+           'length / all engine finishes' AS series,
+           value AS value,
+           'ratio' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM length_finish_fraction
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'output_length_distribution' AS section,
+           'output_tokens' AS metric,
+           'interval_count' AS stat,
+           upper_bound AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(total_count AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM output_length_distribution
 
     UNION ALL
 
@@ -1018,14 +1119,190 @@ ORDER BY section,
          t,
          metric,
          stat,
+         CASE WHEN section = 'output_length_distribution'
+              THEN {_HISTOGRAM_BOUND_ORDER_SQL.replace('upper_bound', 'series')}
+              ELSE 0 END,
          series
 LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
     return VllmOverviewQuery(
         sql=sql,
+        samples_sql=samples_sql,
         identity_field=identity_field,
         identity=identity,
         start_ms=start_ms,
         end_ms=end_ms,
         bucket_ms=bucket_ms,
+    )
+
+
+def _vllm_project_table(
+    sql: str, series: pa.Table, projection_lock: AbstractContextManager[None], *, max_rows: int
+) -> pa.Table:
+    """Project one compact Finelog scan into the shared diagnostic result."""
+    validate_table_budget("vLLM samples", series, max_rows=VLLM_MAX_SERIES, max_samples=VLLM_MAX_SAMPLES)
+    with projection_lock, projection_database() as database:
+        database.register("series", series)
+        # Dictionary labels stay compact through repeated window and histogram
+        # joins. Ordered dictionaries preserve the original string tie breaks.
+        for column, label_type in (
+            ("resource_attributes_json", "resource_labels"),
+            ("attributes_json", "metric_labels"),
+        ):
+            database.execute(
+                f"CREATE TYPE {label_type} AS ENUM (SELECT DISTINCT {column} FROM series UNION SELECT '' ORDER BY 1)"
+            )
+        database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(CAST(d AS VARCHAR), concat('$.', f))")
+        try:
+            table = database.execute(sql).to_arrow_table()
+        except duckdb.OutOfMemoryException as err:
+            raise QueryResultTooLargeError("vLLM projection memory budget exceeded") from err
+    if table.num_rows > max_rows:
+        raise QueryResultTooLargeError(f"vLLM diagnostic returned more than {max_rows} rows")
+    return table
+
+
+def vllm_overview_table(
+    overview: VllmOverviewQuery,
+    series: pa.Table,
+    projection_lock: AbstractContextManager[None],
+    *,
+    max_rows: int,
+) -> pa.Table:
+    """Project one compact Finelog scan into the shared diagnostic result."""
+    return _vllm_project_table(overview.sql, series, projection_lock, max_rows=max_rows)
+
+
+def vllm_run_summary_samples_query(overview: VllmOverviewQuery) -> str:
+    """Keep the detail scan bounds and caps while selecting fewer metric names."""
+    return _vllm_samples_query(
+        overview.identity_field,
+        overview.identity,
+        max(0, overview.start_ms - VLLM_SNAPSHOT_LOOKBACK_MS),
+        overview.end_ms,
+        _SUMMARY_METRIC_NAMES,
+    )
+
+
+def vllm_run_summary_query(overview: VllmOverviewQuery) -> str:
+    """Render reset-aware local summary SQL over the compact Finelog result."""
+    return f"""
+WITH base AS MATERIALIZED (
+    SELECT origin_cluster, service, name, kind,
+           CAST(resource_attributes_json AS resource_labels) AS resource_attributes_json,
+           CAST(attributes_json AS metric_labels) AS attributes_json,
+           point.timestamp_ms AS timestamp_ms, point.seq AS seq, point.value AS value
+    FROM (SELECT * EXCLUDE (points), unnest(points) AS point FROM series)
+), cumulative AS MATERIALIZED (
+    SELECT *, LAG(value) OVER (
+        PARTITION BY origin_cluster, service, name, resource_attributes_json, attributes_json
+        ORDER BY timestamp_ms, seq
+    ) AS previous_value
+    FROM base
+    WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
+), increments AS MATERIALIZED (
+    SELECT origin_cluster, service, name, resource_attributes_json, attributes_json, timestamp_ms,
+           CASE WHEN previous_value IS NULL OR value < previous_value
+                THEN NULL ELSE value - previous_value END AS delta
+    FROM cumulative
+    WHERE timestamp_ms >= {overview.start_ms}
+    UNION ALL
+    SELECT origin_cluster, service, name, resource_attributes_json, attributes_json, timestamp_ms,
+           value AS delta
+    FROM base
+    WHERE timestamp_ms >= {overview.start_ms} AND kind = 'counter'
+      AND COALESCE(json_get(attributes_json, 'source_temporality'), '') <> 'cumulative_snapshot'
+), coherent_itl AS (
+    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
+           timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
+           SUM(CASE WHEN name = 'inter_token_latency_seconds_sum' THEN delta ELSE 0 END) AS seconds,
+           SUM(CASE WHEN name = 'inter_token_latency_seconds_count' THEN delta ELSE 0 END) AS tokens
+    FROM increments
+    WHERE name IN ('inter_token_latency_seconds_sum', 'inter_token_latency_seconds_count')
+      AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
+    GROUP BY 1, 2, 3, 4, 5
+    HAVING COUNT(*) = 2 AND COUNT(delta) = 2
+), output AS (
+    SELECT CAST(NULL AS BIGINT) AS t, 'run_summary' AS section,
+           CASE name
+               WHEN 'generation_tokens_total' THEN 'generated_tokens'
+               WHEN 'prompt_tokens_total' THEN 'prompt_tokens'
+               WHEN 'num_preemptions_total' THEN 'preemptions'
+               ELSE 'ttft_observations' END AS metric,
+           'total' AS stat, name AS series, SUM(delta) AS value,
+           CASE WHEN name = 'time_to_first_token_seconds_count' THEN 'observations'
+                WHEN name = 'num_preemptions_total' THEN 'preemptions' ELSE 'tokens' END AS unit,
+           CAST(NULL AS VARCHAR) AS status, CAST(COUNT(delta) AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM increments
+    WHERE name IN ('generation_tokens_total', 'prompt_tokens_total',
+                   'num_preemptions_total', 'time_to_first_token_seconds_count')
+    GROUP BY name HAVING COUNT(delta) > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t, 'run_summary' AS section, name AS metric, 'total' AS stat,
+           name || ':' || COALESCE(json_get(attributes_json, 'finished_reason'),
+                                  json_get(attributes_json, 'finish_reason'), 'unknown') AS series,
+           SUM(delta) AS value, 'engine finishes' AS unit, CAST(NULL AS VARCHAR) AS status,
+           CAST(COUNT(delta) AS BIGINT) AS samples, CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM increments
+    WHERE name IN ({sql_values(_OUTCOME_COUNTERS)})
+    GROUP BY name, COALESCE(json_get(attributes_json, 'finished_reason'),
+                            json_get(attributes_json, 'finish_reason'), 'unknown')
+    HAVING COUNT(delta) > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t, 'run_summary' AS section,
+           'inter_token_latency' AS metric, 'token_weighted_mean' AS stat,
+           'native inter-token latency' AS series, SUM(seconds) / NULLIF(SUM(tokens), 0) AS value, 's' AS unit,
+           CAST(NULL AS VARCHAR) AS status, CAST(SUM(tokens) AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM coherent_itl
+    HAVING SUM(tokens) > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t, 'run_summary' AS section,
+           name AS metric, 'observed_peak' AS stat, name AS series,
+           MAX(value) AS value,
+           CASE WHEN name = 'num_requests_waiting' THEN 'requests' ELSE 'ratio' END AS unit,
+           CAST(NULL AS VARCHAR) AS status, CAST(COUNT(*) AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM base
+    WHERE timestamp_ms >= {overview.start_ms}
+      AND name IN ('num_requests_waiting', 'kv_cache_usage_perc', 'gpu_cache_usage_perc')
+      AND json_get(attributes_json, 'source_temporality') = 'current_snapshot'
+    GROUP BY name
+
+    UNION ALL
+
+    SELECT {overview.start_ms} + (timestamp_ms - {overview.start_ms})
+               - (timestamp_ms - {overview.start_ms}) % 3600000 AS t,
+           'run_timeline' AS section, 'generated_tokens' AS metric,
+           'hourly_total' AS stat, 'generated tokens' AS series,
+           SUM(delta) AS value, 'tokens' AS unit, CAST(NULL AS VARCHAR) AS status,
+           CAST(COUNT(delta) AS BIGINT) AS samples, CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM increments
+    WHERE name = 'generation_tokens_total' AND delta IS NOT NULL
+    GROUP BY 1
+)
+SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
+FROM output
+ORDER BY section, t, metric, series
+LIMIT {VLLM_MAX_SUMMARY_ROWS + 1}
+""".strip()
+
+
+def vllm_run_summary_table(
+    overview: VllmOverviewQuery,
+    series: pa.Table,
+    projection_lock: AbstractContextManager[None],
+    *,
+    max_rows: int,
+) -> pa.Table:
+    """Return a bounded summary of the selected long-range signals."""
+    return _vllm_project_table(
+        vllm_run_summary_query(overview), series, projection_lock, max_rows=min(max_rows, VLLM_MAX_SUMMARY_ROWS)
     )

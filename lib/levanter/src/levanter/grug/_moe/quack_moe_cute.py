@@ -29,6 +29,13 @@ from quack.rounding import RoundingMode
 
 _ACC = cutlass.Float32
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
+# Programmatic dependent launch is off for every QuACK GEMM here. QuACK 0.6.4 only executes
+# `griddepcontrol.wait` in its TMA-load and CLC-scheduler warps; the MMA and epilogue warps decode
+# their work tiles from `cu_seqlens` in global memory before any wait, so under PDL they can read
+# the group boundaries before the preceding kernel's writes are visible. The ragged EP hero hangs
+# in #8870 are CTAs whose MMA and epilogue warps retired on such a stale decode while the load
+# warp kept working. Measured cost of PDL off on the six-GEMM expert MLP is within noise.
+_QUACK_USE_PDL = False
 # Vector width the tensor specs declare to the kernel for the non-grouped (feature) dimensions.
 _FEATURE_ALIGNMENT = 8
 _JAX_TO_CUTE = {
@@ -86,6 +93,7 @@ def _build_launcher(
             cluster_mnk,
             gather_A=False,
             use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
         )
         epi_args = gemm_type.EpilogueArguments(mAuxOut=mPostAct)
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
@@ -174,7 +182,13 @@ def _build_plain_launcher(
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):
         gemm = GemmDefaultSm100(
-            _ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=use_clc_persistence
+            _ACC,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
         )
         epi_args = GemmDefaultEpiMixin.EpilogueArguments()
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)

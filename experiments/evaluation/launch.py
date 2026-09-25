@@ -41,6 +41,7 @@ from marin.evaluation.runner import (
     SubmittedEvaluationBatch,
     submit_evaluation_batch,
 )
+from marin.evaluation.serving_config import resolved_serve_config
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
@@ -50,6 +51,7 @@ from experiments.evaluation.evals import (
     EvalchemyDefinition,
     EvaluationDefinition,
     HarborDefinition,
+    harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 
@@ -73,6 +75,7 @@ class LaunchSpec:
     priority_band: int
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
+    seed: int | None = None
     version: str | None = None
     description: str | None = None
 
@@ -149,11 +152,13 @@ def _resolve_definitions(
     definitions: tuple[tuple[str, EvaluationDefinition], ...],
     model: ModelConfig,
     limit: int | None,
+    seed: int | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
-    requests = [(definition.config_path, dict(model.agent.agent_kwargs)) for definition in harbor_definitions]
+    model_agent_kwargs = harbor_model_agent_kwargs(model)
+    requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     validated_configs = iter(preflight_harbor_configs(requests))
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
@@ -161,6 +166,9 @@ def _resolve_definitions(
         if isinstance(definition, EvalchemyDefinition):
             source = next(evalchemy_sources)
             config = definition.config_for(source, model, limit)
+            if seed is not None:
+                config = replace(config, seed=seed)
+            secret_env = definition.secret_env_for(config)
             resolved.append(
                 (
                     name,
@@ -168,7 +176,7 @@ def _resolve_definitions(
                         record_ref=definition.record_ref_for(config),
                         runtime_descriptor=config.runtime.requirement,
                         executor=EvalchemyExecutor(config),
-                        secret_env=dict(definition.secret_env),
+                        secret_env=dict(secret_env),
                     ),
                 )
             )
@@ -233,7 +241,14 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
-    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
+    requested_definitions = _evaluation_definitions(spec)
+    if model.serve.max_model_len is not None and any(
+        isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+    ):
+        model = replace(model, serve=resolved_serve_config(model))
+    definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed)
+    if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
+        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []

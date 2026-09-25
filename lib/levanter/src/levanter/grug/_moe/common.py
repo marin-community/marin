@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int, Key
+from jaxtyping import Array, Bool, Float, Int, Key
 
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -127,15 +127,32 @@ MOE_REMAT_SAVE_NAMES = (
 )
 
 
-class CapacityOverflow(NamedTuple):
-    """Expert assignments dropped before and after transport."""
+class CapacityDrops(NamedTuple):
+    """Valid assignments a backend dropped before and after transport."""
 
-    sender: Int[Array, ""]
-    receiver: Int[Array, ""]
+    sender_dropped: Int[Array, ""]
+    receiver_dropped: Int[Array, ""]
 
     @property
-    def total(self) -> Int[Array, ""]:
-        return self.sender + self.receiver
+    def dropped(self) -> Int[Array, ""]:
+        return self.sender_dropped + self.receiver_dropped
+
+
+class MoeDispatchCounts(NamedTuple):
+    """Assignment counts omitted from expert dispatch."""
+
+    sender_dropped: Int[Array, ""]
+    receiver_dropped: Int[Array, ""]
+    padding_skipped: Int[Array, ""]
+
+    @property
+    def dropped(self) -> Int[Array, ""]:
+        return self.sender_dropped + self.receiver_dropped
+
+
+def padding_skipped_assignments(token_valid: Bool[Array, "T"], *, topk: int) -> Int[Array, ""]:
+    """Count the expert assignments that padded tokens would otherwise have made."""
+    return jnp.sum(~token_valid, dtype=jnp.int32) * topk
 
 
 @dataclass(frozen=True)
@@ -185,6 +202,7 @@ def _prepare_moe_dispatch(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     *,
     num_experts: int,
 ) -> tuple[
@@ -197,8 +215,9 @@ def _prepare_moe_dispatch(
     # #2704: keep argsort-grouped dispatch as the canonical compact routing
     # strategy, matching the behavior carried forward from 89318a910.
     tokens, topk = selected_experts.shape
-    expert_ids = selected_experts.reshape(tokens * topk)
-    dispatch_weights = combine_weights.reshape(tokens * topk)
+    assignment_valid = _assignment_validity(token_valid, tokens=tokens, topk=topk)
+    expert_ids = jnp.where(assignment_valid, selected_experts.reshape(tokens * topk), num_experts)
+    dispatch_weights = jnp.where(assignment_valid, combine_weights.reshape(tokens * topk), 0)
 
     sort_idx = jnp.argsort(expert_ids, axis=0)
     token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
@@ -212,6 +231,7 @@ def _prepare_moe_dispatch(
 @named_call
 def _prepare_moe_dispatch_indices_with_assignment_ids(
     selected_experts: Int[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     *,
     num_experts: int,
 ) -> tuple[
@@ -223,7 +243,8 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
     """Prepare expert-sorted token ids plus reverse positions without gathering x."""
     tokens, topk = selected_experts.shape
     assignments = tokens * topk
-    expert_ids = selected_experts.reshape(assignments)
+    assignment_valid = _assignment_validity(token_valid, tokens=tokens, topk=topk)
+    expert_ids = jnp.where(assignment_valid, selected_experts.reshape(assignments), num_experts)
 
     sort_idx = jnp.argsort(expert_ids, axis=0)
     assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
@@ -236,6 +257,34 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
+
+
+def _assignment_validity(
+    token_valid: Bool[Array, "T"],
+    *,
+    tokens: int,
+    topk: int,
+) -> Bool[Array, "TK"]:
+    return jnp.broadcast_to(token_valid[:, None], (tokens, topk)).reshape(tokens * topk)
+
+
+def _scaled_capacity(
+    assignments: Int[Array, ""],
+    *,
+    capacity_factor: float,
+    divisor: int = 1,
+    minimum: int = 1,
+    maximum: int,
+) -> Int[Array, ""]:
+    """Return a JIT-safe logical capacity derived from dynamic assignment demand.
+
+    ``maximum`` must be the static physical capacity the caller sized its buffers with.
+    The returned capacity is clamped to ``[minimum, maximum]``.
+    """
+    # Keep large assignment counts precise without changing the surrounding dtype defaults.
+    with jax.enable_x64():
+        scaled = jnp.ceil(assignments.astype(jnp.float64) * capacity_factor / divisor)
+        return jnp.clip(scaled, minimum, maximum).astype(jnp.int32)
 
 
 def _zero_dropped_assignments() -> Int[Array, ""]:

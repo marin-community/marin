@@ -59,16 +59,35 @@ export interface ServerInfo {
   ingest: NamespaceRegistration[]
   metadataCache: MetadataCacheInfo
   indexCache: IndexCacheInfo
+  logTailCache: LogTailCacheInfo
   format: FormatInfo
 }
 
 export interface IndexCacheInfo {
   corruptBundles: number
   corruptSections: number
+  loadAttempts: number
+  headerLoadAttempts: number
+  sectionLoadAttempts: number
+  coalescedWaits: number
+  entries: number
+  bytes: number
+  budgetBytes: number
+  evictions: number
   exactAggregateFull: number
   exactAggregatePartial: number
   exactAggregateDeclined: number
   exactAggregateFallbacks: number
+}
+
+export interface LogTailCacheInfo {
+  entries: number
+  bytes: number
+  budgetBytes: number
+  hits: number
+  deltaScans: number
+  misses: number
+  evictions: number
 }
 
 export interface IndexSectionInfo {
@@ -118,4 +137,20 @@ export interface SegmentInfo {
 export interface SegmentsResponse {
   namespace: string
   segments: SegmentInfo[]
+}
+
+export interface ForwardingTargetInfo {
+  target: string
+  settledCursor: number | null
+  forwardingLagSeqPositions: number | null
+}
+
+export interface ForwardingResponse {
+  namespace: string
+  configured: boolean
+  cluster: string | null
+  visibleHighWater: number
+  publishedHighWater: number
+  publicationLagSeqPositions: number
+  target: ForwardingTargetInfo | null
 }
