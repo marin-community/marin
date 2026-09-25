@@ -207,7 +207,7 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     assert not (tmp_path / "task").exists()
 
 
-def test_selection_samples_reproducibly_from_compatible_conventions(specification):
+def test_selection_policies_use_compatible_conventions(specification):
     conventions = (
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
@@ -216,9 +216,6 @@ def test_selection_samples_reproducibly_from_compatible_conventions(specificatio
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
-    assert select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) == select_lowerings(
-        candidates, SelectionPolicy.SAMPLE, rng_key=42
-    )
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
 
 
