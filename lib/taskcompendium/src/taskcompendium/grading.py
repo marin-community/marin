@@ -1,18 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a decoded answer with the pinned TaskTrove exact-answer contract."""
+"""Grade a decoded answer without a filesystem-backed verifier."""
 
-import dataclasses
-import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
-from tasktrove_verify.grade import Status, grade
-from tasktrove_verify.spec import ExactSpec
-
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExactAnswer, TaskSpec
 from taskcompendium.rendering import Rendering, extract_answer
 
 
@@ -29,21 +23,18 @@ class GradeResult:
     error: str | None = None
 
 
+def _normalize_answer(value: str, contract: ExactAnswer) -> str:
+    normalized = " ".join(value.split()) if contract.ignore_whitespace else value.strip()
+    return normalized.casefold() if contract.ignore_case else normalized
+
+
 def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
     """Extract and score a response while distinguishing invalid submissions from verifier failures."""
     try:
         candidate = extract_answer(response, rendering)
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-    with tempfile.TemporaryDirectory(prefix="taskcompendium-answer-") as temporary:
-        output = Path(temporary) / "answer.txt"
-        output.write_text(candidate)
-        contract = ExactSpec(
-            expected=(specification.verifier.expected,),
-            ignore_case=specification.verifier.ignore_case,
-            ignore_whitespace=specification.verifier.ignore_whitespace,
-        )
-        result = grade(dataclasses.replace(contract, output=str(output)), output.parent, output.parent)
-    if result.status != Status.SCORED:
-        return GradeResult(Outcome.INFRA_ERROR, None, str(result.detail))
-    return GradeResult(Outcome.GRADED, result.reward)
+    matches = _normalize_answer(candidate, specification.verifier) == _normalize_answer(
+        specification.verifier.expected, specification.verifier
+    )
+    return GradeResult(Outcome.GRADED, float(matches))
