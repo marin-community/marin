@@ -345,6 +345,28 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = []
+    for repeat, score in enumerate((1.0, 0.0, 1.0)):
+        row = _lm_eval_row(0, "none", score, str(repeat))
+        row["sample_repeat"] = repeat
+        row["source_id"] = 2
+        row["sample_ordinal"] = 0
+        rows.append(row)
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 3
+    assert rebuild_lm_eval_samples(str(results)) == 3
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["trial_id"]: sample_from_archive_row(row).metrics for row in stored} == {
+        "0": {"exact_match": 1.0},
+        "1": {"exact_match": 0.0},
+        "2": {"exact_match": 1.0},
+    }
+
+
 def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     # lm-eval stamps each row with its own numeric schema_version; it is not a score.
     results = tmp_path / "run" / "results"

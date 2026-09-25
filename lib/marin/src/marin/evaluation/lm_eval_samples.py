@@ -121,6 +121,13 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "doc_hash",
         "prompt_hash",
         "target_hash",
+        "sample_repeat",
+        "sample_id",
+        "source_id",
+        "sample_ordinal",
+        "sample_namespace",
+        "sample_shard",
+        "completion_responses",
     }
 )
 
@@ -834,9 +841,13 @@ def _add_lm_eval_rows(
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = task_name or _task_from_filename(filename, ".jsonl")
-    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw, primary_metric_name)]
-    for sample in samples:
-        store.add_sample(sample)
+    samples = []
+    for raw in rows:
+        repeat = raw.get("sample_repeat")
+        trial_id = str(repeat) if repeat is not None else ""
+        for sample in samples_from_lm_eval(task, raw, primary_metric_name):
+            store.add_sample(sample, trial_id=trial_id)
+            samples.append(sample)
     return samples
 
 

@@ -153,6 +153,9 @@ its native results and trajectories and writes flattened trajectory steps to the
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
+For repeated Evalchemy samples, `samples.trial_id` is the string form of `sample_repeat`; a
+single-attempt sample leaves it empty. This keeps independent answers to the same question distinct.
+
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
 `infra/marina/apps/evaldash/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
